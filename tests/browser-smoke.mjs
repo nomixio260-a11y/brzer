@@ -315,6 +315,28 @@ try {
   await page.waitForTimeout(400);
   check('部隊一覧に死守が出る', (await page.textContent('#roster')).includes('死守'));
 
+  // 予令。条件を付けて渡すと、部下が条件の成立を待って動く。
+  await page.click('#order-units button[data-unit="H2"]');
+  await page.click('#order-groups button[data-group="maneuver"]');
+  await page.click('#order-verbs button[data-verb="defend"]');
+  await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.66);
+  await page.click('#order-triggers button[data-trig="at_time"]');
+  check('時刻を選ばせる欄が出る', await page.isVisible('#order-trigtime'));
+  check('予令の説明が出る', (await page.textContent('#order-status')).includes('予令'));
+  await page.click('#order-send');
+  await page.waitForTimeout(400);
+  check('予令が発令された',
+    await page.evaluate(() =>
+      window.__brzer.game.world.orders.some((o) => o.trigger === 'at_time')));
+  check('部隊一覧に予令が載る', (await page.textContent('#roster')).includes('予令'));
+
+  // 交戦規定には条件を付けられない（枠は今から効くもの）
+  await page.click('#order-groups button[data-group="roe"]');
+  await page.click('#order-verbs button[data-verb="roe_elastic"]');
+  check('交戦規定に条件は付かない',
+    await page.$eval('#order-triggers button[data-trig="at_time"]', (b) => b.disabled));
+  await page.click('#order-groups button[data-group="maneuver"]');
+
   // 砲兵には移動命令が出せない
   await page.click('#order-units button[data-unit="TH"]');
   const verbs = await page.$$eval('#order-verbs button', (bs) => bs.map((b) => b.dataset.verb));

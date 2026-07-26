@@ -89,7 +89,7 @@ function runEnemy(world, u) {
   // --- 交戦判断 ---------------------------------------------------
   if (nearest.t) {
     const canHurt = u.tpl.firepower * (1 - nearest.t.tpl.armor) + u.tpl.ap * nearest.t.tpl.armor > 0.15;
-    if (canHurt && nearest.d < u.tpl.range * 0.95) {
+    if (canHurt && nearest.d < engageRange(u, ai)) {
       // 射程内。止まって撃つ。
       u.path = [];
       u.posture = u.tpl.armor > 0.4 ? 'normal' : 'cautious';
@@ -136,6 +136,20 @@ function runEnemy(world, u) {
     u._goalKey = goalKey(goal);
     setDestination(u, world.terrain, goal.x, goal.y);
   }
+}
+
+/**
+ * どこまで詰めてから撃つか。
+ *
+ * 最大射程で止まる戦車は、渡河点を掩護できない。橋を奪るには前へ出るしかなく、
+ * 出れば守り手の射程にも入る ─ 攻者が払うべき代償である。
+ * 逆に陽動部隊は遠くから撃っていればよい。それが陽動の役目だから。
+ */
+function engageRange(u, ai) {
+  const max = u.tpl.range * 0.95;
+  if (ai.task === 'pressure' || ai.task === 'probe') return max;
+  // 突撃・迂回する部隊は目標を取りにいく。装甲でも900mまでは寄る。
+  return Math.min(max, u.tpl.armor > 0.4 ? 900 : 620);
 }
 
 function goalKey(g) {

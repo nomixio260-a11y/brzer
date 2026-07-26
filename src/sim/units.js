@@ -270,7 +270,9 @@ export function stepMorale(u, now, dt) {
 /** 有効な遮蔽値（地形＋態勢） */
 export function effectiveCover(u, terrain) {
   const posture = POSTURES[u.posture] ?? POSTURES.normal;
-  return clamp(coverAt(terrain, u.x, u.y) + posture.coverBonus, 0, 0.92);
+  // 死守を命じられた部隊は、退がる算段をしない分だけ深く掘る
+  const resolve = u.roe === 'hold_fast' ? 0.06 : 0;
+  return clamp(coverAt(terrain, u.x, u.y) + posture.coverBonus + resolve, 0, 0.92);
 }
 
 /** 日本語の状態表記 */

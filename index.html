@@ -68,6 +68,8 @@
             「どこを通れ」まで指定できる。決まったら<b>決定</b>を押す</li>
           <li><b>交戦規定</b> ─ <b>死守</b>／<b>陣地防御</b>／<b>弾力防御</b>。部下がどこまで独断で下がってよいかの枠。
             細かく指図しなくても、枠さえ決めておけば分隊長は自分で判断する</li>
+          <li><b>予令</b> ─ 命令に<b>発動条件</b>（接敵時／被圧時／時刻）を付けて先に渡せる。
+            条件が満ちれば部下は貴官を待たずに動き、動いたことを報告してくる</li>
           <li><b>概定射点</b> ─ 撃つ前に地点を標定させておくと、以後そこへの射撃は<b>早く、正確に</b>落ちる（3点まで）</li>
           <li class="only-desktop"><kbd>Space</kbd> 一時停止 ／ <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 速度 ／
             <kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd> 図式 ／ <kbd>Ctrl</kbd>+<kbd>Z</kbd> 取り消し ／
@@ -197,6 +199,11 @@
           <div class="order__row" id="order-units"></div>
           <div class="order__row order__row--groups" id="order-groups"></div>
           <div class="order__row" id="order-verbs"></div>
+          <div class="order__row order__row--cond">
+            <span class="order__condlabel">発動</span>
+            <div class="order__conds" id="order-triggers"></div>
+            <select id="order-trigtime" class="order__trigtime" hidden></select>
+          </div>
           <div class="order__row order__row--tail">
             <div class="order__mods" id="order-mods"></div>
             <div class="order__target">

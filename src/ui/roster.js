@@ -1,7 +1,7 @@
 // 部隊一覧。
 // ここに出るのは「最後に無線で聞いた内容」だけ。今どうなっているかは誰も知らない。
 
-import { getRoster, getSimTime, getRoeOf, ROE, VERBS } from '../state.js';
+import { getRoster, getSimTime, getRoeOf, getHeldOrder, ROE, VERBS, TRIGGERS } from '../state.js';
 import { formatAgo, formatClock } from '../util.js';
 
 // 砲兵とドローンには交戦規定を与えない（陣地を守る部隊ではない）
@@ -31,7 +31,9 @@ export function renderRoster(view) {
 
   // 変化がなければ触らない（毎フレーム DOM を作り直さない）
   const sig = rows
-    .map((r) => `${r.unitId}:${r.heard?.heardAt ?? 0}:${r.heard?.pendingOrder?.at ?? 0}:${getRoeOf(game, r.unitId)}`)
+    .map((r) =>
+      `${r.unitId}:${r.heard?.heardAt ?? 0}:${r.heard?.pendingOrder?.at ?? 0}` +
+      `:${getRoeOf(game, r.unitId)}:${getHeldOrder(game, r.unitId)?.orderId ?? '-'}`)
     .join('|') + `:${view.selectedId}:${Math.floor(now / 15)}`;
   if (sig === view._sig) return;
   view._sig = sig;
@@ -108,6 +110,20 @@ export function renderRoster(view) {
       const needsGrid = VERBS[heard.pendingOrder.verb]?.needsTarget;
       p.textContent = `→ ${label}${needsGrid ? ` ${heard.pendingOrder.grid}` : ''}（送信済み）`;
       li.appendChild(p);
+    }
+
+    // 渡してある予令。発動していないうちは、ここに載り続ける。
+    const held = getHeldOrder(game, row.unitId);
+    if (held) {
+      const h = document.createElement('div');
+      h.className = 'roster__held';
+      const when = held.trigger === 'at_time'
+        ? formatClock(held.triggerAt)
+        : TRIGGERS[held.trigger].label;
+      const label = VERBS[held.verb]?.label ?? held.verb;
+      const grid = VERBS[held.verb]?.needsTarget ? ` ${held.grid}` : '';
+      h.textContent = `予令 ${when} → ${label}${grid}`;
+      li.appendChild(h);
     }
 
     view.el.appendChild(li);

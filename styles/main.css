@@ -499,6 +499,14 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .roster__line { font-size: 10.5px; color: var(--ink-dim); line-height: 1.55; }
 .roster__unknown { color: var(--ink-faint); font-style: italic; }
 .roster__pending { color: var(--lamp-amber); font-size: 9.5px; }
+.roster__held {
+  color: #97a4d0;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  border-left: 2px solid #4a5680;
+  padding-left: 6px;
+  margin-top: 3px;
+}
 
 /* 通信記録簿 */
 .radiolog {
@@ -592,6 +600,32 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
 .order__mods { display: flex; gap: 3px; }
 .order__mods.is-dim { opacity: 0.35; }
+
+/* 発動条件（予令）。命令の「いつ」を決める段。 */
+.order__row--cond { align-items: center; gap: 7px; }
+.order__row--cond.is-dim { opacity: 0.35; }
+.order__condlabel {
+  flex: none;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--ink-faint);
+}
+.order__conds { display: flex; gap: 3px; flex-wrap: wrap; min-width: 0; }
+.tool--cond.is-on {
+  color: #cfd8ff;
+  border-color: #4a5680;
+  background: linear-gradient(#232a3c, #171b26);
+}
+.order__trigtime {
+  flex: none;
+  background: #0e0c0a;
+  border: 1px solid #4a5680;
+  color: #cfd8ff;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 3px 5px;
+  border-radius: 1px;
+}
 .order__target {
   font-size: 10px;
   color: var(--ink-faint);
@@ -987,6 +1021,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
     overflow: hidden;
   }
   .side.is-open { transform: translateY(0); }
+  /* 命令は段が多い。部隊・分類・命令・発動・態勢・送信で6段ある。 */
+  body.is-tab-order .side { height: 66%; max-height: 66%; }
 
   /* 指で掴んで下へ払うと閉じる */
   .sheet-handle {
@@ -1021,7 +1057,12 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   /* 命令パネルは「送信」が必ず見えていること。巻けるのは命令の一覧だけにする。 */
   .panel--order .order { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
   .panel--order #order-verbs { flex: 1; min-height: 44px; overflow-y: auto; align-content: flex-start; }
+  .panel--order .order__row--cond,
   .panel--order .order__row--tail { flex: none; }
+  /* 態勢で一段、目標と送信で一段。送信だけが取り残されて折り返さない。 */
+  .panel--order .order__mods { flex: 1 1 100%; }
+  .panel--order .order__target { flex: 1 1 60px; min-width: 0; }
+  .panel--order .btn--send { flex: none; }
 
   .panel__title { padding: 12px 14px 8px; font-size: 10.5px; }
 
@@ -1070,6 +1111,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 /* 縦に短い端末（横持ち）ではパネルを浅くする */
 @media (max-height: 480px) and (pointer: coarse) {
   .side { height: 74%; max-height: 74%; }
+  /* 横持ちは縦が足りない。命令を出している間はほぼ全面を明け渡す。 */
+  body.is-tab-order .side { height: 88%; max-height: 88%; }
   .tabbar__btn { padding: 9px 0; }
   /* 縦に余裕がないと倍率の縦積みが下部タブに突き当たる。横に寝かせる。 */
   .mapzoom { flex-direction: row; top: 6px; right: 6px; }
@@ -1086,6 +1129,12 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   .panel--order .btn--send { padding: 5px 16px; font-size: 12px; }
   .panel--order .order__status { font-size: 11px; margin-top: 3px; min-height: 1.3em; }
   .panel--order #order-verbs { min-height: 32px; }
+  /* 発動と態勢は補助の段。横持ちでは一回り小さくして本文に場所を譲る。 */
+  .panel--order .order__conds .tool,
+  .panel--order .order__mods .tool { min-height: 26px; padding: 3px 8px; font-size: 11px; }
+  .order__row--cond { margin-bottom: 3px; }
+  /* 横持ちは幅に余裕がある。態勢・目標・送信は一段に収まる。 */
+  .panel--order .order__mods { flex: 0 1 auto; }
 }
 
 .msg__act--fire { border-color: #7a3a34; color: #e8a49c; }

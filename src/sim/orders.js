@@ -1,7 +1,7 @@
 // 命令の発令・伝達・受領・実行。
 // 命令は無線を占有し、遅れて届き、時に拒否される。
 
-import { clamp, toGrid, dist } from '../util.js';
+import { clamp, toGrid, dist, formatClock } from '../util.js';
 import { enqueue, PRI } from './comms.js';
 import { setDestination, clearDestination, POSTURES } from './units.js';
 import { createFireMission } from './combat.js';
@@ -57,16 +57,65 @@ export const MODIFIERS = Object.freeze({
   stealth: '隠密',
 });
 
+/**
+ * 発動条件 ── 予令（be-prepared / on-order）。
+ *
+ * 実際の指揮官は、起きてから命令を出すのでは間に合わないことを知っている。
+ * だから「こうなったら、こうせよ」と先に渡しておく。
+ * 無線が届かなくなっても、部下は渡された条件で動ける ―
+ * それが指揮官の意図を先に配っておくということである。
+ */
+export const TRIGGERS = Object.freeze({
+  now: {
+    key: 'now',
+    label: '直ちに',
+    phrase: () => '',
+  },
+  on_contact: {
+    key: 'on_contact',
+    label: '接敵時',
+    hint: '敵を視認した時点で発動する',
+    phrase: () => '敵を認めしだい、',
+    ready: (world, u) => [...u.contacts.values()].some((c) => world.now - c.lastSeenAt < 12),
+  },
+  on_pressure: {
+    key: 'on_pressure',
+    label: '被圧時',
+    hint: '持ちこたえられなくなった時点で発動する（軽い接触では動かない）',
+    phrase: () => '圧されたら、',
+    // 「撃たれた」ではなく「保たない」。初弾で動き出しては前進哨所の意味がない。
+    ready: (world, u) =>
+      (world.now - u.lastHitAt < 20 && u.suppression > 72) ||
+      u.strength < u.maxStrength * 0.6 ||
+      u.morale < 45,
+  },
+  at_time: {
+    key: 'at_time',
+    label: '時刻',
+    needsTime: true,
+    hint: '指定した時刻に発動する',
+    phrase: (o) => `${formatClock(o.triggerAt)}をもって、`,
+    ready: (world, u, order) => world.now >= order.triggerAt,
+  },
+});
+
 let orderSeq = 1;
 
 /**
  * 指揮官が命令を出す。まず無線に乗り、届いてから初めて実行される。
  * @returns {object|null} 発令された命令
  */
-export function issueOrder(world, { unitId, verb, x, y, modifier = 'normal', legs = null }) {
+export function issueOrder(
+  world,
+  { unitId, verb, x, y, modifier = 'normal', legs = null, trigger = 'now', triggerAt = null }
+) {
   const u = world.unitsById.get(unitId);
   const spec = VERBS[verb];
   if (!u || !spec) return null;
+
+  const trig = TRIGGERS[trigger] ?? TRIGGERS.now;
+  // 過ぎた時刻を条件にしても意味がない
+  if (trig.needsTime && !(triggerAt > world.now)) trigger = 'now';
 
   // 砲撃・煙幕は砲兵に対する要請なので、弾数を先に確認する
   if (verb === 'fire_mission' || verb === 'smoke') {
@@ -99,6 +148,8 @@ export function issueOrder(world, { unitId, verb, x, y, modifier = 'normal', leg
     legs: path,
     grid,
     modifier,
+    trigger,
+    triggerAt,
     issuedAt: world.now,
     state: 'transmitting',
     receivedAt: null,
@@ -114,7 +165,9 @@ export function issueOrder(world, { unitId, verb, x, y, modifier = 'normal', leg
     path && path.length > 1
       ? `経路は${path.slice(0, -1).map((p) => toGrid(p.x, p.y)).join('、')}を経由。`
       : '';
-  const text = `${u.callsign}、こちら指揮所。${spec.phrase(grid)}。${via}${modPhrase}どうぞ`;
+  const cond = (TRIGGERS[trigger] ?? TRIGGERS.now).phrase(order);
+  const head = trigger === 'now' ? '' : '予令。';
+  const text = `${u.callsign}、こちら指揮所。${head}${cond}${spec.phrase(grid)}。${via}${modPhrase}どうぞ`;
 
   enqueue(world, {
     from: '指揮所',
@@ -189,12 +242,33 @@ export function stepOrders(world, dt) {
       continue;
     }
 
-    order.state = 'executing';
     order.ackAt = now;
     u.pendingOrder = null;
-    u.order = order;
     u.lastOrderAt = now;
     world.stats.responseTimes.push(now - order.issuedAt);
+
+    // --- 予令は懐に入れて待つ -------------------------------------
+    if (order.trigger && order.trigger !== 'now') {
+      // 同じ部隊に予令は1つ。新しいものが古いものを差し替える。
+      if (u.heldOrder && u.heldOrder !== order) u.heldOrder.state = 'superseded';
+      order.state = 'standby';
+      u.heldOrder = order;
+      world.stats.heldOrders = (world.stats.heldOrders ?? 0) + 1;
+      enqueue(world, {
+        from: u.callsign,
+        fromId: u.id,
+        kind: 'ack',
+        text: standbyAckText(u, order, rng),
+        priority: PRI.PRIORITY,
+        meta: { unitId: u.id, orderId: order.id, observedAt: now },
+        composedAt: now,
+        duration: 3.5,
+      });
+      continue;
+    }
+
+    order.state = 'executing';
+    u.order = order;
 
     beginExecution(world, u, order);
 
@@ -229,10 +303,71 @@ export function stepOrders(world, dt) {
     });
   }
 
+  stepHeldOrders(world);
+
   // 実行中の命令の進行管理
   for (const u of world.units) {
     if (!u.alive || !u.order) continue;
     advanceExecution(world, u, u.order, dt);
+  }
+}
+
+/**
+ * 予令の発動。
+ *
+ * 条件が満たされた瞬間、部下は指揮官を待たずに動き出す。
+ * 動き出したことは必ず報告する ─ 指揮所が知らない機動があってはならない。
+ */
+function stepHeldOrders(world) {
+  const { now, rng } = world;
+  for (const u of world.units) {
+    const order = u.heldOrder;
+    if (!order) continue;
+    if (!u.alive) {
+      order.state = 'void';
+      u.heldOrder = null;
+      continue;
+    }
+    if (order.state !== 'standby') {
+      u.heldOrder = null;
+      continue;
+    }
+
+    const trig = TRIGGERS[order.trigger];
+    if (!trig?.ready?.(world, u, order)) continue;
+
+    // 予令が発動すれば、いま抱えている任務はそこで打ち切られる
+    if (u.order && u.order !== order) u.order.state = 'superseded';
+
+    order.state = 'executing';
+    order.firedAt = now;
+    u.heldOrder = null;
+    u.order = order;
+    beginExecution(world, u, order);
+
+    if (u.commsOk) {
+      enqueue(world, {
+        from: u.callsign,
+        fromId: u.id,
+        kind: 'initiative',
+        text:
+          `こちら${u.callsign}、${triggerReasonJa(order.trigger)}。` +
+          `予令にもとづき、${shortOrderJa(order)}。`,
+        priority: PRI.PRIORITY,
+        meta: { unitId: u.id, orderId: order.id, grid: order.grid, observedAt: now },
+        composedAt: now,
+        duration: 4,
+      });
+    }
+  }
+}
+
+function triggerReasonJa(key) {
+  switch (key) {
+    case 'on_contact': return '敵を認めた';
+    case 'on_pressure': return '圧されている';
+    case 'at_time': return '時刻になった';
+    default: return '条件が満ちた';
   }
 }
 
@@ -263,29 +398,49 @@ function refusalReason(u, order, world) {
   return null;
 }
 
-function ackText(u, order, rng) {
-  const spec = VERBS[order.verb];
-  const short = {
-    move: `${order.grid}へ移動する`,
-    advance: `${order.grid}へ前進する`,
-    attack: `${order.grid}を攻撃する`,
-    defend: `${order.grid}で防御につく`,
-    hold: '現在地を保持する',
-    observe: `${order.grid}方向を監視する`,
-    rally: `${order.grid}へ集結する`,
-    hold_fire: '射撃を統制する',
-    free_fire: '射撃自由で交戦する',
-    recon: `${order.grid}を偵察する`,
-    withdraw: `${order.grid}へ下がる`,
-    fire_mission: `${order.grid}、射撃用意`,
-    smoke: `${order.grid}に発煙`,
-    register: `${order.grid}を標定する`,
-    ammo_check: '弾薬を確認する',
-    roe_hold_fast: '死守する。ここは渡さん',
-    roe_standard: '陣地を保持する',
-    roe_elastic: '弾力防御に移る',
-  }[order.verb] ?? spec.label;
+/** 予令を受けたときの応答。「承知した、その時が来たら動く」 */
+function standbyAckText(u, order, rng) {
+  const cond = {
+    on_contact: '敵を認めしだい',
+    on_pressure: '圧されたら',
+    at_time: `${formatClock(order.triggerAt)}をもって`,
+  }[order.trigger] ?? '条件が満ちしだい';
 
+  return rng.pick([
+    `${u.callsign}、予令を受領。${cond}${shortOrderJa(order)}。待機する。`,
+    `こちら${u.callsign}、了解。${cond}動く。それまでは現在の任務を続ける。`,
+    `${u.callsign}、予令了解。${cond}${shortOrderJa(order)}。以上。`,
+  ]);
+}
+
+/** 命令の中身を一言で（受領応答と予令の発動報告で使い回す） */
+function shortOrderJa(order) {
+  return (
+    {
+      move: `${order.grid}へ移動する`,
+      advance: `${order.grid}へ前進する`,
+      attack: `${order.grid}を攻撃する`,
+      defend: `${order.grid}で防御につく`,
+      hold: '現在地を保持する',
+      observe: `${order.grid}方向を監視する`,
+      rally: `${order.grid}へ集結する`,
+      hold_fire: '射撃を統制する',
+      free_fire: '射撃自由で交戦する',
+      recon: `${order.grid}を偵察する`,
+      withdraw: `${order.grid}へ下がる`,
+      fire_mission: `${order.grid}、射撃用意`,
+      smoke: `${order.grid}に発煙`,
+      register: `${order.grid}を標定する`,
+      ammo_check: '弾薬を確認する',
+      roe_hold_fast: '死守する。ここは渡さん',
+      roe_standard: '陣地を保持する',
+      roe_elastic: '弾力防御に移る',
+    }[order.verb] ?? VERBS[order.verb].label
+  );
+}
+
+function ackText(u, order, rng) {
+  const short = shortOrderJa(order);
   return rng.pick([
     `${u.callsign}、了解。${short}。`,
     `こちら${u.callsign}、了解した。${short}。`,
@@ -395,6 +550,20 @@ function beginExecution(world, u, order) {
     case 'fire_mission': {
       const pool = world.support.artillery;
       const rounds = Math.min(pool.rounds, 6);
+      // 予令として抱えているうちに撃ち尽くしていることがある
+      if (rounds <= 0) {
+        enqueue(world, {
+          from: u.callsign,
+          fromId: u.id,
+          kind: 'refuse',
+          text: `こちら${u.callsign}、${order.grid}への射撃要請、応じられない。弾が残っていない。`,
+          priority: PRI.PRIORITY,
+          meta: { unitId: u.id, orderId: order.id, observedAt: world.now },
+          composedAt: world.now,
+          duration: 4,
+        });
+        break;
+      }
       pool.rounds -= rounds;
       // 概定射点の近くなら諸元が出ている。早く、正確に落ちる。
       const rp = nearestRegistration(world, order.x, order.y);
@@ -414,6 +583,7 @@ function beginExecution(world, u, order) {
     case 'smoke': {
       const pool = world.support.smoke;
       const rounds = Math.min(pool.rounds, 4);
+      if (rounds <= 0) break;
       pool.rounds -= rounds;
       const fm = createFireMission('smoke', order.x, order.y, world.now, {
         side: 'friend',

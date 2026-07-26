@@ -210,9 +210,15 @@ function renderStats(el, score, truth) {
       score.friendlyFireUnits > 0 ? 'is-bad' : 'is-good'],
     ['発令した命令', `${score.ordersIssued} 件`, ''],
     ['拒否された命令', `${score.ordersRefused} 件`, score.ordersRefused > 2 ? 'is-bad' : ''],
+    ['渡した予令', score.heldOrders
+      ? `${score.heldOrders} 件（うち ${score.heldOrdersFired} 件が発動）`
+      : 'なし', score.heldOrdersFired > 0 ? 'is-good' : ''],
+    ['部下の独断後退', score.selfWithdrawals ? `${score.selfWithdrawals} 個部隊` : 'なし', ''],
     ['平均応答時間', score.avgResponse ? `${Math.round(score.avgResponse)} 秒` : '─',
       score.avgResponse > 60 ? 'is-bad' : ''],
-    ['砲撃要請', `${score.fireMissions} 回（残弾 ${score.artilleryLeft}）`, ''],
+    ['砲撃要請', score.registeredMissions
+      ? `${score.fireMissions} 回（うち概定射点 ${score.registeredMissions} 回・残弾 ${score.artilleryLeft}）`
+      : `${score.fireMissions} 回（残弾 ${score.artilleryLeft}）`, ''],
     ['無線の占有率', `${Math.round(score.airtimeRatio * 100)} %`,
       score.airtimeRatio > 0.55 ? 'is-bad' : ''],
     ['届かなかった交信', `${score.droppedTransmissions} 回`,

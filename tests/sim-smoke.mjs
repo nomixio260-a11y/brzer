@@ -282,6 +282,68 @@ section('概定射点');
   check('離れた点は通常の射撃', fm2?.registered === false);
 }
 
+section('予令（発動条件つきの命令）');
+{
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const h2 = w.unitsById.get('H2');
+  const start = { x: h2.x, y: h2.y };
+
+  const order = issueOrder(w, {
+    unitId: 'H2', verb: 'move', x: 1400, y: 2600,
+    trigger: 'at_time', triggerAt: w.now + 900,
+  });
+  check('予令が発令できる', order?.trigger === 'at_time');
+
+  for (let i = 0; i < 300; i++) tick(w, 1);
+  check('受領しても動き出さない', order.state === 'standby' && h2.heldOrder === order);
+  check('条件前は動かない', Math.hypot(h2.x - start.x, h2.y - start.y) < 60);
+
+  for (let i = 0; i < 900; i++) tick(w, 1);
+  check('時刻が来たら発動する', order.state !== 'standby', order.state);
+  check('発動時刻が記録される', order.firedAt != null && order.firedAt >= order.triggerAt);
+  check('予令の控えが外れる', h2.heldOrder == null);
+
+  // 発動を無線で報告している
+  const said = w.radio.log.some(
+    (e) => e.kind === 'initiative' && e.meta?.orderId === order.id
+  );
+  check('発動を報告する', said);
+}
+
+{
+  // 過ぎた時刻を条件にしても、ただの即時命令になる
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const o = issueOrder(w, {
+    unitId: 'H2', verb: 'hold', trigger: 'at_time', triggerAt: w.now - 100,
+  });
+  check('過ぎた時刻の予令は即時命令になる', o.trigger === 'now');
+}
+
+{
+  // 接敵条件。敵を認めるまで待つ。
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const h3 = w.unitsById.get('H3');
+  const o = issueOrder(w, {
+    unitId: 'H3', verb: 'withdraw', x: 2250, y: 2400, trigger: 'on_contact',
+  });
+  for (let i = 0; i < 200; i++) tick(w, 1);
+  const heldEarly = o.state === 'standby';
+  // 敵を見せる
+  h3.contacts.set('Z', {
+    targetId: 'Z', x: h3.x + 200, y: h3.y - 300, lastSeenAt: w.now,
+    quality: 1, classified: 'infantry', trueType: 'infantry', count: 1,
+  });
+  for (let i = 0; i < 30; i++) {
+    h3.contacts.get('Z').lastSeenAt = w.now;
+    tick(w, 1);
+  }
+  check('接敵条件は敵を認めるまで待つ', heldEarly);
+  check('接敵で予令が発動する', o.state !== 'standby', o.state);
+}
+
 section('敵の指揮官');
 {
   const w = createWorld();

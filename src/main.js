@@ -189,6 +189,8 @@ function startMission() {
       groups: $('order-groups'),
       verbs: $('order-verbs'),
       mods: $('order-mods'),
+      triggers: $('order-triggers'),
+      trigTime: $('order-trigtime'),
       grid: $('order-grid'),
       undoLeg: $('order-undoleg'),
       send: $('order-send'),
@@ -745,6 +747,8 @@ function applyTab() {
   side.classList.toggle('is-open', currentTab !== 'map');
   // パネルを上げている間、その下に隠れる地図の操作具は引っ込める
   document.body.classList.toggle('is-sheet-open', currentTab !== 'map');
+  // 命令パネルは段が多い。開いている間だけシートを深くする。
+  document.body.classList.toggle('is-tab-order', currentTab === 'order');
   for (const p of side.querySelectorAll('.panel')) {
     p.classList.toggle('is-active', p.dataset.panel === currentTab);
   }

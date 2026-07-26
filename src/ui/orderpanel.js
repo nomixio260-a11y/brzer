@@ -5,8 +5,8 @@
 // 「機動」「火力」「交戦規定」「情報」── 指揮官の頭の中もこの順で動く。
 
 import {
-  VERBS, VERB_GROUPS, MODIFIERS, ROE,
-  getRosterOrder, getSupport, getRoeOf, toGrid, issueOrder,
+  VERBS, VERB_GROUPS, MODIFIERS, ROE, TRIGGERS,
+  getRosterOrder, getSupport, getRoeOf, getHeldOrder, getSimTime, toGrid, formatClock, issueOrder,
 } from '../state.js';
 
 // 部隊ごとに出せる命令は違う。砲兵に「突撃せよ」とは言えない。
@@ -23,6 +23,10 @@ const VERBS_BY_UNIT = {
 
 const MOD_ORDER = ['normal', 'rapid', 'cautious', 'stealth'];
 const GROUP_ORDER = ['maneuver', 'fires', 'roe', 'intel'];
+const TRIGGER_ORDER = ['now', 'on_contact', 'on_pressure', 'at_time'];
+
+// 予令を渡せない命令。今すぐ聞きたいことを「後で」と言っても仕方がない。
+const NO_TRIGGER = new Set(['sitrep', 'ammo_check', 'roe_hold_fast', 'roe_standard', 'roe_elastic']);
 
 export function createOrderPanel(dom, game, hooks) {
   const panel = {
@@ -33,6 +37,8 @@ export function createOrderPanel(dom, game, hooks) {
     group: 'maneuver',
     verb: null,
     modifier: 'normal',
+    trigger: 'now',
+    triggerAt: null,
     legs: [], // 経路点。最後の点が目標。
   };
 
@@ -69,6 +75,19 @@ export function createOrderPanel(dom, game, hooks) {
     const b = e.target.closest('button[data-mod]');
     if (!b) return;
     panel.modifier = b.dataset.mod;
+    refresh(panel);
+  });
+
+  dom.triggers?.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-trig]');
+    if (!b || b.disabled) return;
+    panel.trigger = b.dataset.trig;
+    if (panel.trigger === 'at_time') panel.triggerAt = nextTimeChoice(panel);
+    refresh(panel);
+  });
+
+  dom.trigTime?.addEventListener('change', () => {
+    panel.triggerAt = Number(dom.trigTime.value);
     refresh(panel);
   });
 
@@ -109,8 +128,20 @@ function allowedVerbs(unitId) {
 function selectVerb(panel, verb) {
   panel.verb = verb;
   clearLegs(panel);
+  if (NO_TRIGGER.has(verb)) panel.trigger = 'now';
   syncTargeting(panel);
   refresh(panel);
+}
+
+/** 発動時刻の候補。今から5分後以降を5分刻みで。 */
+function timeChoices(panel) {
+  const now = getSimTime(panel.game);
+  const start = Math.ceil((now + 300) / 300) * 300;
+  return Array.from({ length: 8 }, (_, i) => start + i * 300);
+}
+
+function nextTimeChoice(panel) {
+  return timeChoices(panel)[0];
 }
 
 function clearLegs(panel) {
@@ -173,6 +204,8 @@ function send(panel) {
     y: spec.needsTarget ? last.y : null,
     legs: spec.multi && panel.legs.length > 1 ? panel.legs.slice() : null,
     modifier: panel.modifier,
+    trigger: NO_TRIGGER.has(panel.verb) ? 'now' : panel.trigger,
+    triggerAt: panel.triggerAt,
   });
 
   if (!order) {
@@ -182,10 +215,13 @@ function send(panel) {
   }
 
   panel.hooks.onSent?.(order);
+  const wasHeld = order.trigger && order.trigger !== 'now';
   panel.verb = null;
+  panel.trigger = 'now';
+  panel.triggerAt = null;
   clearLegs(panel);
   panel.hooks.onTargetingChange(false);
-  refresh(panel, '送信した。応答を待て。');
+  refresh(panel, wasHeld ? '予令を送信した。条件が満ちれば部下が動く。' : '送信した。応答を待て。');
 }
 
 function canSend(panel) {
@@ -268,6 +304,47 @@ export function refresh(panel, status) {
     b.disabled = !modsUseful;
   }
 
+  // --- 発動条件（予令） ----------------------------------------------
+  if (dom.triggers) {
+    if (!dom.triggers.childElementCount) {
+      for (const t of TRIGGER_ORDER) {
+        const b = document.createElement('button');
+        b.className = 'tool tool--cond';
+        b.dataset.trig = t;
+        b.textContent = TRIGGERS[t].label;
+        if (TRIGGERS[t].hint) b.title = TRIGGERS[t].hint;
+        dom.triggers.appendChild(b);
+      }
+    }
+    const canHold = !!panel.verb && !NO_TRIGGER.has(panel.verb);
+    if (!canHold && panel.trigger !== 'now') panel.trigger = 'now';
+    dom.triggers.parentElement.classList.toggle('is-dim', !canHold);
+    for (const b of dom.triggers.querySelectorAll('button')) {
+      b.classList.toggle('is-on', b.dataset.trig === panel.trigger && canHold);
+      b.disabled = !canHold;
+    }
+
+    // 時刻の候補は進行につれて動く
+    const showTime = canHold && panel.trigger === 'at_time';
+    dom.trigTime.hidden = !showTime;
+    if (showTime) {
+      const choices = timeChoices(panel);
+      const key = choices.join(',');
+      if (dom.trigTime.dataset.for !== key) {
+        dom.trigTime.dataset.for = key;
+        dom.trigTime.innerHTML = '';
+        for (const t of choices) {
+          const o = document.createElement('option');
+          o.value = String(t);
+          o.textContent = formatClock(t);
+          dom.trigTime.appendChild(o);
+        }
+      }
+      if (!choices.includes(panel.triggerAt)) panel.triggerAt = choices[0];
+      dom.trigTime.value = String(panel.triggerAt);
+    }
+  }
+
   // --- 目標 / 経路 ---------------------------------------------------
   const legText = panel.legs.length
     ? panel.legs.map((p) => toGrid(p.x, p.y)).join('→')
@@ -283,10 +360,19 @@ export function refresh(panel, status) {
     dom.status.textContent = '部隊を選べ。';
   } else if (!panel.verb) {
     const s = getSupport(game);
+    const held = getHeldOrder(game, panel.unitId);
+    const heldNote = held
+      ? ` 予令：${TRIGGERS[held.trigger].label}に${VERBS[held.verb].label}${held.grid ? ` ${held.grid}` : ''}。`
+      : '';
     dom.status.textContent =
-      panel.unitId === 'TH'
+      (panel.unitId === 'TH'
         ? `ソーン：砲弾${s.artillery}発、発煙${s.smoke}発。命令を選べ。`
-        : `${ROE[getRoeOf(game, panel.unitId)].label}下。命令を選べ。`;
+        : `${ROE[getRoeOf(game, panel.unitId)].label}下。命令を選べ。`) + heldNote;
+  } else if (panel.trigger !== 'now' && !NO_TRIGGER.has(panel.verb) &&
+             !(VERBS[panel.verb].needsTarget && !panel.legs.length)) {
+    const t = TRIGGERS[panel.trigger];
+    dom.status.textContent =
+      `予令として渡す ─ ${panel.trigger === 'at_time' ? formatClock(panel.triggerAt) : t.label}に発動する。`;
   } else if (VERBS[panel.verb].needsTarget && !panel.legs.length) {
     dom.status.textContent = '地図を叩いて目標を指定せよ。';
     dom.status.classList.add('is-warn');

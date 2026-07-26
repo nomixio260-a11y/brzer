@@ -47,11 +47,17 @@ export function stepDirectFire(world, dt) {
     const visibility = (0.4 + 0.6 * los.quality) * (1 - obscured * 0.85);
     if (los.quality * (1 - obscured) < 0.08) continue;
 
-    const strengthFrac = u.strength / u.maxStrength;
-    const moraleFactor = clamp(u.morale / 80, 0.3, 1.1);
+    // 兵力も士気も撃つ力を鈍らせるが、両方を素直に掛けると
+    // 「一度削られた部隊は二度と撃ち返せない」という一方通行になる。
+    // 半減した分隊でも小銃は鳴り続ける ─ 床を高くとる。
+    const strengthFrac = 0.35 + 0.65 * (u.strength / u.maxStrength);
+    const moraleFactor = clamp(u.morale / 80, 0.55, 1.1);
     // 制圧は反撃を鈍らせるが、完全には黙らせない。
     // 上限を強くしすぎると「先に撃った方が一方的に勝つ」不可逆な流れになる。
-    const suppressionFactor = 1 - clamp(u.suppression / 160, 0, 0.55);
+    // 死守を命じられた部隊は、頭を下げたままでも撃ち返し続ける ―
+    // 退がれない部隊にできることは、それしかない。
+    const resolve = u.roe === 'hold_fast' ? 0.36 : 0.55;
+    const suppressionFactor = 1 - clamp(u.suppression / 160, 0, resolve);
     // 移動しながらの射撃は当たらない。これが防者の最大の利点になる。
     const movingPenalty = u.path.length ? 0.5 : 1;
     const cover = effectiveCover(target, terrain);
@@ -64,7 +70,15 @@ export function stepDirectFire(world, dt) {
       rangeFactor * visibility * moraleFactor * suppressionFactor * movingPenalty *
       strengthFrac * (0.55 + u.skill * 0.6);
 
-    const loss = LETHALITY * power * effectiveness * (1 - cover * 0.7) * target.maxStrength * dt;
+    // 的の大きさ。掩体に伏せている部隊と、開豁地を駆けている部隊とでは
+    // 同じ弾でも当たり方が違う。ここを見ていなかったので、
+    // 陣地に籠る意味も、急速前進の代償も、数字の上に出ていなかった。
+    const exposure = (POSTURES[target.posture] ?? POSTURES.normal).exposure;
+
+    // 遮蔽は防者の全てである。掩体に入った分隊と、渡河点を駆けている分隊とで
+    // 一発の重みが一桁変わる ─ その差があるから、寡兵でも渡らせずに済む。
+    const loss =
+      LETHALITY * power * effectiveness * (1 - cover * 0.80) * exposure * target.maxStrength * dt;
     if (loss > 0) {
       const dealt = applyDamage(target, loss, now, { friendly: false });
       u.inflicted += dealt;

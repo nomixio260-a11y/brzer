@@ -66,6 +66,7 @@ export function createGame(opts = {}) {
       sketches: [],
       roster: new Map(), // unitId -> 最後に「聞いた」内容
       roe: new Map(), // unitId -> 与えた交戦規定
+      held: new Map(), // unitId -> 渡してある予令
       log: [],
       unread: 0,
     },
@@ -124,6 +125,12 @@ function absorb(game, entry) {
   game.belief.log.push(entry);
   game.belief.unread++;
 
+  // 予令が発動したことは、部下からそう聞かされて初めて分かる
+  if (entry.kind === 'initiative' && entry.meta?.orderId && !entry.lost) {
+    const held = game.belief.held.get(entry.fromId);
+    if (held?.orderId === entry.meta.orderId) game.belief.held.delete(entry.fromId);
+  }
+
   const self = entry.meta?.self;
   if (!entry.fromId || !self || entry.lost) return;
 
@@ -150,16 +157,34 @@ function absorb(game, entry) {
 /* ------------------------------------------------------------------ */
 
 /** 命令を発令する。UI からはここだけを呼ぶ。 */
-export function issueOrder(game, { unitId, verb, x, y, modifier, legs }) {
-  const order = simIssueOrder(game.world, { unitId, verb, x, y, modifier, legs });
+export function issueOrder(game, { unitId, verb, x, y, modifier, legs, trigger, triggerAt }) {
+  const order = simIssueOrder(game.world, {
+    unitId, verb, x, y, modifier, legs, trigger, triggerAt,
+  });
   if (order) {
     const r = game.belief.roster.get(unitId);
     if (r) r.pendingOrder = { verb, grid: order.grid, at: order.issuedAt };
     // 交戦規定は指揮官自身が出した枠なので、届く前から手元の控えに残る
     const roe = VERBS[verb]?.roe;
     if (roe) game.belief.roe.set(unitId, roe);
+    // 予令も同じ。渡した控えは指揮所に残る（発動したかは無線で知る）
+    if (order.trigger && order.trigger !== 'now') {
+      game.belief.held.set(unitId, {
+        orderId: order.id,
+        verb,
+        grid: order.grid,
+        trigger: order.trigger,
+        triggerAt: order.triggerAt,
+        at: order.issuedAt,
+      });
+    }
   }
   return order;
+}
+
+/** その部隊に渡してある予令（指揮所の控え） */
+export function getHeldOrder(game, unitId) {
+  return game.belief.held.get(unitId) ?? null;
 }
 
 /** 各部隊に与えた交戦規定（指揮官自身の控え） */
@@ -456,5 +481,5 @@ export function revealTruth(game) {
 }
 
 export { toGrid, fromGrid, formatClock };
-export { VERBS, MODIFIERS, VERB_GROUPS } from './sim/orders.js';
+export { VERBS, MODIFIERS, VERB_GROUPS, TRIGGERS } from './sim/orders.js';
 export { ROE } from './sim/friendlyAI.js';
