@@ -51,6 +51,18 @@ export function renderRoster(view) {
       `<span class="roster__age">${heard ? formatClock(heard.heardAt) : '交信なし'}</span>`;
     li.appendChild(top);
 
+    // 兵力の帯。数字だけより「あとどれだけ保つか」が掴みやすい。
+    if (heard?.strengthRatio != null) {
+      const bar = document.createElement('div');
+      bar.className = 'roster__bar';
+      if (heard.strengthRatio <= 0.3) bar.classList.add('is-critical');
+      else if (heard.strengthRatio <= 0.55) bar.classList.add('is-hurt');
+      const fill = document.createElement('i');
+      fill.style.width = `${Math.max(0, Math.min(1, heard.strengthRatio)) * 100}%`;
+      bar.appendChild(fill);
+      li.appendChild(bar);
+    }
+
     const line = document.createElement('div');
     line.className = 'roster__line';
     if (!heard) {

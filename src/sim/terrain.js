@@ -151,9 +151,13 @@ export function generateTerrain(seed = 20260726) {
       let h = 18 + fbm(noise, x / 900, y / 900, 4) * 46;
 
       for (const hill of HILLS) {
+        // 半径を揺らす。真円のままだと等高線が同心円になり、
+        // 地形図としてひと目で作り物に見える。
+        const wobble = 0.78 + 0.44 * fbm(noise, (x + hill.x) / 520, (y - hill.y) / 520, 3);
+        const rr = hill.r * wobble;
         const d = Math.hypot(x - hill.x, y - hill.y);
-        if (d < hill.r) {
-          const t = 1 - d / hill.r;
+        if (d < rr) {
+          const t = 1 - d / rr;
           h += hill.h * t * t * (3 - 2 * t);
         }
       }
@@ -269,8 +273,13 @@ export function generateTerrain(seed = 20260726) {
     ford: { x: FORD_X, y: riverCenterY(FORD_X) },
     hills: HILLS,
     towns: TOWNS,
-    // 描画側がベクタとして道路と河川をなぞれるように残しておく
-    roads: [mainRoad, lateralRoad, northRoad],
+    // 描画側がベクタとして道路と河川をなぞれるように残しておく。
+    // cls は地図記号の等級（主要道／里道）。
+    roads: [
+      { cls: 'major', points: mainRoad },
+      { cls: 'minor', points: lateralRoad },
+      { cls: 'minor', points: northRoad },
+    ],
     riverHalfWidth: RIVER_HALF_WIDTH,
   };
 

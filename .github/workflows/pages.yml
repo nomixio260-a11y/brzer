@@ -1,0 +1,59 @@
+name: 公開（GitHub Pages）
+
+# 静的なゲームなので、恒久的な公開先としてはこちらが本命。
+# main に入るたびに自動で更新される。
+#
+# 初回のみ、リポジトリの Settings → Pages → Source を
+# 「GitHub Actions」に切り替える必要がある。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: シミュレーションが健全か確かめる
+        run: node tests/sim-smoke.mjs
+
+      - name: 配布物を組み立てる
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+          cp -r src styles _site/
+          [ -d docs ] && cp -r docs _site/ || true
+          # Jekyll に触らせない
+          touch _site/.nojekyll
+          ls -R _site | head -40
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -15,6 +15,7 @@ import {
 } from './state.js';
 
 import { createMapView, resize, draw, toWorld, isInsideMap, markerAt } from './ui/mapview.js';
+import { symbolChip } from './ui/symbolchip.js';
 import { createRoster, renderRoster, selectInRoster } from './ui/roster.js';
 import { createRadioLog, appendEntries } from './ui/radiolog.js';
 import { createOrderPanel, selectUnit, setTarget, isTargeting, refresh as refreshOrders } from './ui/orderpanel.js';
@@ -230,9 +231,13 @@ function buildMarkerTools() {
   box.innerHTML = '';
   for (const [key, spec] of Object.entries(MARKER_TYPES)) {
     const b = document.createElement('button');
-    b.className = 'tool';
+    b.className = 'tool tool--sym';
     b.dataset.marker = key;
-    b.textContent = `${spec.glyph} ${spec.label}`;
+    b.title = spec.label;
+    b.appendChild(symbolChip(spec));
+    const cap = document.createElement('span');
+    cap.textContent = spec.label;
+    b.appendChild(cap);
     box.appendChild(b);
   }
   box.addEventListener('click', (e) => {
@@ -271,14 +276,10 @@ function buildMarkerTools() {
 
 function syncMarkerTools() {
   for (const b of $('marker-tools').querySelectorAll('button')) {
-    const on = b.dataset.marker === markerTool.type;
-    b.classList.toggle('is-on', on);
-    b.style.background = on ? MARKER_TYPES[b.dataset.marker].color : '';
+    b.classList.toggle('is-on', b.dataset.marker === markerTool.type);
   }
   for (const b of $('confidence-tools').querySelectorAll('button')) {
-    const on = b.dataset.conf === markerTool.confidence;
-    b.classList.toggle('is-on', on);
-    b.style.background = on ? '#8d968f' : '';
+    b.classList.toggle('is-on', b.dataset.conf === markerTool.confidence);
   }
 }
 
@@ -300,7 +301,7 @@ function wireMap() {
       return;
     }
 
-    const hit = markerAt(game, p.x, p.y);
+    const hit = markerAt(game, p.x, p.y, mapView);
     if (hit) {
       mapView.selectedMarkerId = hit.id;
       dragging = { id: hit.id, moved: false };
@@ -331,7 +332,7 @@ function wireMap() {
       hideMarkerEditor();
       return;
     }
-    mapView.hoverMarkerId = isInsideMap(p) ? markerAt(game, p.x, p.y)?.id ?? null : null;
+    mapView.hoverMarkerId = isInsideMap(p) ? markerAt(game, p.x, p.y, mapView)?.id ?? null : null;
   });
 
   window.addEventListener('mouseup', () => {
@@ -341,7 +342,7 @@ function wireMap() {
   canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     const p = toWorld(mapView, e.clientX, e.clientY);
-    const hit = markerAt(game, p.x, p.y);
+    const hit = markerAt(game, p.x, p.y, mapView);
     if (hit) {
       removeMarker(game, hit.id);
       hideMarkerEditor();

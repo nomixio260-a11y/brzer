@@ -1,0 +1,152 @@
+name: 公開（Cloudflare Tunnel）
+
+# 手動で起動して、一時的な公開URLを作る。
+#
+#   Actions タブ → 「公開（Cloudflare Tunnel）」 → Run workflow
+#   → 実行中のジョブのサマリに https://....trycloudflare.com が出る
+#
+# 使い捨てトンネルなので URL は毎回変わり、ジョブが終われば消える。
+# 常設したい場合は Cloudflare でトンネルを作り、その token を
+# リポジトリの Secrets に CLOUDFLARE_TUNNEL_TOKEN として登録すると
+# そちらが使われる（固定ドメインで公開できる）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: '公開しておく時間（分）。GitHub Actions の上限は 360 分。'
+        required: true
+        default: '60'
+        type: string
+
+concurrency:
+  group: brzer-tunnel
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tunnel:
+    runs-on: ubuntu-latest
+    # 指定時間 + 後片付けの余裕
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 入力値を検証する
+        id: cfg
+        run: |
+          minutes='${{ inputs.minutes }}'
+          if ! [[ "$minutes" =~ ^[0-9]+$ ]] || [ "$minutes" -lt 1 ] || [ "$minutes" -gt 350 ]; then
+            echo "::error::minutes は 1〜350 の整数で指定してください（受け取った値: $minutes）"
+            exit 1
+          fi
+          echo "minutes=$minutes" >> "$GITHUB_OUTPUT"
+
+      - name: シミュレーションが健全か確かめる
+        run: node tests/sim-smoke.mjs
+
+      - name: 静的サーバを起動する
+        run: |
+          node scripts/serve.mjs --port 8000 --host 127.0.0.1 --root . > server.log 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8000/index.html -o /dev/null; then
+              echo "サーバ起動を確認"
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "::error::静的サーバが起動しませんでした"
+          cat server.log
+          exit 1
+
+      - name: cloudflared を用意する
+        run: |
+          curl -fsSL -o cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          ./cloudflared --version
+
+      - name: トンネルを開く
+        id: tunnel
+        env:
+          TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+        run: |
+          if [ -n "$TUNNEL_TOKEN" ]; then
+            echo "名前付きトンネルで公開します（固定ドメイン）"
+            ./cloudflared tunnel run --token "$TUNNEL_TOKEN" --url http://127.0.0.1:8000 \
+              > tunnel.log 2>&1 &
+            echo "named=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "使い捨てトンネルで公開します"
+          ./cloudflared tunnel --url http://127.0.0.1:8000 --no-autoupdate \
+            > tunnel.log 2>&1 &
+
+          # URL が出てくるまで待つ
+          for _ in $(seq 1 60); do
+            url=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' tunnel.log | head -1 || true)
+            if [ -n "$url" ]; then
+              echo "url=$url" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::公開URLを取得できませんでした"
+          cat tunnel.log
+          exit 1
+
+      - name: 公開URLを掲示する
+        run: |
+          {
+            echo "## BRZER ─ 橋梁死守 を公開中"
+            echo
+            if [ -n "${{ steps.tunnel.outputs.url }}" ]; then
+              echo "### 🌐 ${{ steps.tunnel.outputs.url }}"
+              echo
+              echo "このURLは **このジョブが動いている間だけ** 有効です。"
+            else
+              echo "Cloudflare の名前付きトンネルで公開しています。"
+              echo "接続先は Cloudflare 側のダッシュボードで設定したドメインです。"
+            fi
+            echo
+            echo "- 公開時間: **${{ steps.cfg.outputs.minutes }} 分**"
+            echo "- 止めたいときは、このジョブを Cancel してください。"
+            echo "- 恒久的に公開したい場合は Pages のワークフローを使ってください。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::notice title=公開URL::${{ steps.tunnel.outputs.url }}"
+
+      - name: 指定時間だけ公開を維持する
+        run: |
+          minutes='${{ steps.cfg.outputs.minutes }}'
+          echo "$minutes 分間そのままにします"
+          end=$(( $(date +%s) + minutes * 60 ))
+          while [ "$(date +%s)" -lt "$end" ]; do
+            # トンネルかサーバが落ちていたら早めに気づく
+            if ! curl -sf http://127.0.0.1:8000/index.html -o /dev/null; then
+              echo "::error::静的サーバが停止しました"
+              tail -50 server.log
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "公開時間が終了しました"
+
+      - name: ログを残す
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tunnel-logs
+          path: |
+            server.log
+            tunnel.log
+          retention-days: 3
+          if-no-files-found: ignore

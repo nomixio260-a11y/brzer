@@ -14,20 +14,27 @@ import { toGrid, fromGrid, formatClock } from './util.js';
 
 let markerSeq = 1;
 
+// 地図に書き込める記号。枠の形と中の絵は APP-6 の作法に従う。
+const HOSTILE = '#b4302a';
+const FRIEND = '#1a4f9c';
+
 export const MARKER_TYPES = Object.freeze({
-  enemy_inf: { label: '敵歩兵', color: '#e2504a', glyph: '▲' },
-  enemy_armor: { label: '敵装甲', color: '#e2504a', glyph: '◆' },
-  enemy_arty: { label: '敵砲兵', color: '#e2504a', glyph: '✦' },
-  friendly: { label: '自軍', color: '#4d9de0', glyph: '●' },
-  obstacle: { label: '障害物', color: '#e0b04d', glyph: '✕' },
-  objective: { label: '目標', color: '#5fd08a', glyph: '★' },
-  note: { label: 'メモ', color: '#b9b2a5', glyph: '■' },
+  enemy_inf: { label: '敵歩兵', short: '歩', color: HOSTILE, affiliation: 'hostile', icon: 'infantry' },
+  enemy_mech: { label: '敵装甲車', short: '装車', color: HOSTILE, affiliation: 'hostile', icon: 'mech' },
+  enemy_armor: { label: '敵戦車', short: '戦車', color: HOSTILE, affiliation: 'hostile', icon: 'armor' },
+  enemy_at: { label: '敵対戦車', short: '対戦', color: HOSTILE, affiliation: 'hostile', icon: 'antitank' },
+  enemy_arty: { label: '敵砲迫', short: '砲', color: HOSTILE, affiliation: 'hostile', icon: 'artillery' },
+  unknown: { label: '正体不明', short: '不明', color: '#8a6a10', affiliation: 'unknown', icon: null },
+  friendly: { label: '自軍', short: '自', color: FRIEND, affiliation: 'friend', icon: 'infantry' },
+  obstacle: { label: '障害', short: '障', color: '#2f2a22', graphic: 'obstacle' },
+  objective: { label: '目標', short: '目', color: '#1d7a45', graphic: 'objective' },
+  note: { label: 'メモ', short: 'メモ', color: '#2f2a22', graphic: 'note' },
 });
 
 export const CONFIDENCE = Object.freeze({
-  confirmed: { label: '確認', dash: null },
-  estimated: { label: '推定', dash: [7, 4] },
-  unconfirmed: { label: '未確認', dash: [2, 4] },
+  confirmed: { label: '確認', short: '', dash: null },
+  estimated: { label: '推定', short: '推定', dash: [6, 4] },
+  unconfirmed: { label: '未確認', short: '未確認', dash: [2, 3.5] },
 });
 
 export function createGame() {

@@ -11,6 +11,7 @@ import {
   CONFIDENCE,
 } from '../state.js';
 import { createMapViewBase } from './basemap.js';
+import { drawSymbol, drawObstacle, drawObjective } from './milsymbol.js';
 
 const VERDICT = {
   victory: { label: '任 務 達 成', cls: 'is-victory' },
@@ -48,23 +49,21 @@ function drawTruthMap(canvas, game, truth) {
 
   const ctx = canvas.getContext('2d');
   const scale = canvas.width / WORLD.width;
-  // 記号は画面上で一定の大きさにしたい。世界座標系の中で px 指定するための換算。
-  const px = (n) => n / scale;
+  // 記号は画面上で一定の大きさにしたい。scale はデバイスピクセル基準なので
+  // dpr を掛けてから割る（掛けないと高精細画面で半分になる）。
+  const px = (n) => (n * dpr) / scale;
 
-  ctx.fillStyle = '#090b0c';
+  ctx.fillStyle = '#15120f';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.save();
   ctx.scale(scale, scale);
   ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(base, 0, 0, WORLD.width, WORLD.height);
 
-  // 地図を暗く沈めて、その上に載る情報を読みやすくする
-  ctx.fillStyle = 'rgba(9, 11, 12, 0.42)';
-  ctx.fillRect(0, 0, WORLD.width, WORLD.height);
-
-  // グリッド
-  ctx.strokeStyle = 'rgba(210, 220, 215, 0.14)';
-  ctx.lineWidth = px(1);
+  // 方眼
+  ctx.strokeStyle = 'rgba(52, 74, 96, 0.3)';
+  ctx.lineWidth = px(0.7);
   ctx.beginPath();
   for (let c = 0; c <= WORLD.gridCols; c++) {
     ctx.moveTo(c * WORLD.gridSize, 0);
@@ -76,68 +75,80 @@ function drawTruthMap(canvas, game, truth) {
   }
   ctx.stroke();
 
-  ctx.fillStyle = 'rgba(205, 214, 210, 0.3)';
-  ctx.font = `500 ${px(9)}px ui-monospace, monospace`;
+  ctx.fillStyle = 'rgba(38, 60, 82, 0.55)';
+  ctx.font = `600 ${px(7.5)}px ui-monospace, monospace`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   for (let c = 0; c < WORLD.gridCols; c++) {
     for (let r = 0; r < WORLD.gridRows; r++) {
-      ctx.fillText(gridLetter(c) + (r + 1), c * WORLD.gridSize + px(3), r * WORLD.gridSize + px(3));
+      ctx.fillText(gridLetter(c) + (r + 1), c * WORLD.gridSize + px(2.5), r * WORLD.gridSize + px(2));
     }
   }
 
-  // --- 指揮官が描いたマーカー（点線・琥珀色） ---
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
+  // --- 貴官が書き込んだ記号（点線・薄い） ---
   for (const m of getMarkers(game)) {
     const spec = MARKER_TYPES[m.type] ?? MARKER_TYPES.note;
     const conf = CONFIDENCE[m.confidence] ?? CONFIDENCE.estimated;
-    ctx.strokeStyle = 'rgba(224, 163, 60, 0.95)';
-    ctx.lineWidth = px(1.6);
-    ctx.setLineDash(conf.dash ? conf.dash.map((n) => px(n)) : [px(4), px(3)]);
-    ctx.beginPath();
-    ctx.arc(m.x, m.y, px(13), 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    outlined(ctx, m.label || spec.label, m.x, m.y - px(19), '#e0a33c', px(9));
+    if (spec.graphic === 'obstacle') {
+      drawObstacle(ctx, m.x, m.y, px(9), spec.color, px(1.4), 0.55);
+    } else if (spec.graphic === 'objective') {
+      drawObjective(ctx, m.x, m.y, px(9), spec.color, px(1.4), 0.55);
+    } else if (!spec.graphic) {
+      drawSymbol(ctx, {
+        x: m.x, y: m.y, r: px(9),
+        affiliation: spec.affiliation, icon: spec.icon, color: spec.color,
+        lineWidth: px(1.4),
+        dash: conf.dash ? conf.dash.map((n) => px(n)) : [px(5), px(3)],
+        alpha: 0.55, hand: true, seed: m.x | 0,
+      });
+    }
   }
 
-  // --- 実際にいた部隊 ---
+  // --- 実際にいた部隊（実線・濃い） ---
   for (const u of truth.units) {
     if (u.evacuated) continue;
     const dead = !u.alive;
-    let color = '#4d9de0';
-    if (u.side === 'enemy') color = '#e2504a';
-    if (u.side === 'civilian') color = '#c9c2b5';
-    if (dead) color = '#6c7573';
+    const spec = TRUTH_SYMBOL[u.typeLabel] ?? { affiliation: 'unknown', icon: null };
+    const affiliation = u.side === 'enemy' ? 'hostile' : u.side === 'civilian' ? 'neutral' : 'friend';
+    const color = dead ? '#5f574c' : undefined;
 
-    ctx.save();
-    ctx.translate(u.x, u.y);
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
+    drawSymbol(ctx, {
+      x: u.x, y: u.y, r: px(10),
+      affiliation, icon: spec.icon, color,
+      lineWidth: px(1.8), alpha: dead ? 0.75 : 1, fillFrame: !dead,
+    });
 
     if (dead) {
-      ctx.lineWidth = px(2);
-      ctx.beginPath();
-      ctx.moveTo(-px(7), -px(7));
-      ctx.lineTo(px(7), px(7));
-      ctx.moveTo(px(7), -px(7));
-      ctx.lineTo(-px(7), px(7));
-      ctx.stroke();
-    } else {
+      ctx.save();
+      ctx.strokeStyle = '#8a2f26';
       ctx.lineWidth = px(1.8);
-      ctx.globalAlpha = 0.35;
-      ctx.fillRect(-px(9), -px(6), px(18), px(12));
-      ctx.globalAlpha = 1;
-      ctx.strokeRect(-px(9), -px(6), px(18), px(12));
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(u.x - px(11), u.y - px(9));
+      ctx.lineTo(u.x + px(11), u.y + px(9));
+      ctx.moveTo(u.x + px(11), u.y - px(9));
+      ctx.lineTo(u.x - px(11), u.y + px(9));
+      ctx.stroke();
+      ctx.restore();
     }
 
-    outlined(ctx, u.callsign, 0, px(15), color, px(9.5));
-    ctx.restore();
+    outlined(ctx, u.callsign, u.x, u.y + px(19), dead ? '#7a6f62' : affiliation === 'hostile' ? '#8f231d' : '#123a75', px(8.5));
   }
 
   ctx.restore();
 }
+
+// 真実の部隊を、兵科どおりの記号で描くための対応表
+const TRUTH_SYMBOL = {
+  '歩兵分隊': { icon: 'infantry' },
+  '対戦車班': { icon: 'antitank' },
+  '偵察班': { icon: 'recon' },
+  '機械化歩兵': { icon: 'mech' },
+  '戦車': { icon: 'armor' },
+  '迫撃砲班': { icon: 'mortar' },
+  '偵察ドローン': { icon: 'uav' },
+  '車列': { icon: 'civilian' },
+};
 
 /** 縁取りつきの文字（背景が何色でも読める） */
 function outlined(ctx, text, x, y, color, size) {
@@ -145,9 +156,9 @@ function outlined(ctx, text, x, y, color, size) {
   ctx.font = `500 ${size}px system-ui, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.lineWidth = size * 0.34;
+  ctx.lineWidth = size * 0.42;
   ctx.lineJoin = 'round';
-  ctx.strokeStyle = 'rgba(6, 8, 9, 0.9)';
+  ctx.strokeStyle = 'rgba(233, 234, 212, 0.92)';
   ctx.strokeText(text, x, y);
   ctx.fillStyle = color;
   ctx.fillText(text, x, y);

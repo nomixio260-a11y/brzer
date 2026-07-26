@@ -1,0 +1,20 @@
+{
+  "name": "brzer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "無線指揮官ゲーム「橋梁死守」― 地図と無線だけで戦闘を指揮する",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/serve.mjs --port 8000",
+    "serve": "node scripts/serve.mjs",
+    "test": "node tests/sim-smoke.mjs",
+    "test:browser": "node tests/browser-smoke.mjs",
+    "tunnel": "bash scripts/tunnel.sh"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "playwright": "1.49.1"
+  }
+}

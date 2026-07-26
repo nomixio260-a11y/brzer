@@ -1,0 +1,72 @@
+name: 検査
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  simulation:
+    name: シミュレーション
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node tests/sim-smoke.mjs
+
+  browser:
+    name: ブラウザ通し
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 依存を入れる（ゲーム本体は依存ゼロ。検査にだけ必要）
+        run: npm install --no-audit --no-fund
+
+      - name: Chromium を用意する
+        run: npx playwright install --with-deps chromium
+
+      - name: 静的サーバを起動する
+        run: |
+          node scripts/serve.mjs --port 8127 --host 127.0.0.1 --root . > server.log 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8127/index.html -o /dev/null && exit 0
+            sleep 0.5
+          done
+          cat server.log; exit 1
+
+      - name: 起動から講評まで通す
+        run: node tests/browser-smoke.mjs
+        env:
+          BRZER_URL: http://127.0.0.1:8127/index.html
+
+      - name: 画面を残す
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: .artifacts/*.png
+          retention-days: 7
+          if-no-files-found: ignore
+
+  boundary:
+    name: 真実の漏洩がないこと
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: UI層が world / belief を直接触っていないことを確かめる
+        run: |
+          if grep -rn "game\.world\|game\.belief" src/ui/ src/main.js; then
+            echo "::error::UI層がシミュレーションの内部状態を直接参照しています。state.js のアクセサ経由にしてください。"
+            exit 1
+          fi
+          echo "境界は保たれています"
