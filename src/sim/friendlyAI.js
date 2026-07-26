@@ -17,9 +17,11 @@ export const ROE = Object.freeze({
   hold_fast: {
     key: 'hold_fast',
     label: '死守',
-    note: '一歩も退くな。士気は保つが、崩れれば全滅する。',
+    note: '一歩も退くな。統制は崩れないが、その場で全滅するまで戦うことになる。',
     allowWithdraw: false,
-    moraleFloor: 12, // 崩れにくくなる
+    // 統制喪失は士気22で起きる。下限をそれより上に置いて初めて
+    // 「死守」は敗走を止める命令になる ─ 12では止まらなかった。
+    moraleFloor: 26,
   },
   standard: {
     key: 'standard',
@@ -150,7 +152,7 @@ function findFallbackPosition(world, u) {
 function digInWhenIdle(world, u) {
   if (u.tpl.flying || u.tpl.indirect) return;
   if (u.path.length) return;
-  if (u.posture === 'dug_in' || u.posture === 'hasty') return;
+  if (u.posture === 'dug_in' || u.posture === 'hasty' || u.posture === 'fortified') return;
   if (u.state === 'recon' || u.state === 'moving') return;
   if (u.weaponsHold && u.state === 'holding') return; // 監視中は姿勢を変えない
   // 静穏なら掘り始める

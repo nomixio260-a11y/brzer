@@ -6,7 +6,9 @@ import { issueOrder } from '../src/sim/orders.js';
 import { evaluate } from '../src/sim/scenario.js';
 import { WORLD, toGrid, fromGrid, formatClock, parseClock } from '../src/util.js';
 import { generateTerrain, lineOfSight, terrainAt, T } from '../src/sim/terrain.js';
-import { mistDensity, mistAttenuation } from '../src/sim/weather.js';
+import { mistDensity, mistAttenuation, lightLevel, lightSpotFactor } from '../src/sim/weather.js';
+import { fatigueFactor, fatigueJa } from '../src/sim/logistics.js';
+import { applyDamage } from '../src/sim/units.js';
 import { findPath } from '../src/sim/pathfind.js';
 
 let failures = 0;
@@ -354,6 +356,113 @@ section('敵の指揮官');
     Number.isFinite(w.enemyCommand.axes.ford.progress));
   check('敵が予備を投入する', w.enemyCommand.reserveCommitted === true);
   check('決心が記録されている', w.enemyCommand.log.length > 0, `${w.enemyCommand.log.length}件`);
+}
+
+/* ------------------------------------------------------------------ */
+
+section('長期戦 ─ 昼夜');
+{
+  const w = createWorld({ missionId: 'bridge_hold_long' });
+  check('長期戦は夜明け前に始まる', w.mission.startTime === parseClock('0430'));
+  check('夜は暗い', lightLevel(w) < 0.12, String(lightLevel(w)));
+
+  const nightSpot = lightSpotFactor(w);
+  for (let i = 0; i < 8000; i++) tick(w, 1); // 0643 ごろ
+  check('日が昇ると明るくなる', lightLevel(w) > 0.9, String(lightLevel(w)));
+  check('夜は索敵距離が縮む', nightSpot < lightSpotFactor(w) * 0.5, `${nightSpot} vs ${lightSpotFactor(w)}`);
+}
+
+section('長期戦 ─ 兵站');
+{
+  const w = createWorld({ missionId: 'bridge_hold_long' });
+  check('段列が編成にいる', !!w.trains && !!w.unitsById.get('LD'));
+  check('弾薬を10基数持つ', w.trains.loadsLeft === 10);
+  check('短期戦に段列はいない', createWorld().trains === null);
+
+  for (let i = 0; i < 200; i++) tick(w, 1);
+  const h1 = w.unitsById.get('H1');
+  h1.ammo = 20;
+  const order = issueOrder(w, { unitId: 'H1', verb: 'resupply' });
+  check('補給要請が出せる', order != null);
+
+  let delivered = false;
+  for (let i = 0; i < 4000 && !delivered; i++) {
+    tick(w, 1);
+    if (w.trains.loadsLeft < 10) delivered = true;
+  }
+  check('段列が弾薬を届ける', delivered);
+  check('届いた部隊の弾薬が回復する', h1.ammo > 80, String(Math.round(h1.ammo)));
+  check('集積所の在庫が減る', w.trains.loadsLeft === 9);
+
+  // 空になれば要請そのものが通らない
+  w.trains.loadsLeft = 0;
+  w.trains.task = null;
+  check('在庫がなければ要請は通らない',
+    issueOrder(w, { unitId: 'H2', verb: 'resupply' }) === null);
+}
+
+section('長期戦 ─ 疲労と休養');
+{
+  const w = createWorld({ missionId: 'bridge_hold_long' });
+  const h2 = w.unitsById.get('H2');
+  check('夜通し起きている部隊は疲れている', h2.fatigue > 0);
+
+  h2.fatigue = 330;
+  check('疲労は射撃を鈍らせる', fatigueFactor(h2) < 0.8, String(fatigueFactor(h2)));
+  check('疲労が言語化される', fatigueJa(h2) === '消耗が激しい');
+
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  issueOrder(w, { unitId: 'H2', verb: 'rest' });
+  for (let i = 0; i < 400; i++) tick(w, 1);
+  check('休止命令が届く', h2.resting === true);
+  const before = h2.fatigue;
+  for (let i = 0; i < 600; i++) tick(w, 1);
+  check('休めば疲労が抜ける', h2.fatigue < before - 40, `${before}→${h2.fatigue}`);
+
+  issueOrder(w, { unitId: 'H2', verb: 'stand_to' });
+  for (let i = 0; i < 400; i++) tick(w, 1);
+  check('警戒配置で休養を打ち切れる', h2.resting === false);
+
+  // 短期戦に兵站の命令はない
+  const short = createWorld();
+  check('短期戦では休止を出せない', issueOrder(short, { unitId: 'H2', verb: 'rest' }) === null);
+}
+
+section('長期戦 ─ 軽傷者の復帰');
+{
+  const w = createWorld({ missionId: 'bridge_hold_long' });
+  const h2 = w.unitsById.get('H2');
+  applyDamage(h2, 3, w.now, {});
+  check('損害の一部は軽傷である', h2.walkingWounded > 0);
+  const hurt = h2.strength;
+  h2.lastHitAt = -Infinity;
+  for (let i = 0; i < 1500; i++) tick(w, 1);
+  check('静かにしていれば戦列に戻る', h2.strength > hurt, `${hurt}→${h2.strength}`);
+}
+
+section('長期戦 ─ 波状攻撃');
+{
+  const w = createWorld({ missionId: 'bridge_hold_long' });
+  for (let i = 0; i < 30000 && !w.outcome; i++) tick(w, 1);
+  const waves = w.enemyCommand.waves;
+  check('波が管理されている', waves.size >= 2, `${waves.size}波`);
+  check('攻撃は永久には続かない',
+    [...waves.values()].some((v) => v.state === 'spent' || v.state === 'destroyed'));
+  check('敵の決心が記録される', w.enemyCommand.log.length > 0);
+}
+
+section('長期戦 ─ 完走');
+for (const seed of [1, 7, 4242]) {
+  const w = createWorld({ seed, missionId: 'bridge_hold_long' });
+  let ok = true;
+  let err = '';
+  try {
+    for (let i = 0; i < 30000 && !w.outcome; i++) tick(w, 1);
+  } catch (e) {
+    ok = false;
+    err = e.stack ?? String(e);
+  }
+  check(`長期戦 seed=${seed} が完走する`, ok && w.outcome != null, `${w.outcome ?? ''} ${err}`);
 }
 
 /* ------------------------------------------------------------------ */

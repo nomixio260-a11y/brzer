@@ -175,10 +175,82 @@ async function auditLayouts() {
   }
 }
 
+/**
+ * 長期戦。
+ * 半日の戦闘には段列が付き、兵站の命令が増え、静穏を飛ばす x8 が出る。
+ */
+async function checkLongBattle() {
+  const ctx = await browser.newContext({ viewport: { width: 1500, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message));
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+
+  await p.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+  await p.click('#mission-pick button[data-mission="bridge_hold_long"]');
+  await p.waitForTimeout(250);
+  check('長期戦を選べる', (await p.textContent('#brief-title')).includes('持久'));
+  check('時間帯が入れ替わる', (await p.textContent('#brief-sub')).includes('0430'));
+  check('編成に段列が加わる', (await p.textContent('#brief-oob')).includes('ラーダー'));
+
+  await p.click('#btn-start');
+  await p.waitForTimeout(900);
+  check('長期戦が始まる', (await p.textContent('#clock')).trim() === '0430');
+  check('夜間と表示される', (await p.textContent('#visibility')).includes('夜間'));
+  check('段列の残数が出る', await p.isVisible('#trains-item'));
+  check('静穏を飛ばす8倍が出る', await p.isVisible('#speed-8'));
+  await p.click('#speed-8');
+  check('8倍が効く', (await p.evaluate(() => window.__brzer.game.speed)) === 8);
+
+  // 兵站の命令が出せる
+  await p.click('#order-units button[data-unit="H1"]');
+  const groups = await p.$$eval('#order-groups button', (bs) => bs.map((b) => b.textContent));
+  check('兵站の分類が出る', groups.includes('兵站'), groups.join(','));
+  await p.click('#order-groups button[data-group="sustain"]');
+  const verbs = await p.$$eval('#order-verbs button', (bs) => bs.map((b) => b.dataset.verb));
+  check('補給要請・休止が出せる',
+    verbs.includes('resupply') && verbs.includes('rest') && verbs.includes('stand_to'),
+    verbs.join(','));
+
+  await p.click('#order-verbs button[data-verb="resupply"]');
+  await p.click('#order-send');
+  await p.waitForTimeout(600);
+  check('補給要請が発令された',
+    await p.evaluate(() => window.__brzer.game.world.orders.some((o) => o.verb === 'resupply')));
+
+  // 段列は実際に動き出す
+  let moved = false;
+  try {
+    await p.waitForFunction(() => window.__brzer.game.world.trains.task != null, null, { timeout: 25000 });
+    moved = true;
+  } catch { /* 下で落ちる */ }
+  check('段列が運搬に出る', moved);
+
+  // 短期戦には兵站の命令がない
+  const short = await browser.newContext({ viewport: { width: 1500, height: 900 } });
+  const sp = await short.newPage();
+  await sp.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+  await sp.click('#btn-start');
+  await sp.waitForTimeout(700);
+  check('短期戦に段列は出ない', !(await sp.isVisible('#trains-item')));
+  check('短期戦に8倍はない', !(await sp.isVisible('#speed-8')));
+  await sp.click('#order-units button[data-unit="H1"]');
+  const sGroups = await sp.$$eval('#order-groups button', (bs) => bs.map((b) => b.textContent));
+  check('短期戦に兵站の分類はない', !sGroups.includes('兵站'), sGroups.join(','));
+  await short.close();
+
+  check('長期戦でエラーが出ない', errs.length === 0, errs.join(' | '));
+  await p.screenshot({ path: `${SHOTS}/05-long.png` });
+  await ctx.close();
+}
+
 try {
   console.log('\n== 起動 ==');
   await page.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
   check('ブリーフィングが出る', await page.isVisible('#view-briefing'));
+  // ブリーフィングの中身は起動時に組み立てられる。描き終わるまで待つ。
+  await page.waitForFunction(() => document.getElementById('brief-mission').textContent.length > 10,
+    null, { timeout: 10000 });
   check('任務文が地形から引かれている', /橋梁 [A-L]\d/.test(await page.textContent('#brief-mission')));
   await page.screenshot({ path: `${SHOTS}/01-briefing.png` });
 
@@ -526,6 +598,9 @@ try {
   /* ---------------------------------------------------------------- */
   section('版面の検査（各画面寸法）');
   await auditLayouts();
+
+  section('長期戦');
+  await checkLongBattle();
 } finally {
   await browser.close();
 }

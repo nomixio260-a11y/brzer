@@ -4,6 +4,7 @@
 import { clamp, dist, toGrid } from '../util.js';
 import { lineOfSight } from './terrain.js';
 import { moraleJa, stateJa, strengthJa } from './units.js';
+import { fatigueJa } from './logistics.js';
 
 export const PRI = Object.freeze({
   ROUTINE: 0,
@@ -46,6 +47,10 @@ export function enqueue(world, tx) {
       state: stateJa(sender),
       posture: sender.posture,
       ammoRatio: sender.ammo / (sender.tpl.maxAmmo || 100),
+      // 長期戦で効いてくるもの。これも「最後に聞いた時点」の話でしかない。
+      fatigue: fatigueJa(sender),
+      resting: !!sender.resting,
+      wounded: sender.walkingWounded > 0.4,
     };
   }
 

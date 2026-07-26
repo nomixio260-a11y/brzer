@@ -19,8 +19,8 @@
   <div class="briefing">
     <header class="briefing__head">
       <div class="briefing__eyebrow">機密 ─ 第3中隊戦闘団 指揮所</div>
-      <h1 class="briefing__title">橋梁死守</h1>
-      <div class="briefing__sub">ヴォルネ川 ／ 0700 ─ 0900</div>
+      <h1 class="briefing__title" id="brief-title">橋梁死守</h1>
+      <div class="briefing__sub" id="brief-sub">ヴォルネ川 ／ 0700 ─ 0900</div>
     </header>
 
     <div class="briefing__body">
@@ -78,6 +78,22 @@
       </section>
 
       <section class="brief-block">
+        <h2>戦闘の長さ</h2>
+        <div class="missionpick" id="mission-pick">
+          <button class="missionpick__opt is-on" data-mission="bridge_hold">
+            <b>短期戦 ─ 橋梁死守</b>
+            <em>0700〜0900（2時間）。一度の攻撃を凌ぎ切れるか。</em>
+            <span>約20分で決着。まずはこちらを。</span>
+          </button>
+          <button class="missionpick__opt" data-mission="bridge_hold_long">
+            <b>長期戦 ─ 橋梁持久</b>
+            <em>0430〜1045（6時間余）。三度の攻撃を、弾と体力を切らさずに凌ぐ。</em>
+            <span>弾薬補給・休養・後送が要る。攻撃の合間の静穏をどう使うかが勝負。</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="brief-block">
         <h2>設定</h2>
         <div class="setup">
           <label class="setup__row">
@@ -118,6 +134,7 @@
       <button class="speed__btn is-on" data-speed="1" title="標準 (1)" aria-label="標準">▶</button>
       <button class="speed__btn" data-speed="2" title="2倍 (2)" aria-label="2倍">▶▶</button>
       <button class="speed__btn" data-speed="4" title="4倍 (3)" aria-label="4倍">▶▶▶</button>
+      <button class="speed__btn" data-speed="8" id="speed-8" title="8倍 (4) ─ 静穏を飛ばす" aria-label="8倍" hidden>▶▶▶▶</button>
     </div>
 
     <div class="radiostate">
@@ -131,6 +148,7 @@
       <span class="support__item">視程 <b id="visibility" class="vis vis--0">不良</b></span>
       <span class="support__item">砲弾 <b id="ammo-he">12</b></span>
       <span class="support__item">発煙 <b id="ammo-smoke">6</b></span>
+      <span class="support__item" id="trains-item" hidden>段列 <b id="trains-loads">6</b></span>
     </div>
 
     <div class="objective" id="objective-line"></div>

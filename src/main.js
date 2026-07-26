@@ -15,6 +15,7 @@ import {
   getMission,
   getRosterOrder,
   getMarkers,
+  isLongBattle,
   issueOrder,
   MARKER_TYPES,
   CONFIDENCE,
@@ -47,7 +48,7 @@ import {
 } from './ui/orderpanel.js';
 import { createHud, renderHud } from './ui/hud.js';
 import { showDebrief } from './ui/debrief.js';
-import { fromGrid, WORLD } from './util.js';
+import { fromGrid, formatClock, WORLD } from './util.js';
 import * as audio from './audio.js';
 
 const $ = (id) => document.getElementById(id);
@@ -87,13 +88,23 @@ function coverZoom(view) {
 /* ================================================================== */
 
 let previewGame = null;
+let pickedMission = 'bridge_hold';
+
 function preview() {
-  if (!previewGame) previewGame = createGame();
+  if (!previewGame || previewGame.world.mission.id !== pickedMission) {
+    previewGame = createGame({ missionId: pickedMission });
+  }
   return previewGame;
 }
 
 function fillBriefing() {
   const mission = getMission(preview());
+  $('brief-title').textContent = mission.title;
+  $('brief-sub').textContent =
+    `ヴォルネ川 ／ ${formatClock(mission.startTime)} ─ ${formatClock(mission.endTime)}`;
+  for (const b of $('mission-pick').querySelectorAll('button')) {
+    b.classList.toggle('is-on', b.dataset.mission === pickedMission);
+  }
   $('brief-situation').textContent = mission.briefing.situation;
   $('brief-mission').textContent = mission.briefing.mission;
   $('brief-execution').textContent = mission.briefing.execution;
@@ -108,7 +119,7 @@ function fillBriefing() {
 
   const oob = $('brief-oob');
   oob.innerHTML = '';
-  for (const u of getRosterOrder()) {
+  for (const u of getRosterOrder(preview())) {
     const li = document.createElement('li');
     li.appendChild(symbolFor({ affiliation: 'friend', icon: u.icon, echelon: u.echelon }, 38));
     const b = document.createElement('b');
@@ -148,7 +159,10 @@ function startMission() {
   options.voice = $('opt-voice').checked;
 
   // 敵の企図を変えるなら、下敷きに作った盤は捨てて作り直す
-  game = options.variable || !previewGame ? createGame({ variable: options.variable }) : previewGame;
+  game =
+    options.variable || !previewGame || previewGame.world.mission.id !== pickedMission
+      ? createGame({ variable: options.variable, missionId: pickedMission })
+      : previewGame;
   previewGame = null;
 
   showView('view-game');
@@ -240,6 +254,8 @@ function startMission() {
       jam: $('radio-jam'),
       he: $('ammo-he'),
       smoke: $('ammo-smoke'),
+      trains: $('trains-loads'),
+      trainsItem: $('trains-item'),
       vis: $('visibility'),
       objective: $('objective-line'),
     },
@@ -255,6 +271,9 @@ function startMission() {
   if (new URLSearchParams(location.search).has('debug')) {
     window.__brzer = { game, get mapView() { return mapView; }, tool };
   }
+
+  // 半日の戦闘では、静穏を飛ばすための x8 を出す
+  $('speed-8').hidden = !isLongBattle(game);
 
   game.running = true;
   game.speed = 1;
@@ -348,6 +367,7 @@ function showToast(head, text, urgent) {
 
 function setSpeed(s) {
   if (!game) return;
+  if (s > (game.maxSpeed ?? 4)) return; // 短期戦に x8 はない
   if (s === 0) {
     game.running = false;
     audio.stopSpeaking();
@@ -792,6 +812,7 @@ window.addEventListener('keydown', (e) => {
     case '1': setSpeed(1); break;
     case '2': setSpeed(2); break;
     case '3': setSpeed(4); break;
+    case '4': setSpeed(8); break;
     case '+': case '=': zoomAt(mapView, 1.5); break;
     case '-': case '_': zoomAt(mapView, 1 / 1.5); break;
     case '0': setZoom(mapView, ZOOM_MIN, { byUser: true }); break;
@@ -828,6 +849,13 @@ window.addEventListener('keydown', (e) => {
 /* ================================================================== */
 
 $('btn-start').addEventListener('click', startMission);
+$('mission-pick').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-mission]');
+  if (!b || b.dataset.mission === pickedMission) return;
+  pickedMission = b.dataset.mission;
+  previewGame = null;
+  fillBriefing();
+});
 $('btn-again').addEventListener('click', () => window.location.reload());
 $('btn-sound').addEventListener('click', () => {
   const on = !audio.isEnabled();

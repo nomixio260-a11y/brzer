@@ -53,9 +53,11 @@ export function createGame(opts = {}) {
   // 「敵の企図を変える」を選んだときだけ、盤ごとに違う目を配る。
   // 地形と自軍の配置は変えない ― 変わるのは敵が何を考えているかだけ。
   const world = createWorld({
+    missionId: opts.missionId,
     variable: !!opts.variable,
     planSeed: opts.variable ? Math.floor(Math.random() * 0x7fffffff) + 1 : 0,
   });
+  const long = world.mission.duration === 'long';
 
   return {
     world,
@@ -77,7 +79,10 @@ export function createGame(opts = {}) {
     // 進行制御
     running: false,
     speed: 1,
-    simSecondsPerRealSecond: 6, // x1 で 2時間の戦闘が約20分になる
+    // x1 で 2時間の戦闘が約20分になる。半日の戦闘は同じ比では長すぎるので、
+    // 基準を上げたうえで x8 まで出せるようにする（静穏を飛ばすため）。
+    simSecondsPerRealSecond: long ? 14 : 6,
+    maxSpeed: long ? 8 : 4,
     finished: false,
     score: null,
   };
@@ -148,6 +153,9 @@ function absorb(game, entry) {
     state: self.state,
     posture: self.posture,
     ammoRatio: self.ammoRatio,
+    fatigue: self.fatigue ?? null,
+    resting: !!self.resting,
+    wounded: !!self.wounded,
     lastKind: entry.kind,
   });
 }
@@ -387,8 +395,32 @@ const DEFAULT_ROSTER_ORDER = [
     icon: 'artillery', echelon: 1 },
 ];
 
-export function getRosterOrder() {
-  return DEFAULT_ROSTER_ORDER;
+export function getRosterOrder(game) {
+  return game?.world.mission.rosterOrder ?? DEFAULT_ROSTER_ORDER;
+}
+
+/**
+ * 兵站の状況。指揮所の帳簿にあたる ─ ここは推測ではなく事実で分かる。
+ * 集積所は指揮所の後ろにあり、何基数残っているかは数えれば分かるからである。
+ */
+export function getTrains(game) {
+  const t = game.world.trains;
+  if (!t) return null;
+  const carrier = game.world.unitsById.get(t.unitId);
+  const target = t.task ? game.world.unitsById.get(t.task.targetId) : null;
+  return {
+    callsign: carrier?.callsign ?? 'ラーダー',
+    alive: !!carrier?.alive,
+    loadsLeft: t.loadsLeft,
+    loads: t.loads,
+    busyWith: target?.callsign ?? null,
+    phase: t.task?.phase ?? null,
+  };
+}
+
+/** 長期戦かどうか（UI が段列や速度の上限を出し分けるのに使う） */
+export function isLongBattle(game) {
+  return game.world.mission.duration === 'long';
 }
 
 export function getLog(game) {

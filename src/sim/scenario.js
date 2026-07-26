@@ -16,9 +16,13 @@ export const MISSION = Object.freeze({
   id: 'bridge_hold',
   title: '橋梁死守',
   subtitle: 'ヴォルネ川 / 第3中隊戦闘団',
+  duration: 'short',
   seed: 20260726,
   startTime: T0,
   endTime: TEND,
+
+  // 天候。霧が晴れる時刻はミッションごとに違う。
+  weather: { mistStart: T0, mistClear: parseClock('0835') },
 
   commandPost: { x: 1150, y: 2560 }, // 西の高地。見通しが利く＝無線が届く。
 
@@ -56,14 +60,139 @@ export const MISSION = Object.freeze({
 });
 
 /* ------------------------------------------------------------------ */
+/* 長期戦「持久」 ─ 0430から1300まで                                     */
+/* ------------------------------------------------------------------ */
+
+const L0 = parseClock('0430');
+const LEND = parseClock('1045');
+
+/**
+ * 半日守る戦い ─ 夜明け前から昼前まで。
+ *
+ * 短期戦が「一度の攻撃を凌げるか」なら、こちらは「凌ぎ続けられるか」である。
+ * 敵は三度攻めてきて、そのたびに退がって再編する。攻撃の合間には
+ * 一時間近い静穏がある ── その時間をどう使うかが、この戦闘の本体になる。
+ *
+ *   撃てば弾が減る。減れば運ばねばならず、運ぶ者は前線で無防備になる。
+ *   夜通し起きていれば鈍る。休ませれば見張りが薄くなる。
+ *   倒れた者の一部は、手当てが届けば戻ってくる。
+ *
+ * 位置ではなく「あと何時間戦えるか」を管理する ── それが長期戦の指揮である。
+ */
+export const MISSION_LONG = Object.freeze({
+  id: 'bridge_hold_long',
+  title: '橋梁持久',
+  subtitle: 'ヴォルネ川 / 第3中隊戦闘団 ─ 半日の防御',
+  duration: 'long',
+  seed: 20260726,
+  startTime: L0,
+  endTime: LEND,
+
+  // 夜明け前から始まり、日が高くなり、午後にまた谷が翳る
+  weather: {
+    mistStart: L0,
+    mistClear: parseClock('0820'),
+    eveningMistFrom: null,
+  },
+
+  commandPost: { x: 1150, y: 2560 },
+
+  // 弾薬集積所と補給班。長期戦にだけ存在する。
+  trains: {
+    unitId: 'LD',
+    loads: 10,
+    dump: { x: 1180, y: 3020 },
+  },
+
+  briefing: {
+    situation:
+      'ヴォルネ川に架かる唯一の橋梁が敵の主攻正面にある。橋を渡られれば、後方の第2大隊の側面が開く。' +
+      '敵は一個大隊規模で、夜明け前から日中いっぱいをかけて攻めてくると見られる。' +
+      '一度の攻撃で決着はつかない ─ 敵は退がり、再編し、また来る。',
+    mission:
+      `1045に到着する増援部隊が展開を終えるまで、橋梁 ${BRIDGE_GRID} を確保せよ。` +
+      '6時間余である。撃ち尽くさず、消耗し尽くさずに持ちこたえよ。',
+    execution:
+      '貴官は指揮所から出られない。前線は見えない。地図と無線だけが判断材料である。' +
+      '攻撃の合間の静穏をどう使うか ─ 補給か、休養か、陣地の構築か ─ それが半日を分ける。',
+    notes: [
+      '弾薬は有限である。撃ち続ければ尽きる。「ラーダー」が10基数を運べるが、往復には時間がかかる。',
+      '補給班は前線へ出ていく間じゅう無防備である。攻撃の最中に呼べば、弾ではなく死体が届く。',
+      '部隊は疲れる。静穏な時間に休止を命じておかねば、午後には当たらなくなる。',
+      '倒れた者の一部は軽傷である。手当てが行き届けば戦列に戻る ─ ただし静かにしていられればの話だ。',
+      '夜明け前は何も見えない。敵が薄明を選ぶのはそのためである。',
+      `東（${FORD_GRID}付近）に浅瀬がある。渡れるのは橋だけではない。`,
+      '砲兵「ソーン」は24発持つ。半日ぶんである。最初の攻撃で撃ち尽くすな。',
+    ],
+  },
+
+  objectives: [
+    { id: 'hold_bridge', text: `1045まで橋梁 ${BRIDGE_GRID} を確保する`, primary: true },
+    { id: 'keep_force', text: '2個分隊以上を戦闘可能な状態で維持する', primary: true },
+    { id: 'sustain', text: '弾薬と体力を切らさずに三度の攻撃を凌ぐ', primary: false },
+    { id: 'civilians', text: '民間車列を安全に通過させる', primary: false },
+  ],
+
+  support: {
+    artillery: { name: 'ソーン', rounds: 24 },
+    smoke: { name: 'ソーン', rounds: 10 },
+  },
+
+  rosterOrder: [
+    { id: 'H1', callsign: 'ハンマー1', typeLabel: '歩兵分隊', role: '橋梁南詰の主陣地', icon: 'infantry', echelon: 1 },
+    { id: 'H2', callsign: 'ハンマー2', typeLabel: '歩兵分隊', role: '集落の予備陣地', icon: 'infantry', echelon: 1 },
+    { id: 'H3', callsign: 'ハンマー3', typeLabel: '歩兵分隊', role: '北岸の前進哨所', icon: 'infantry', echelon: 1 },
+    { id: 'H4', callsign: 'ハンマー4', typeLabel: '歩兵分隊', role: '東翼・浅瀬の監視', icon: 'infantry', echelon: 1 },
+    { id: 'SW', callsign: 'ソード', typeLabel: '対戦車班', role: '対戦車予備', icon: 'antitank', echelon: 'Ø' },
+    { id: 'EG', callsign: 'イーグル', typeLabel: '偵察ドローン', role: '偵察', icon: 'uav', echelon: null },
+    { id: 'TH', callsign: 'ソーン', typeLabel: '支援砲兵', role: '火力支援', icon: 'artillery', echelon: 1 },
+    { id: 'LD', callsign: 'ラーダー', typeLabel: '補給班', role: '弾薬・後送', icon: 'supply', echelon: 'Ø' },
+    { id: 'H5', callsign: 'ハンマー5', typeLabel: '歩兵分隊', role: '増加配属（0905到着予定）', icon: 'infantry', echelon: 1 },
+  ],
+});
+
+export const MISSIONS = Object.freeze({
+  [MISSION.id]: MISSION,
+  [MISSION_LONG.id]: MISSION_LONG,
+});
+
+export function getMission(id) {
+  return MISSIONS[id] ?? MISSION;
+}
+
+/* ------------------------------------------------------------------ */
 /* 戦闘序列                                                             */
 /* ------------------------------------------------------------------ */
 
-export function friendlyOrderOfBattle() {
+export function friendlyOrderOfBattle(mission = MISSION) {
+  const long = mission.duration === 'long';
+  // 半日守れという命令には、それに見合う編成が付く。
+  // 一個中隊 ─ 小銃4個分隊に対戦車班、迫撃砲、無人機、そして段列。
+  const extra = long
+    ? [
+        {
+          id: 'H4', side: 'friend', callsign: 'ハンマー4', type: 'infantry',
+          x: 3560, y: 2360, posture: 'dug_in', state: 'defending', morale: 82,
+          role: '東翼 ― 浅瀬の監視',
+        },
+        {
+          id: 'LD', side: 'friend', callsign: 'ラーダー', type: 'supply',
+          x: mission.trains.dump.x, y: mission.trains.dump.y,
+          posture: 'dug_in', state: 'holding', morale: 80,
+          role: '弾薬集積所・補給班',
+        },
+      ]
+    : [];
+
+  // 夜明け前から起きている部隊は、最初から少し疲れている
+  const fatigue = long ? 60 : 0;
+
   return [
     {
+      // 南詰の主陣地。川は y≈2011 を流れているので、南岸とは y がそれより
+      // 大きい側である ─ ここを取り違えると、補給が橋を渡る羽目になる。
       id: 'H1', side: 'friend', callsign: 'ハンマー1', type: 'infantry',
-      x: 2200, y: 1900, posture: 'dug_in', state: 'defending', morale: 84,
+      x: 2200, y: 2150, posture: 'dug_in', state: 'defending', morale: 84,
       role: '橋梁南詰の主陣地',
     },
     {
@@ -91,7 +220,14 @@ export function friendlyOrderOfBattle() {
       x: 1240, y: 3400, posture: 'dug_in', state: 'defending', morale: 90,
       role: '支援砲兵（後方）',
     },
-  ];
+    ...extra,
+  ].map((d) => {
+    if (d.type === 'supply') return d;
+    // 半日の防御を命じられた部隊は、夜のうちに陣地を構築している。
+    // 一度そこを出れば、掘り直しても同じものにはならない。
+    const posture = long && d.posture === 'dug_in' ? 'fortified' : d.posture;
+    return { ...d, posture, fatigue };
+  });
 }
 
 /**
@@ -103,6 +239,7 @@ export function friendlyOrderOfBattle() {
  * 「今日はどっちだ」を無線から読み直さねばならない。
  */
 export function timeline(rng, opts = {}) {
+  if ((opts.mission ?? MISSION).duration === 'long') return longTimeline(rng, opts);
   const riverAtFord = riverCenterY(4180);
 
   // 主攻は東の浅瀬か、橋の正面か。
@@ -210,11 +347,200 @@ export function timeline(rng, opts = {}) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 長期戦の展開 ─ 三波の攻撃と、その間の静穏                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 波状攻撃。
+ *
+ * 一度の突撃で橋が落ちないことは、敵にも分かっている。だから三度に分ける。
+ * 各波のあいだには40分から1時間の静穏があり、そこで敵は再編し、
+ * こちらは補給と休養と陣地の構築をする。
+ *
+ * 静穏は「何も起きない時間」ではない。**次の攻撃を凌ぐ準備をする時間**であり、
+ * 使い方を誤ればそのまま負ける。長期戦の勝負はここでつく。
+ */
+function longTimeline(rng, opts = {}) {
+  const riverAtFord = riverCenterY(4180);
+  const bridgeCross = { x: 2200, y: riverCenterY(2200) };
+  const fordCross = { x: 4180, y: riverAtFord };
+
+  const jitter = (base, spread) =>
+    opts.variable && rng ? base + Math.round(rng.range(-spread, spread) / 60) * 60 : base;
+
+  // 主攻がどちらに来るかは波ごとに変わりうる。二波目で切り替えるのが敵の常套。
+  const secondWaveEast = opts.variable && rng ? rng.chance(0.6) : true;
+
+  const events = [];
+
+  /* --- 夜明け前：斥候の潜入 ------------------------------------- */
+  events.push({
+    at: parseClock('0448'),
+    kind: 'message',
+    text: '大隊本部より: 各哨所、警戒を厳とせよ。薄明前後の攻撃が予期される。',
+  });
+  events.push({
+    at: jitter(parseClock('0505'), 300),
+    kind: 'spawn',
+    label: '敵斥候（暗夜の潜入）',
+    units: [
+      { id: 'E-R1', side: 'enemy', callsign: '敵斥候1', type: 'recon', x: 2650, y: 180,
+        ai: { task: 'probe', objective: { x: 2400, y: 1050 } } },
+      { id: 'E-R2', side: 'enemy', callsign: '敵斥候2', type: 'recon', x: 1750, y: 240,
+        ai: { task: 'probe', objective: { x: 1900, y: 1250 } } },
+    ],
+  });
+
+  /* --- 第一波 0540：薄明の攻撃 ---------------------------------- */
+  events.push({
+    at: parseClock('0536'),
+    kind: 'message',
+    text: '大隊本部より: 第一波接近中。薄明を突いてくる。',
+  });
+  events.push({
+    at: jitter(parseClock('0545'), 360),
+    kind: 'spawn',
+    label: '第一波 ─ 橋正面への攻撃',
+    units: [
+      { id: 'E-W1A', side: 'enemy', callsign: '敵歩兵1', type: 'infantry', x: 2100, y: 140,
+        ai: { task: 'assault', objective: { x: 2180, y: 2100 }, crossing: bridgeCross, wave: 1 } },
+      { id: 'E-W1B', side: 'enemy', callsign: '敵歩兵2', type: 'infantry', x: 2420, y: 110,
+        ai: { task: 'assault', objective: { x: 2260, y: 2060 }, crossing: bridgeCross, wave: 1 } },
+      { id: 'E-W1C', side: 'enemy', callsign: '敵機械化1', type: 'mech', x: 2320, y: 60,
+        ai: { task: 'pressure', objective: { x: 2330, y: 1300 }, wave: 1 } },
+      { id: 'E-MT', side: 'enemy', callsign: '敵迫撃砲', type: 'mortar', x: 2620, y: 320,
+        ai: { task: 'support' } },
+    ],
+  });
+  events.push({ at: jitter(parseClock('0612'), 240), kind: 'jamming', value: 0.3, label: '電子妨害' });
+
+  /* --- 静穏 0640-0740：敵は退がって再編する --------------------- */
+  events.push({
+    at: parseClock('0648'),
+    kind: 'message',
+    text: '大隊本部より: 敵は一旦退がった模様。次までに態勢を立て直せ。補給と休養を急げ。',
+  });
+
+  /* --- 第二波 0800：主攻を東へ振る ------------------------------ */
+  events.push({
+    at: parseClock('0752'),
+    kind: 'message',
+    text: '大隊本部より: 敵に再編の兆候。第二波は規模が大きい。',
+  });
+  events.push({
+    at: jitter(parseClock('0808'), 420),
+    kind: 'spawn',
+    label: secondWaveEast ? '第二波 ─ 東の浅瀬へ迂回（主攻）' : '第二波 ─ 橋正面（主攻）',
+    units: secondWaveEast
+      ? [
+          { id: 'E-W2A', side: 'enemy', callsign: '敵歩兵3', type: 'infantry', x: 4430, y: 760,
+            ai: { task: 'flank', crossing: fordCross, objective: { x: 2500, y: 2280 }, wave: 2 } },
+          { id: 'E-W2B', side: 'enemy', callsign: '敵歩兵4', type: 'infantry', x: 4560, y: 880,
+            ai: { task: 'flank', crossing: fordCross, objective: { x: 2600, y: 2180 }, wave: 2 } },
+          { id: 'E-W2C', side: 'enemy', callsign: '敵対戦車班', type: 'at_team', x: 4520, y: 1040,
+            ai: { task: 'flank', crossing: fordCross, objective: { x: 3000, y: 2200 }, wave: 2 } },
+          { id: 'E-W2D', side: 'enemy', callsign: '敵機械化2', type: 'mech', x: 2700, y: 120,
+            ai: { task: 'pressure', objective: { x: 2560, y: 1250 }, wave: 2 } },
+        ]
+      : [
+          { id: 'E-W2A', side: 'enemy', callsign: '敵歩兵3', type: 'infantry', x: 2160, y: 120,
+            ai: { task: 'assault', objective: { x: 2180, y: 2120 }, crossing: bridgeCross, wave: 2 } },
+          { id: 'E-W2B', side: 'enemy', callsign: '敵機械化2', type: 'mech', x: 2320, y: 60,
+            ai: { task: 'assault', objective: { x: 2240, y: 2080 }, crossing: bridgeCross, wave: 2 } },
+          { id: 'E-W2C', side: 'enemy', callsign: '敵歩兵4', type: 'infantry', x: 2520, y: 140,
+            ai: { task: 'assault', objective: { x: 2320, y: 2040 }, crossing: bridgeCross, wave: 2 } },
+          { id: 'E-W2D', side: 'enemy', callsign: '敵対戦車班', type: 'at_team', x: 4520, y: 1040,
+            ai: { task: 'flank', crossing: fordCross, objective: { x: 3000, y: 2200 }, wave: 2 } },
+        ],
+  });
+
+  /* --- 民間車列 0930：静穏の合間に抜けようとする ----------------- */
+  events.push({
+    at: parseClock('0845'),
+    kind: 'spawn',
+    label: '民間車列',
+    units: [
+      { id: 'CIV', side: 'civilian', callsign: '民間車列', type: 'convoy', x: 2150, y: 3480,
+        ai: { task: 'transit', waypoints: [{ x: 2200, y: 2280 }, { x: 2200, y: 1750 }, { x: 2380, y: 900 }, { x: 2320, y: 40 }] } },
+    ],
+  });
+
+  /* --- 友軍の増加配属 0905 ------------------------------------- */
+  // 半日守れという以上、大隊も一個分隊は出す。ただし出せるのは一度きりで、
+  // 着くのは第二波のあとである ─ それまでは今ある部隊で凌ぐしかない。
+  events.push({
+    at: parseClock('0902'),
+    kind: 'message',
+    text: '大隊本部より: 増加配属のハンマー5を差し向けた。まもなく指揮所後方に到着する。',
+  });
+  events.push({
+    at: parseClock('0908'),
+    kind: 'spawn',
+    label: '増加配属 ハンマー5',
+    units: [
+      {
+        id: 'H5', side: 'friend', callsign: 'ハンマー5', type: 'infantry',
+        x: 1320, y: 2820, posture: 'normal', state: 'holding', morale: 88,
+        role: '増加配属 ─ 予備',
+      },
+    ],
+  });
+
+  /* --- 敵の予備 1000：どちらの軸が通っているかを見てから投じる --- */
+  events.push({
+    at: jitter(parseClock('0915'), 240),
+    kind: 'spawn',
+    label: '敵の予備（集結地）',
+    units: [
+      { id: 'E-RS1', side: 'enemy', callsign: '敵予備1', type: 'mech', x: 3250, y: 240,
+        ai: { task: 'reserve' } },
+      { id: 'E-RS2', side: 'enemy', callsign: '敵予備2', type: 'infantry', x: 3380, y: 330,
+        ai: { task: 'reserve' } },
+    ],
+  });
+
+  /* --- 第三波 1045：装甲を伴う総攻撃 ---------------------------- */
+  events.push({
+    at: parseClock('0946'),
+    kind: 'message',
+    text: '大隊本部より: 敵装甲部隊の前進を確認。これが最後の攻撃と見られる。持ちこたえよ。',
+  });
+  events.push({
+    at: jitter(parseClock('0955'), 300),
+    kind: 'spawn',
+    label: '第三波 ─ 装甲を伴う総攻撃',
+    units: [
+      { id: 'E-T1', side: 'enemy', callsign: '敵戦車1', type: 'tank', x: 2340, y: 40,
+        ai: { task: 'assault', objective: { x: 2200, y: 2150 }, crossing: bridgeCross, wave: 3 } },
+      { id: 'E-T2', side: 'enemy', callsign: '敵戦車2', type: 'tank', x: 2140, y: 40,
+        ai: { task: 'assault', objective: { x: 2160, y: 2100 }, crossing: bridgeCross, wave: 3 } },
+      { id: 'E-W3A', side: 'enemy', callsign: '敵機械化3', type: 'mech', x: 2500, y: 60,
+        ai: { task: 'assault', objective: { x: 2300, y: 2050 }, crossing: bridgeCross, wave: 3 } },
+      { id: 'E-W3B', side: 'enemy', callsign: '敵歩兵5', type: 'infantry', x: 2260, y: 100,
+        ai: { task: 'assault', objective: { x: 2200, y: 2000 }, crossing: bridgeCross, wave: 3 } },
+    ],
+  });
+  events.push({ at: jitter(parseClock('1006'), 240), kind: 'jamming', value: 0.38, label: '電子妨害（第三波）' });
+
+  events.push({
+    at: parseClock('1028'),
+    kind: 'message',
+    text: '大隊本部より: 増援は1045に到着予定。あと17分だ。',
+  });
+
+  return events;
+}
+
+/* ------------------------------------------------------------------ */
 /* 勝敗判定                                                             */
 /* ------------------------------------------------------------------ */
 
 const BRIDGE_RADIUS = 300;
-const LOSS_GRACE = 200; // 橋を敵に占拠され続けたら負け（秒）
+// 橋を敵に占拠され続けたら負け（秒）。
+// 半日の戦闘では、一時的に橋際まで押し込まれることは何度も起きる ―
+// それを押し返せるうちは「戦線が破れた」とは言わない。
+const LOSS_GRACE = 200;
+const LOSS_GRACE_LONG = 480;
 
 /**
  * 現在の戦況を評価する。毎ティック呼ばれる。
@@ -231,8 +557,16 @@ export function evaluate(world) {
   const enemyAtBridge = world.units.filter(
     (u) => u.side === 'enemy' && u.alive && dist(u.x, u.y, bridge.x, bridge.y) < BRIDGE_RADIUS
   );
+  // 橋を「押さえている」と言えるのは、そこを撃てる部隊がいるときだけである。
+  // 弾の尽きた分隊も、統制を失った分隊も、橋の争奪には加われない ―
+  // 半日の戦闘では、ここが弾薬管理の意味そのものになる。
   const friendlyAtBridge = world.units.filter(
-    (u) => u.side === 'friend' && u.alive && u.tpl.range > 0 &&
+    (u) =>
+      u.side === 'friend' &&
+      u.alive &&
+      u.tpl.range > 0 &&
+      u.ammo > 1 &&
+      u.state !== 'broken' &&
       dist(u.x, u.y, bridge.x, bridge.y) < BRIDGE_RADIUS * 1.4
   );
 
@@ -242,7 +576,8 @@ export function evaluate(world) {
   } else {
     world.bridgeLostSince = null;
   }
-  if (world.bridgeLostSince != null && world.now - world.bridgeLostSince > LOSS_GRACE) {
+  const grace = world.mission.duration === 'long' ? LOSS_GRACE_LONG : LOSS_GRACE;
+  if (world.bridgeLostSince != null && world.now - world.bridgeLostSince > grace) {
     return { status: 'defeat', reason: '橋梁を敵に奪取された。増援の展開前に戦線が破れた。' };
   }
 

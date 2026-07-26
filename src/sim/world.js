@@ -10,23 +10,25 @@ import { createRadio, stepComms, stepCommsStatus, enqueue, PRI } from './comms.j
 import { stepReporting, composeSpotReport } from './reports.js';
 import { deliverOrders, stepOrders } from './orders.js';
 import { stepAI } from './ai.js';
-import { createEnemyCommand, stepEnemyCommand } from './enemyCommand.js';
+import { createEnemyCommand, stepEnemyCommand, stepEnemyRecovery } from './enemyCommand.js';
 import { stepFriendlyInitiative } from './friendlyAI.js';
 import { pruneSmoke } from './smoke.js';
-import { MISSION, friendlyOrderOfBattle, timeline, evaluate } from './scenario.js';
+import { createTrains, stepLogistics, stepAttrition } from './logistics.js';
+import { getMission, friendlyOrderOfBattle, timeline, evaluate } from './scenario.js';
 
 export function createWorld(opts = {}) {
-  const seed = opts.seed ?? MISSION.seed;
+  const mission = getMission(opts.missionId);
+  const seed = opts.seed ?? mission.seed;
   const terrain = generateTerrain(seed);
   const rng = new Rng(seed ^ 0x2f6e2b1);
   // 敵の企図を振る場合だけ、盤ごとに違う目を使う（地形は常に同じ）
   const planRng = opts.variable ? new Rng((Math.floor(opts.planSeed ?? 0) || 1) >>> 0) : null;
 
   const world = {
-    mission: MISSION,
+    mission,
     terrain,
     rng,
-    now: MISSION.startTime,
+    now: mission.startTime,
     tickCount: 0,
 
     units: [],
@@ -39,18 +41,22 @@ export function createWorld(opts = {}) {
     registrations: [], // 概定射点
 
     enemyIntel: new Map(),
-    enemyArty: { rounds: 16, nextAt: MISSION.startTime + 2700 },
+    // 長期戦の敵は、半日ぶんの弾を持ってくる
+    enemyArty: {
+      rounds: mission.duration === 'long' ? 40 : 16,
+      nextAt: mission.startTime + (mission.duration === 'long' ? 4200 : 2700),
+    },
     enemyCommand: null, // 下で組み立てる（world 参照が要るため）
 
     support: {
-      artillery: { name: MISSION.support.artillery.name, rounds: MISSION.support.artillery.rounds },
-      smoke: { name: MISSION.support.smoke.name, rounds: MISSION.support.smoke.rounds },
+      artillery: { name: mission.support.artillery.name, rounds: mission.support.artillery.rounds },
+      smoke: { name: mission.support.smoke.name, rounds: mission.support.smoke.rounds },
     },
 
-    commandPost: MISSION.commandPost,
+    commandPost: mission.commandPost,
 
     // 時刻順に並べ直す（シナリオ側の記述順に依存しないように）
-    events: timeline(planRng, { variable: !!opts.variable }).sort((a, b) => a.at - b.at),
+    events: timeline(planRng, { variable: !!opts.variable, mission }).sort((a, b) => a.at - b.at),
     variable: !!opts.variable,
     eventIndex: 0,
 
@@ -67,8 +73,9 @@ export function createWorld(opts = {}) {
   };
 
   world.enemyCommand = createEnemyCommand(world);
+  world.trains = createTrains(mission);
 
-  for (const def of friendlyOrderOfBattle()) {
+  for (const def of friendlyOrderOfBattle(mission)) {
     addUnit(world, def);
   }
 
@@ -106,6 +113,7 @@ export function tick(world, dt = 1) {
 
   // 敵の指揮官が決心し、そのあとで各部隊が動く
   stepEnemyCommand(world, dt);
+  stepEnemyRecovery(world, dt);
   stepAI(world, dt);
   stepFriendlyInitiative(world, dt);
 
@@ -123,6 +131,10 @@ export function tick(world, dt = 1) {
   stepFireMissions(world, dt);
 
   for (const u of world.units) stepMorale(u, world.now, dt);
+
+  // 弾と疲労と傷。撃ち合いが済んだあとに残るもの。
+  stepAttrition(world, dt);
+  stepLogistics(world, dt);
 
   handleBrokenFriendlies(world);
   reportFriendlyFire(world, beforeFF);

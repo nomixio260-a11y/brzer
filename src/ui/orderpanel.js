@@ -6,23 +6,27 @@
 
 import {
   VERBS, VERB_GROUPS, MODIFIERS, ROE, TRIGGERS,
-  getRosterOrder, getSupport, getRoeOf, getHeldOrder, getSimTime, toGrid, formatClock, issueOrder,
+  getRosterOrder, getSupport, getRoeOf, getHeldOrder, getSimTime, getTrains, isLongBattle,
+  toGrid, formatClock, issueOrder,
 } from '../state.js';
 
 // 部隊ごとに出せる命令は違う。砲兵に「突撃せよ」とは言えない。
 const VERBS_BY_UNIT = {
-  TH: ['fire_mission', 'smoke', 'register', 'sitrep', 'ammo_check'],
+  TH: ['fire_mission', 'smoke', 'register', 'resupply', 'sitrep', 'ammo_check'],
   EG: ['recon', 'move', 'observe', 'sitrep'],
+  // 段列は運ぶのが仕事。補給先はその部隊を選んで「補給要請」を出す。
+  LD: ['move', 'hold', 'withdraw', 'sitrep'],
   _default: [
     'move', 'advance', 'attack', 'defend', 'hold', 'recon', 'withdraw', 'rally',
     'observe', 'hold_fire', 'free_fire',
     'roe_hold_fast', 'roe_standard', 'roe_elastic',
+    'resupply', 'rest', 'stand_to',
     'sitrep', 'ammo_check',
   ],
 };
 
 const MOD_ORDER = ['normal', 'rapid', 'cautious', 'stealth'];
-const GROUP_ORDER = ['maneuver', 'fires', 'roe', 'intel'];
+const GROUP_ORDER = ['maneuver', 'fires', 'roe', 'sustain', 'intel'];
 const TRIGGER_ORDER = ['now', 'on_contact', 'on_pressure', 'at_time'];
 
 // 予令を渡せない命令。今すぐ聞きたいことを「後で」と言っても仕方がない。
@@ -43,7 +47,7 @@ export function createOrderPanel(dom, game, hooks) {
   };
 
   // 部隊ボタン
-  for (const u of getRosterOrder()) {
+  for (const u of getRosterOrder(game)) {
     const b = document.createElement('button');
     b.className = 'tool';
     b.dataset.unit = u.id;
@@ -111,7 +115,7 @@ export function selectUnit(panel, unitId) {
     panel.verb = null;
     clearLegs(panel);
     // その部隊に出せる命令が無い分類を選んだままにしない
-    const allowed = allowedVerbs(unitId);
+    const allowed = allowedVerbs(panel, unitId);
     if (!allowed.some((v) => VERBS[v].group === panel.group)) {
       panel.group = VERBS[allowed[0]]?.group ?? 'maneuver';
     }
@@ -120,9 +124,12 @@ export function selectUnit(panel, unitId) {
   refresh(panel);
 }
 
-function allowedVerbs(unitId) {
+function allowedVerbs(panel, unitId) {
   if (!unitId) return [];
-  return VERBS_BY_UNIT[unitId] ?? VERBS_BY_UNIT._default;
+  const list = VERBS_BY_UNIT[unitId] ?? VERBS_BY_UNIT._default;
+  // 兵站の命令は、段列が付いている戦闘にしか存在しない
+  const long = isLongBattle(panel.game);
+  return list.filter((v) => long || !VERBS[v].longOnly);
 }
 
 function selectVerb(panel, verb) {
@@ -238,7 +245,7 @@ export function refresh(panel, status) {
     b.classList.toggle('is-on', b.dataset.unit === panel.unitId);
   }
 
-  const allowed = allowedVerbs(panel.unitId);
+  const allowed = allowedVerbs(panel, panel.unitId);
 
   // --- 分類タブ ----------------------------------------------------
   if (dom.groups) {
@@ -364,10 +371,18 @@ export function refresh(panel, status) {
     const heldNote = held
       ? ` 予令：${TRIGGERS[held.trigger].label}に${VERBS[held.verb].label}${held.grid ? ` ${held.grid}` : ''}。`
       : '';
+    const trains = getTrains(game);
+    const trainsNote = trains
+      ? ` 段列：${trains.alive ? `${trains.loadsLeft}/${trains.loads}基数` : '失われた'}${
+          trains.busyWith ? `・${trains.busyWith}へ運搬中` : ''
+        }。`
+      : '';
     dom.status.textContent =
       (panel.unitId === 'TH'
         ? `ソーン：砲弾${s.artillery}発、発煙${s.smoke}発。命令を選べ。`
-        : `${ROE[getRoeOf(game, panel.unitId)].label}下。命令を選べ。`) + heldNote;
+        : panel.unitId === 'LD'
+          ? '段列。運ぶのが仕事である。補給は受け取る側の部隊に「補給要請」を出す。'
+          : `${ROE[getRoeOf(game, panel.unitId)].label}下。命令を選べ。`) + heldNote + trainsNote;
   } else if (panel.trigger !== 'now' && !NO_TRIGGER.has(panel.verb) &&
              !(VERBS[panel.verb].needsTarget && !panel.legs.length)) {
     const t = TRIGGERS[panel.trigger];

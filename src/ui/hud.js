@@ -1,16 +1,31 @@
 // 上部のステータス帯。時計・速度・無線の混み具合・支援弾数。
 
-import { getClock, getSimTime, getRadioStatus, getSupport, getMission, getVisibility } from '../state.js';
+import {
+  getClock, getSimTime, getRadioStatus, getSupport, getMission, getVisibility, getTrains,
+} from '../state.js';
 import { parseClock } from '../util.js';
 
 // 時間帯ごとの一言。指揮官の「今どういう局面か」の感覚を補う。
-const PHASES = [
-  { at: '0700', label: '静穏' },
-  { at: '0712', label: '警戒' },
-  { at: '0738', label: '接敵' },
-  { at: '0800', label: '交戦中' },
-  { at: '0845', label: '最終局面' },
-];
+const PHASES = {
+  bridge_hold: [
+    { at: '0700', label: '静穏' },
+    { at: '0712', label: '警戒' },
+    { at: '0738', label: '接敵' },
+    { at: '0800', label: '交戦中' },
+    { at: '0845', label: '最終局面' },
+  ],
+  // 長期戦は「波」で数える。静穏は次の攻撃の準備時間である。
+  bridge_hold_long: [
+    { at: '0430', label: '夜間・警戒' },
+    { at: '0505', label: '斥候接触' },
+    { at: '0540', label: '第一波' },
+    { at: '0645', label: '静穏 ─ 再編' },
+    { at: '0800', label: '第二波' },
+    { at: '0905', label: '静穏 ─ 再編' },
+    { at: '0950', label: '第三波' },
+    { at: '1020', label: '最終局面' },
+  ],
+};
 
 export function createHud(dom, game, hooks) {
   const hud = { dom, game, hooks, _sig: '' };
@@ -32,8 +47,9 @@ export function renderHud(hud) {
 
   dom.clock.textContent = getClock(game);
 
-  let phase = PHASES[0].label;
-  for (const p of PHASES) if (now >= parseClock(p.at)) phase = p.label;
+  const phases = PHASES[getMission(game).id] ?? PHASES.bridge_hold;
+  let phase = phases[0].label;
+  for (const p of phases) if (now >= parseClock(p.at)) phase = p.label;
   dom.phase.textContent = phase;
 
   // 速度ボタン
@@ -50,6 +66,21 @@ export function renderHud(hud) {
 
   dom.he.textContent = support.artillery;
   dom.smoke.textContent = support.smoke;
+
+  // 段列。長期戦では、これが尽きた時点で「あとは撃つだけ」になる。
+  const trains = getTrains(game);
+  if (dom.trains && dom.trainsItem) {
+    dom.trainsItem.hidden = !trains;
+    if (trains) {
+      const label = trains.alive ? `${trains.loadsLeft}` : '✕';
+      if (dom.trains.textContent !== label) dom.trains.textContent = label;
+      dom.trains.classList.toggle('is-low', trains.alive && trains.loadsLeft <= 1);
+      dom.trains.classList.toggle('is-gone', !trains.alive);
+      dom.trainsItem.title = trains.alive
+        ? `弾薬 ${trains.loadsLeft}/${trains.loads} 基数${trains.busyWith ? ` ・${trains.busyWith}へ運搬中` : ''}`
+        : '補給班は失われた';
+    }
+  }
 
   // 視程。霧が晴れるまでは、見えていないことを前提に考えねばならない。
   const vis = getVisibility(game);

@@ -4,8 +4,8 @@
 import { getRoster, getSimTime, getRoeOf, getHeldOrder, ROE, VERBS, TRIGGERS } from '../state.js';
 import { formatAgo, formatClock } from '../util.js';
 
-// 砲兵とドローンには交戦規定を与えない（陣地を守る部隊ではない）
-const NO_ROE = new Set(['TH', 'EG']);
+// 砲兵・ドローン・段列には交戦規定を与えない（陣地を守る部隊ではない）
+const NO_ROE = new Set(['TH', 'EG', 'LD']);
 
 export function createRoster(el, game, onSelect, onJumpToGrid) {
   const view = { el, game, onSelect, selectedId: null, _sig: '' };
@@ -91,8 +91,10 @@ export function renderRoster(view) {
     if (!heard) {
       line.innerHTML = `<span class="roster__unknown">${row.typeLabel} ・${row.role}</span>`;
     } else {
-      const parts = [heard.strength, heard.morale, heard.state];
-      if (heard.ammoRatio != null && heard.ammoRatio < 0.35) parts.push('弾薬僅少');
+      const parts = [heard.strength, heard.morale, heard.resting ? '休養中' : heard.state];
+      if (heard.ammoRatio != null && heard.ammoRatio < 0.12) parts.push('弾薬ほぼ皆無');
+      else if (heard.ammoRatio != null && heard.ammoRatio < 0.35) parts.push('弾薬僅少');
+      if (heard.fatigue) parts.push(heard.fatigue);
       line.textContent = parts.join(' ／ ');
       if (silentFor > 300) {
         const q = document.createElement('span');

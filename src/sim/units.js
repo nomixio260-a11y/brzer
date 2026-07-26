@@ -50,6 +50,12 @@ export const UNIT_TYPES = Object.freeze({
     speed: 3.0, spot: 260, range: 0, firepower: 0, ap: 0, armor: 0.08,
     ammoDrain: 0, maxAmmo: 0, radio: 0, skill: 0.3, civilian: true,
   },
+  // 補給班。撃つためではなく、撃ち続けさせるためにいる。
+  supply: {
+    label: '補給班', unitJa: '名', maxStrength: 4,
+    speed: 2.2, spot: 340, range: 200, firepower: 0.2, ap: 0.05, armor: 0.05,
+    ammoDrain: 0.4, maxAmmo: 100, radio: 1.0, skill: 0.55, logistics: true,
+  },
 });
 
 export const POSTURES = Object.freeze({
@@ -61,6 +67,10 @@ export const POSTURES = Object.freeze({
   // 工兵の手が入った陣地には及ばない。ここに差があるから命令に意味が出る。
   hasty: { label: '掩体（応急）', speed: 0.0, exposure: 0.62, coverBonus: 0.17, spot: 1.05 },
   dug_in: { label: '掩体', speed: 0.0, exposure: 0.42, coverBonus: 0.38, spot: 1.05 },
+  // 一晩かけて構築した陣地。交通壕も掩蓋もある。
+  // 半日の防御を命じられた部隊が夜通し掘っていた、その成果である。
+  // 一度出れば二度と戻らない ── 陣地は持ち運べない。
+  fortified: { label: '構築陣地', speed: 0.0, exposure: 0.3, coverBonus: 0.52, spot: 1.1 },
 });
 
 let nextId = 1;
@@ -86,7 +96,7 @@ export function createUnit(def) {
     ammo: def.ammo ?? tpl.maxAmmo,
     morale: def.morale ?? 82,
     suppression: 0,
-    fatigue: 0,
+    fatigue: def.fatigue ?? 0,
     skill: def.skill ?? tpl.skill,
 
     state: def.state ?? 'holding',
@@ -111,6 +121,11 @@ export function createUnit(def) {
     // 射撃統制。true の間は撃たれるまで撃たない。
     weaponsHold: false,
     rallying: false,
+
+    // 長期戦の管理項目
+    resting: false,
+    // 損害のうち、手当てをすれば戻ってくる者。長い戦闘ではこれが効いてくる。
+    walkingWounded: 0,
 
     // 統計
     inflicted: 0,
@@ -166,10 +181,9 @@ export function clearDestination(u) {
 /** 1ティック分の移動処理 */
 export function stepMovement(u, terrain, dt) {
   if (!u.alive) return;
-  if (!u.path.length) {
-    u.fatigue = Math.max(0, u.fatigue - dt * 0.22);
-    return;
-  }
+  // 疲労の増減は logistics.js が一手に見る。
+  // ここでも引いていたせいで、止まっている部隊の疲れが毎秒消えていた。
+  if (!u.path.length) return;
 
   const speed = currentSpeed(u, terrain);
   if (speed <= 0) return;
@@ -193,7 +207,8 @@ export function stepMovement(u, terrain, dt) {
     }
   }
 
-  u.fatigue = Math.min(300, u.fatigue + dt * (u.posture === 'rapid' ? 0.55 : 0.25));
+  // 徒歩の消耗。急げばこたえるが、30分の前進で使い物にならなくなるほどではない。
+  u.fatigue = Math.min(400, u.fatigue + dt * (u.posture === 'rapid' ? 0.13 : 0.06));
 
   if (!u.path.length) {
     u.dest = null;
@@ -220,6 +235,11 @@ export function applyDamage(u, amount, now, opts = {}) {
     // 定数項を足すと毎ティック課金されて一瞬で崩壊するので入れない。
     const share = lost / u.maxStrength;
     u.morale = clamp(u.morale - share * 95, 0, 100);
+
+    // 倒れた者が全員死ぬわけではない。手当てが届けば戻ってくる者がいる ―
+    // 短い戦闘では誤差だが、半日守るならこれが最後の1個分隊を作る。
+    // 装甲車輌は別（乗員は助かっても車輌は戻らない）。
+    if (!u.tpl.armor || u.tpl.armor < 0.3) u.walkingWounded += lost * 0.3;
   }
 
   if (u.strength <= 0.05) {

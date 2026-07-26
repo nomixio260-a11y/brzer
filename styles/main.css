@@ -262,6 +262,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .support { display: flex; gap: 16px; font-size: 11.5px; color: var(--ink-dim); flex: none; }
 .support__item { letter-spacing: 0.06em; white-space: nowrap; }
 .support__item b { color: var(--ink); font-family: var(--mono); font-size: 13px; }
+#trains-loads.is-low { color: var(--lamp-amber); }
+#trains-loads.is-gone { color: var(--lamp-red); }
 
 .objective {
   margin-left: auto;
@@ -597,6 +599,42 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   color: #a8d8b2;
 }
 .tool.is-standing::before { content: '▪ '; }
+
+/* 戦闘の長さを選ぶ */
+.missionpick { display: grid; gap: 8px; }
+.missionpick__opt {
+  display: block;
+  text-align: left;
+  background: linear-gradient(#1a1713, #131009);
+  border: 1px solid #2f2921;
+  border-left: 3px solid #2f2921;
+  color: var(--ink-dim);
+  padding: 10px 13px;
+  border-radius: 1px;
+  cursor: pointer;
+}
+.missionpick__opt:hover { border-color: #4b4237; border-left-color: #6b5a34; }
+.missionpick__opt.is-on {
+  border-color: #7a6334;
+  border-left-color: var(--lamp-amber);
+  background: linear-gradient(#241d12, #16110a);
+}
+.missionpick__opt b { display: block; font-size: 13.5px; color: var(--ink); letter-spacing: 0.06em; }
+.missionpick__opt.is-on b { color: #ffe3ae; }
+.missionpick__opt em {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--ink-dim);
+  margin-top: 3px;
+}
+.missionpick__opt span {
+  display: block;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  margin-top: 3px;
+  line-height: 1.5;
+}
 
 .order__mods { display: flex; gap: 3px; }
 .order__mods.is-dim { opacity: 0.35; }
@@ -968,6 +1006,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   .support__item b::before { font-size: 9.5px; color: var(--ink-faint); letter-spacing: 0.1em; }
   #ammo-he::before { content: '砲 '; }
   #ammo-smoke::before { content: '煙 '; }
+  #trains-loads::before { content: '段 '; }
   .topbar { overflow: hidden; }
   /* 拡大ボタンは欄外表記に被らない高さへ */
   .mapzoom { bottom: 66px; }

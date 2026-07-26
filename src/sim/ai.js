@@ -77,6 +77,22 @@ function runEnemy(world, u) {
     return;
   }
 
+  // 攻撃を中止して北岸へ退がった部隊。集結地に着いたら伏せて立て直す。
+  if (ai.task === 'retire') {
+    if (u.path.length) {
+      u.posture = 'rapid';
+      return;
+    }
+    if (dist(u.x, u.y, ai.rally.x, ai.rally.y) > 160) {
+      setDestination(u, world.terrain, ai.rally.x, ai.rally.y);
+      return;
+    }
+    u.posture = 'dug_in';
+    u.state = 'holding';
+    clearDestination(u);
+    return;
+  }
+
   const targets = visibleEnemies(u, world.unitsById, world.now, 20).filter((t) => !t.tpl.civilian);
   const nearest = targets.reduce(
     (best, t) => {

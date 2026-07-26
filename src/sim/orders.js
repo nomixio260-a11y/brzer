@@ -7,6 +7,7 @@ import { setDestination, clearDestination, POSTURES } from './units.js';
 import { createFireMission } from './combat.js';
 import { composeSitrep, composeAmmoReport } from './reports.js';
 import { setRoe, ROE } from './friendlyAI.js';
+import { orderResupply } from './logistics.js';
 
 /**
  * 命令。
@@ -41,12 +42,36 @@ export const VERBS = Object.freeze({
 
   sitrep: { label: '状況報告要求', group: 'intel', needsTarget: false, phrase: () => `状況を報告せよ` },
   ammo_check: { label: '弾薬照会', group: 'intel', needsTarget: false, phrase: () => `弾薬の残量を報告せよ` },
+
+  // 長期戦でだけ意味を持つ。半日守るなら、撃つことより続けることが難しい。
+  resupply: {
+    label: '補給要請',
+    group: 'sustain',
+    needsTarget: false,
+    longOnly: true,
+    phrase: () => `補給を送る。ラーダーがそちらへ向かう。受領準備をせよ`,
+  },
+  rest: {
+    label: '休止',
+    group: 'sustain',
+    needsTarget: false,
+    longOnly: true,
+    phrase: () => `交代で休養せよ。次の攻撃までに立て直しておけ`,
+  },
+  stand_to: {
+    label: '警戒配置',
+    group: 'sustain',
+    needsTarget: false,
+    longOnly: true,
+    phrase: () => `休養を打ち切り、警戒配置につけ`,
+  },
 });
 
 export const VERB_GROUPS = Object.freeze({
   maneuver: '機動',
   fires: '火力',
   roe: '交戦規定',
+  sustain: '兵站',
   intel: '情報',
 });
 
@@ -128,6 +153,22 @@ export function issueOrder(
   if (verb === 'register' && world.registrations.length >= 3) {
     pushSystemMessage(world, `${u.callsign}: 概定射点はこれ以上抱えられない。どれかを撤する必要がある。`);
     return null;
+  }
+  if (spec.longOnly && !world.trains) {
+    pushSystemMessage(world, 'この戦闘に段列は付いていない。');
+    return null;
+  }
+  if (verb === 'resupply') {
+    // 運べる弾がなければ、要請そのものが通らない
+    if (world.trains.loadsLeft <= 0) {
+      pushSystemMessage(world, 'ラーダー: 集積所は空だ。もう運べるものがない。');
+      return null;
+    }
+    if (world.trains.task) {
+      const busy = world.unitsById.get(world.trains.task.targetId);
+      pushSystemMessage(world, `ラーダー: 今は${busy?.callsign ?? '別の部隊'}へ向かっている。順番を待て。`);
+      return null;
+    }
   }
 
   // 経路点。最後の点が最終目標になる。
@@ -435,6 +476,9 @@ function shortOrderJa(order) {
       roe_hold_fast: '死守する。ここは渡さん',
       roe_standard: '陣地を保持する',
       roe_elastic: '弾力防御に移る',
+      resupply: '補給を受ける',
+      rest: '交代で休養する',
+      stand_to: '警戒配置につく',
     }[order.verb] ?? VERBS[order.verb].label
   );
 }
@@ -533,6 +577,36 @@ function beginExecution(world, u, order) {
       u.state = 'withdrawing';
       u.posture = posture === 'normal' ? 'rapid' : posture;
       routeTo(world, u, order);
+      break;
+
+    case 'resupply': {
+      const res = orderResupply(world, u.id);
+      if (!res.ok) {
+        enqueue(world, {
+          from: 'ラーダー',
+          fromId: world.trains?.unitId ?? null,
+          kind: 'refuse',
+          text: `こちらラーダー、${u.callsign}への補給は出せない。${res.reason}。`,
+          priority: PRI.PRIORITY,
+          meta: { observedAt: world.now },
+          composedAt: world.now,
+          duration: 4,
+        });
+      }
+      break;
+    }
+
+    case 'rest':
+      // 休養は掩体のなかで交代で取る。撃たれれば当然そこで終わる。
+      u.resting = true;
+      u.state = 'defending';
+      if (u.posture !== 'dug_in' && u.posture !== 'fortified') u.posture = 'hasty';
+      clearDestination(u);
+      break;
+
+    case 'stand_to':
+      u.resting = false;
+      u.state = 'defending';
       break;
 
     case 'register': {
@@ -651,7 +725,8 @@ function advanceExecution(world, u, order, dt) {
     case 'defend':
       if (!u.path.length) {
         // 到着したら掩体を掘る
-        if (u.posture !== 'dug_in') {
+        // 構築陣地に居るならそのまま。掘り直させても劣化するだけである。
+        if (u.posture !== 'dug_in' && u.posture !== 'fortified') {
           u.posture = 'dug_in';
           u.digInStartedAt = world.now;
         }
@@ -680,6 +755,9 @@ function advanceExecution(world, u, order, dt) {
     case 'roe_hold_fast':
     case 'roe_standard':
     case 'roe_elastic':
+    case 'resupply':
+    case 'rest':
+    case 'stand_to':
       completeOrder(world, u, order, true);
       break;
 

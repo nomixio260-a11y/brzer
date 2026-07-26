@@ -25,6 +25,10 @@ export function createEnemyCommand(world) {
       ford: { label: '東の浅瀬', x: 4180, base: null, progress: 0, losses: 0, stalledFor: 0 },
     },
     smokeUsed: 0,
+    // 波状攻撃の管理（長期戦のみ）。攻撃は永久には続かない ─
+    // 一定の損害を出すか、進まなくなれば、敵は退がって編成を立て直す。
+    waves: new Map(),
+    currentWave: 0,
     log: [],
   };
 }
@@ -43,9 +47,126 @@ export function stepEnemyCommand(world, dt) {
   if (world.now < ec.nextAssessAt) return;
   ec.nextAssessAt = world.now + ASSESS_INTERVAL;
 
+  stepWaves(world, ec);
+
   assessAxes(world, ec);
   commitReserve(world, ec);
   redirectStragglers(world, ec);
+}
+
+/* ------------------------------------------------------------------ */
+/* 波状攻撃                                                             */
+/* ------------------------------------------------------------------ */
+
+/** その波の部隊 */
+function waveUnits(world, n) {
+  return world.units.filter((u) => u.side === 'enemy' && u.alive && u.ai?.wave === n);
+}
+
+/**
+ * 波の管理。
+ *
+ * 攻撃は永久には続かない。損害が嵩むか、進まなくなれば、敵は退がる ──
+ * 川の北へ下がり、負傷者を後送し、弾を補い、また来る。
+ *
+ * この「退がる」があって初めて、守る側に静穏が生まれる。
+ * 静穏は褒美ではなく、次を凌ぐための持ち時間である。
+ */
+function stepWaves(world, ec) {
+  if (world.mission.duration !== 'long') return;
+
+  // 新しい波が現れたか
+  for (const u of world.units) {
+    const n = u.ai?.wave;
+    if (!n || ec.waves.has(n)) continue;
+    ec.waves.set(n, { state: 'attacking', committedAt: world.now, bestProgress: -Infinity, stalledFor: 0 });
+    ec.currentWave = Math.max(ec.currentWave, n);
+    // 前の波の生き残りを、新しい攻撃に合流させる
+    rejoin(world, ec, n);
+  }
+
+  for (const [n, wave] of ec.waves) {
+    if (wave.state !== 'attacking') continue;
+    const units = waveUnits(world, n);
+    if (!units.length) {
+      wave.state = 'destroyed';
+      ec.log.push({ at: world.now, text: `第${n}波は撃退された` });
+      continue;
+    }
+
+    const strength = units.reduce((s, u) => s + u.strength / u.maxStrength, 0) / units.length;
+    let best = -Infinity;
+    for (const u of units) best = Math.max(best, u.y - riverCenterY(u.x));
+    wave.stalledFor = best - wave.bestProgress < 60 ? wave.stalledFor + ASSESS_INTERVAL : 0;
+    wave.bestProgress = Math.max(wave.bestProgress, best);
+
+    // 攻撃が終わる理由は三つある。
+    // 損害に耐えかねたか、進まなくなったか、あるいは単に息が続かなくなったか。
+    // 最後のひとつ ── 攻勢終末点 ── がいちばん多い。
+    // どんな攻撃も、弾と体力と勢いが尽きればそこで止まる。
+    const bled = strength < 0.62;
+    const stuck = wave.stalledFor >= 1200 && world.now - wave.committedAt > 1800;
+    const culminated = world.now - wave.committedAt > 4800;
+    if (!bled && !stuck && !culminated) continue;
+
+    wave.state = 'spent';
+    wave.spentAt = world.now;
+    for (const u of units) retire(world, u);
+    ec.log.push({
+      at: world.now,
+      text:
+        `第${n}波が${bled ? '損害に耐えかね' : stuck ? '進展なく' : '攻勢終末点に達し'}` +
+        '攻撃を中止、北岸へ後退',
+    });
+  }
+}
+
+/** 川の北へ退がって編成を立て直す */
+function retire(world, u) {
+  const rallyY = Math.max(80, riverCenterY(u.x) - 900);
+  u.ai = { ...u.ai, task: 'retire', rally: { x: clamp(u.x + world.rng.range(-200, 200), 200, 4600), y: rallyY } };
+  u._goalKey = null;
+  u.state = 'withdrawing';
+  u.posture = 'rapid';
+  setDestination(u, world.terrain, u.ai.rally.x, u.ai.rally.y);
+}
+
+/** 下がっていた部隊を、新しい波に合流させる */
+function rejoin(world, ec, newWave) {
+  for (const u of world.units) {
+    if (u.side !== 'enemy' || !u.alive) continue;
+    if (u.ai?.task !== 'retire') continue;
+    // 立て直せていない部隊は出てこない。
+    // 半分を失った小隊が同じ日にもう一度攻めることはない ―
+    // 守る側が「削った」ことの意味は、そこに出る。
+    if (u.strength < u.maxStrength * 0.65) continue;
+    if (u.morale < 55) continue;
+
+    const east = u.x > 3400;
+    u.ai = {
+      wave: newWave,
+      task: east ? 'flank' : 'assault',
+      crossing: east
+        ? { x: 4180, y: riverCenterY(4180) }
+        : { x: world.terrain.bridge.x, y: riverCenterY(world.terrain.bridge.x) },
+      objective: east ? { x: 2600, y: 2250 } : { x: 2200, y: 2120 },
+    };
+    u._goalKey = null;
+    u.state = 'moving';
+  }
+}
+
+/** 北岸で立て直している間の回復（弾薬と士気は後方から届く） */
+export function stepEnemyRecovery(world, dt) {
+  if (world.mission.duration !== 'long') return;
+  for (const u of world.units) {
+    if (u.side !== 'enemy' || !u.alive || u.ai?.task !== 'retire') continue;
+    if (u.path.length) continue;
+    if (world.now - u.lastHitAt < 120) continue;
+    u.ammo = Math.min(u.tpl.maxAmmo, u.ammo + dt * 0.09);
+    u.morale = Math.min(88, u.morale + dt * 0.02);
+    u.suppression = Math.max(0, u.suppression - dt * 3);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -105,9 +226,11 @@ function commitReserve(world, ec) {
 
   // 決心には材料が要る。どちらかが渡河にかかるまでは待つ ―
   // ただし待ちすぎれば勝機を逃すので、0830 には賭ける。
+  const long = world.mission.duration === 'long';
   const developing = bridge.gain > 150 || ford.gain > 150 || bridge.progress > -120 || ford.progress > -120;
-  const lastCall = world.now >= world.mission.startTime + 4800;
-  if (world.now < world.mission.startTime + 3300) return;
+  const lastCall = world.now >= world.mission.startTime + (long ? 21600 : 4800);
+  // 長期戦の予備は最後の攻撃と一緒に出る。決勝の一撃に取っておくのが予備である。
+  if (world.now < world.mission.startTime + (long ? 19800 : 3300)) return;
   if (!developing && !lastCall) return;
 
   // 通っている方に足す。損害の大きい軸は、進んでいても割り引いて見る。

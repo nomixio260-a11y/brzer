@@ -127,6 +127,16 @@ function iconPath(ctx, icon, r) {
       ctx.lineTo(w * 0.78, h);
       break;
 
+    case 'supply': // 補給 = 上下を結ぶ縦棒（APP-6 の兵站記号を簡略化）
+      ctx.beginPath();
+      ctx.moveTo(-w * 0.9, -h * 0.9);
+      ctx.lineTo(w * 0.9, -h * 0.9);
+      ctx.moveTo(0, -h * 0.9);
+      ctx.lineTo(0, h * 0.9);
+      ctx.moveTo(-w * 0.9, h * 0.9);
+      ctx.lineTo(w * 0.9, h * 0.9);
+      break;
+
     case 'civilian': // 民間 = 屋根形
       ctx.beginPath();
       ctx.moveTo(-w, h * 0.7);

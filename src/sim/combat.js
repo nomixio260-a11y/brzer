@@ -6,12 +6,15 @@ import { applyDamage, applySuppression, effectiveCover, POSTURES } from './units
 import { visibleEnemies } from './perception.js';
 import { smokeAttenuation, createSmoke } from './smoke.js';
 import { mistAttenuation } from './weather.js';
+import { fatigueFactor } from './logistics.js';
 
 const LETHALITY = 0.0012; // 1秒あたりの基礎損耗率
 // 目安: 掩体の1個分隊を撃破するのに、戦車2両がかりで約5分。
 // これより速いと、指揮官が報告を聞いて判断する時間そのものが無くなる。
 const SUPPRESSION_RATE = 1.05;
-const AMMO_DRAIN = 0.055;
+// 携行弾薬は「約1時間の連続射撃」で尽きる勘定。実際の射撃は断続的なので、
+// 一回の攻撃を凌ぐぶんはある ─ だが半日となれば、必ず二度は運ばねばならない。
+const AMMO_DRAIN = 0.028;
 
 /**
  * 全ユニットの直射戦闘を1ティック分解決する。
@@ -66,9 +69,11 @@ export function stepDirectFire(world, dt) {
     const armor = target.tpl.armor;
     const power = u.tpl.firepower * (1 - armor) + u.tpl.ap * armor;
 
+    // 何時間も撃ち合っている部隊は、当たらなくなる。
+    // 短い戦闘では出てこない差だが、半日守るならここが効いてくる。
     const effectiveness =
       rangeFactor * visibility * moraleFactor * suppressionFactor * movingPenalty *
-      strengthFrac * (0.55 + u.skill * 0.6);
+      strengthFrac * fatigueFactor(u) * (0.55 + u.skill * 0.6);
 
     // 的の大きさ。掩体に伏せている部隊と、開豁地を駆けている部隊とでは
     // 同じ弾でも当たり方が違う。ここを見ていなかったので、
