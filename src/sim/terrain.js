@@ -15,6 +15,8 @@ export const T = Object.freeze({
   MARSH: 7, // 湿地
   ROCK: 8, // 急斜面・岩稜（車輌はもちろん、徒歩でも越えられない）
   RAIL: 9, // 鉄道。築堤が胸壁になる ─ 線路は歩兵にとって陣地である。
+  ORCHARD: 10, // 果樹園。頭は隠せるが、弾は止まらない。
+  HEDGE: 11, // 生垣。低いが視線を切る ─ 前進の道になり、防御の骨にもなる。
 });
 
 export const TERRAIN_NAME_JA = Object.freeze({
@@ -28,6 +30,8 @@ export const TERRAIN_NAME_JA = Object.freeze({
   [T.MARSH]: '湿地',
   [T.ROCK]: '急斜面',
   [T.RAIL]: '鉄道',
+  [T.ORCHARD]: '果樹園',
+  [T.HEDGE]: '生垣',
 });
 
 /** 遮蔽（射撃に対する防護）。0 = 遮蔽なし、1 = 完全遮蔽。 */
@@ -43,6 +47,10 @@ const COVER = {
   [T.ROCK]: 0.55,
   // 築堤の陰。線路そのものは何も遮らないが、盛土の裏には身を隠せる。
   [T.RAIL]: 0.4,
+  // 果樹の幹は細い。姿は隠せても、弾は止まらない。
+  [T.ORCHARD]: 0.22,
+  // 生垣の根方は土手になっている。低いが、伏せるには十分である。
+  [T.HEDGE]: 0.45,
 };
 
 /** 隠蔽（発見されにくさ）。視線が通っていても見つかりにくくなる。 */
@@ -57,6 +65,9 @@ const CONCEAL = {
   [T.MARSH]: 0.25,
   [T.ROCK]: 0.2,
   [T.RAIL]: 0.1,
+  // 隠蔽は森に近い。だから果樹園は「見えないが撃たれる」場所になる。
+  [T.ORCHARD]: 0.55,
+  [T.HEDGE]: 0.6,
 };
 
 /** 移動速度の倍率。0 は通行不能。 */
@@ -72,6 +83,9 @@ const MOBILITY = {
   [T.ROCK]: 0.0,
   // 枕木と砕石。歩くぶんには構わないが、車輌には向かない。
   [T.RAIL]: 0.75,
+  [T.ORCHARD]: 0.85,
+  // 生垣は越えるものではなく、切り開くものである。
+  [T.HEDGE]: 0.5,
 };
 
 /** これだけの厚みの植生を貫くと視線が完全に切れる（メートル） */
@@ -152,6 +166,7 @@ export function generateTerrain(seed, mapId = 'volne_river') {
   const HILLS = map.hills;
   const FORESTS = map.forests;
   const TOWNS = map.towns;
+  const ORCHARDS = map.orchards ?? [];
   const water = map.water;
 
   // --- 標高 ---------------------------------------------------------
@@ -214,6 +229,19 @@ export function generateTerrain(seed, mapId = 'volne_river') {
         }
       }
 
+      // 果樹園。森ほど視線を止めないが、姿は隠せる ─
+      // 「見えないのに撃たれる」場所であり、前進にはいちばん危ない。
+      if (t === T.FIELD) {
+        for (const o of ORCHARDS) {
+          const d = Math.hypot(x - o.x, y - o.y);
+          const wob = o.r * (0.8 + 0.3 * fbm(detail, x / 190 + 90, y / 190, 3));
+          if (d < wob) {
+            t = T.ORCHARD;
+            break;
+          }
+        }
+      }
+
       // 水線のある図幅だけ、前縁に水を流す
       if (water) {
         const dFront = Math.abs(y - front(x));
@@ -256,6 +284,15 @@ export function generateTerrain(seed, mapId = 'volne_river') {
     paintPolylineAs(type, rail.points, 26, T.RAIL, [T.FIELD, T.MARSH]);
   }
 
+  // --- 生垣 ---------------------------------------------------------
+  // 耕地の境である。低いが視線を切るので、沿って進めば見つからずに寄れる。
+  const hedges = (map.hedges ?? []).map((h) => ({
+    points: h.points.map((p) => ({ x: p.x, y: p.y === 'front' ? front(p.x) : p.y })),
+  }));
+  for (const h of hedges) {
+    paintPolylineAs(type, h.points, 26, T.HEDGE, [T.FIELD, T.ORCHARD]);
+  }
+
   // --- 通過点 -------------------------------------------------------
   const crossings = map.crossings.map((cr) => ({
     ...cr,
@@ -290,6 +327,8 @@ export function generateTerrain(seed, mapId = 'volne_river') {
     hills: HILLS,
     towns: TOWNS,
     forests: FORESTS,
+    orchards: ORCHARDS,
+    hedges,
     // 障害。防者が敷いたもので、攻者はここで足を止める。
     obstacles: (map.obstacles ?? []).map((o) => ({
       ...o,
@@ -334,6 +373,7 @@ export function landmarkAt(terrain, x, y) {
   for (const tw of terrain.towns) consider(tw.name, tw.x, tw.y, tw.r * 1.25, 'town', 0.3);
   for (const h of terrain.hills) consider(h.name, h.x, h.y, h.r * 0.95, 'hill', 0);
   for (const f of terrain.forests ?? []) consider(f.name, f.x, f.y, f.r, 'forest', 0.1);
+  for (const o of terrain.orchards ?? []) consider(o.name, o.x, o.y, o.r, 'forest', 0.1);
   if (!best) return null;
 
   return { name: best.name, kind: best.kind, phrase: landmarkPhrase(best, x, y) };

@@ -59,6 +59,8 @@ export function createMapViewBase(terrain) {
 
   drawContours(g, terrain, ground);
   drawVegetation(g, terrain);
+  drawOrchards(g, terrain);
+  drawHedges(g, terrain);
   drawBuiltUp(g, terrain);
   drawMarsh(g, terrain);
   drawRock(g, terrain);
@@ -320,6 +322,52 @@ function drawVegetation(g, terrain) {
       g.beginPath();
       g.arc(x, y, rr, 0, Math.PI * 2);
       g.fill();
+    }
+  }
+  g.restore();
+}
+
+/**
+ * 果樹園。
+ * 地形図の作法どおり、規則正しく並んだ点で表す ─
+ * 森の不規則な散らしと、ひと目で見分けがつくようにする。
+ */
+function drawOrchards(g, terrain) {
+  const S = WORLD.cell * SHEET_SCALE;
+  g.save();
+  g.fillStyle = 'rgba(78, 118, 66, 0.6)';
+  for (let r = 0; r < WORLD.rows; r++) {
+    for (let c = 0; c < WORLD.cols; c++) {
+      if (terrain.type[r * WORLD.cols + c] !== T.ORCHARD) continue;
+      // 1セルに4本。列を揃えるのが果樹園の記号である。
+      for (const [dx, dy] of [[0.28, 0.28], [0.72, 0.28], [0.28, 0.72], [0.72, 0.72]]) {
+        g.beginPath();
+        g.arc((c + dx) * S, (r + dy) * S, 1.2, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+  }
+  g.restore();
+}
+
+/** 生垣。耕地の境を示す、細かい玉を連ねた線。 */
+function drawHedges(g, terrain) {
+  if (!terrain.hedges?.length) return;
+  const S = SHEET_SCALE;
+  g.save();
+  g.fillStyle = 'rgba(66, 106, 60, 0.75)';
+  for (const h of terrain.hedges) {
+    for (let i = 0; i < h.points.length - 1; i++) {
+      const a = h.points[i];
+      const b = h.points[i + 1];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      const steps = Math.max(1, Math.round(len / 26));
+      for (let k = 0; k <= steps; k++) {
+        const t = k / steps;
+        g.beginPath();
+        g.arc((a.x + (b.x - a.x) * t) * S, (a.y + (b.y - a.y) * t) * S, 1.6, 0, Math.PI * 2);
+        g.fill();
+      }
     }
   }
   g.restore();

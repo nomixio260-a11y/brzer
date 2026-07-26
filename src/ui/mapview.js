@@ -38,6 +38,7 @@ const INK = {
   grid: 'rgba(52, 74, 96, 0.34)',
   gridLabel: 'rgba(38, 60, 82, 0.62)',
   sheetInk: 'rgba(36, 30, 22, 0.9)',
+  veg: 'rgba(46, 88, 44, 0.85)',
 };
 
 export const ZOOM_MIN = 1;
@@ -367,6 +368,16 @@ function drawPlaceNames(ctx, terrain, px) {
       style: 'ink',
     });
   }
+  // 森と果樹園。部下はこの名前で報告してくるので、図に載っていなければならない ―
+  // 載っていない名前で呼ばれても、指揮官はその場所を探せない。
+  for (const f of terrain.forests ?? []) {
+    if (!f.name) continue;
+    names.push({ x: f.x, y: f.y, text: f.name, size: 9, style: 'veg', italic: true });
+  }
+  for (const o of terrain.orchards ?? []) {
+    if (!o.name) continue;
+    names.push({ x: o.x, y: o.y, text: o.name, size: 8.5, style: 'veg', italic: true });
+  }
   if (terrain.waterName) {
     // 通過点の注記とぶつからない x を選ぶ。地図の注記は重なった時点で読めない。
     let wx = WORLD.width * 0.74;
@@ -391,7 +402,8 @@ function drawPlaceNames(ctx, terrain, px) {
     ctx.lineJoin = 'round';
     ctx.strokeStyle = 'rgba(232, 233, 210, 0.85)'; // 紙色の縁取りで下地を抜く
     ctx.strokeText(n.text, n.x, n.y);
-    ctx.fillStyle = n.style === 'water' ? INK.water : INK.sheetInk;
+    ctx.fillStyle =
+      n.style === 'water' ? INK.water : n.style === 'veg' ? INK.veg : INK.sheetInk;
     ctx.fillText(n.text, n.x, n.y);
   }
   ctx.restore();

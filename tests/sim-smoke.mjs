@@ -834,6 +834,7 @@ section('地名');
   const names = new Set([
     ...t.hills.map((h) => h.name), ...t.towns.map((x) => x.name),
     ...t.forests.filter((f) => f.name).map((f) => f.name),
+    ...(t.orchards ?? []).filter((o) => o.name).map((o) => o.name),
     ...t.crossings.map((c) => c.label),
   ]);
   let allOnMap = true;
