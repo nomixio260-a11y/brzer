@@ -137,6 +137,9 @@ export function createFireMission(kind, x, y, now, opts = {}) {
     rounds,
     roundsLeft: rounds,
     radius: opts.radius ?? (kind === 'smoke' ? 200 : 130),
+    // 概定射点なら諸元が出ているので散布界が締まる
+    spread: opts.spread ?? 1,
+    registered: opts.registered ?? false,
     nextImpactAt: now + (opts.delay ?? (kind === 'smoke' ? 55 : 75)),
     done: false,
     casualtiesInflicted: 0,
@@ -157,8 +160,9 @@ export function stepFireMissions(world, dt) {
     if (fm.done) continue;
     while (!fm.done && now >= fm.nextImpactAt) {
       // 弾着点のばらつき（照準の誤差）
-      const jx = fm.x + rng.gauss(0, fm.radius * 0.32);
-      const jy = fm.y + rng.gauss(0, fm.radius * 0.32);
+      const sigma = fm.radius * 0.32 * (fm.spread ?? 1);
+      const jx = fm.x + rng.gauss(0, sigma);
+      const jy = fm.y + rng.gauss(0, sigma);
 
       if (fm.kind === 'smoke') {
         world.smokes.push(createSmoke(jx, jy, now, fm.radius, 260));

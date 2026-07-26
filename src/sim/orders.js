@@ -5,23 +5,49 @@ import { clamp, toGrid, dist } from '../util.js';
 import { enqueue, PRI } from './comms.js';
 import { setDestination, clearDestination, POSTURES } from './units.js';
 import { createFireMission } from './combat.js';
-import { composeSitrep } from './reports.js';
+import { composeSitrep, composeAmmoReport } from './reports.js';
+import { setRoe, ROE } from './friendlyAI.js';
 
+/**
+ * 命令。
+ * group は命令パネルの分類（機動／火力／交戦規定／情報）。
+ * multi:true の命令は経路点を続けて指定できる ― 「どの道を通るか」まで指定できる。
+ */
 export const VERBS = Object.freeze({
-  move: { label: '移動', needsTarget: true, phrase: (g) => `${g}へ移動せよ` },
-  advance: { label: '前進', needsTarget: true, phrase: (g) => `${g}へ前進し、接敵したら交戦せよ` },
-  attack: { label: '攻撃', needsTarget: true, phrase: (g) => `${g}の敵を攻撃せよ` },
-  defend: { label: '防御', needsTarget: true, phrase: (g) => `${g}を確保し、陣地を築いて防御せよ` },
-  hold: { label: '待機', needsTarget: false, phrase: () => `現在地を保持し、待機せよ` },
-  observe: { label: '監視', needsTarget: true, phrase: (g) => `${g}方向を監視せよ。姿を晒すな` },
-  rally: { label: '集結', needsTarget: true, phrase: (g) => `${g}へ集結し、部隊を立て直せ` },
-  hold_fire: { label: '射撃統制', needsTarget: false, phrase: () => `射撃を統制せよ。撃たれるまで撃つな` },
-  free_fire: { label: '射撃自由', needsTarget: false, phrase: () => `射撃自由。目標を発見しだい交戦せよ` },
-  recon: { label: '偵察', needsTarget: true, phrase: (g) => `${g}方向を隠密に偵察せよ` },
-  withdraw: { label: '後退', needsTarget: true, phrase: (g) => `${g}まで後退せよ` },
-  sitrep: { label: '状況報告要求', needsTarget: false, phrase: () => `状況を報告せよ` },
-  fire_mission: { label: '砲撃要請', needsTarget: true, phrase: (g) => `${g}に対し効力射。射撃用意` },
-  smoke: { label: '煙幕要請', needsTarget: true, phrase: (g) => `${g}に発煙弾。視界を遮れ` },
+  move: { label: '移動', group: 'maneuver', needsTarget: true, multi: true, phrase: (g) => `${g}へ移動せよ` },
+  advance: { label: '前進', group: 'maneuver', needsTarget: true, multi: true, phrase: (g) => `${g}へ前進し、接敵したら交戦せよ` },
+  attack: { label: '攻撃', group: 'maneuver', needsTarget: true, multi: true, phrase: (g) => `${g}の敵を攻撃せよ` },
+  defend: { label: '防御', group: 'maneuver', needsTarget: true, phrase: (g) => `${g}を確保し、陣地を築いて防御せよ` },
+  hold: { label: '待機', group: 'maneuver', needsTarget: false, phrase: () => `現在地を保持し、待機せよ` },
+  recon: { label: '偵察', group: 'maneuver', needsTarget: true, multi: true, phrase: (g) => `${g}方向を隠密に偵察せよ` },
+  withdraw: { label: '後退', group: 'maneuver', needsTarget: true, multi: true, phrase: (g) => `${g}まで後退せよ` },
+  rally: { label: '集結', group: 'maneuver', needsTarget: true, phrase: (g) => `${g}へ集結し、部隊を立て直せ` },
+
+  observe: { label: '監視', group: 'fires', needsTarget: true, phrase: (g) => `${g}方向を監視せよ。姿を晒すな` },
+  hold_fire: { label: '射撃統制', group: 'fires', needsTarget: false, phrase: () => `射撃を統制せよ。撃たれるまで撃つな` },
+  free_fire: { label: '射撃自由', group: 'fires', needsTarget: false, phrase: () => `射撃自由。目標を発見しだい交戦せよ` },
+  fire_mission: { label: '砲撃要請', group: 'fires', needsTarget: true, phrase: (g) => `${g}に対し効力射。射撃用意` },
+  smoke: { label: '煙幕要請', group: 'fires', needsTarget: true, phrase: (g) => `${g}に発煙弾。視界を遮れ` },
+  register: {
+    label: '概定射点',
+    group: 'fires',
+    needsTarget: true,
+    phrase: (g) => `${g}を概定射点として標定せよ。以後この点への射撃を優先する`,
+  },
+
+  roe_hold_fast: { label: '死守', group: 'roe', needsTarget: false, roe: 'hold_fast', phrase: () => `死守せよ。一歩も退くな` },
+  roe_standard: { label: '陣地防御', group: 'roe', needsTarget: false, roe: 'standard', phrase: () => `陣地を保持せよ。保たぬと判断すれば独断で下がってよい` },
+  roe_elastic: { label: '弾力防御', group: 'roe', needsTarget: false, roe: 'elastic', phrase: () => `弾力防御。土地より部隊を惜しめ。圧されたら早めに下がれ` },
+
+  sitrep: { label: '状況報告要求', group: 'intel', needsTarget: false, phrase: () => `状況を報告せよ` },
+  ammo_check: { label: '弾薬照会', group: 'intel', needsTarget: false, phrase: () => `弾薬の残量を報告せよ` },
+});
+
+export const VERB_GROUPS = Object.freeze({
+  maneuver: '機動',
+  fires: '火力',
+  roe: '交戦規定',
+  intel: '情報',
 });
 
 export const MODIFIERS = Object.freeze({
@@ -37,7 +63,7 @@ let orderSeq = 1;
  * 指揮官が命令を出す。まず無線に乗り、届いてから初めて実行される。
  * @returns {object|null} 発令された命令
  */
-export function issueOrder(world, { unitId, verb, x, y, modifier = 'normal' }) {
+export function issueOrder(world, { unitId, verb, x, y, modifier = 'normal', legs = null }) {
   const u = world.unitsById.get(unitId);
   const spec = VERBS[verb];
   if (!u || !spec) return null;
@@ -50,6 +76,17 @@ export function issueOrder(world, { unitId, verb, x, y, modifier = 'normal' }) {
       return null;
     }
   }
+  if (verb === 'register' && world.registrations.length >= 3) {
+    pushSystemMessage(world, `${u.callsign}: 概定射点はこれ以上抱えられない。どれかを撤する必要がある。`);
+    return null;
+  }
+
+  // 経路点。最後の点が最終目標になる。
+  const path = spec.multi && legs?.length ? legs.slice(0, 5) : null;
+  if (path) {
+    x = path[path.length - 1].x;
+    y = path[path.length - 1].y;
+  }
 
   const grid = spec.needsTarget ? toGrid(x, y) : toGrid(u.x, u.y);
 
@@ -59,6 +96,7 @@ export function issueOrder(world, { unitId, verb, x, y, modifier = 'normal' }) {
     verb,
     x: spec.needsTarget ? x : u.x,
     y: spec.needsTarget ? y : u.y,
+    legs: path,
     grid,
     modifier,
     issuedAt: world.now,
@@ -72,7 +110,11 @@ export function issueOrder(world, { unitId, verb, x, y, modifier = 'normal' }) {
   u.pendingOrder = order;
 
   const modPhrase = modifier === 'normal' ? '' : `${MODIFIERS[modifier]}に。`;
-  const text = `${u.callsign}、こちら指揮所。${spec.phrase(grid)}。${modPhrase}どうぞ`;
+  const via =
+    path && path.length > 1
+      ? `経路は${path.slice(0, -1).map((p) => toGrid(p.x, p.y)).join('、')}を経由。`
+      : '';
+  const text = `${u.callsign}、こちら指揮所。${spec.phrase(grid)}。${via}${modPhrase}どうぞ`;
 
   enqueue(world, {
     from: '指揮所',
@@ -156,13 +198,13 @@ export function stepOrders(world, dt) {
 
     beginExecution(world, u, order);
 
-    // 状況報告要求は「応答そのもの」が実行内容
-    if (order.verb === 'sitrep') {
+    // 状況報告要求・弾薬照会は「応答そのもの」が実行内容
+    if (order.verb === 'sitrep' || order.verb === 'ammo_check') {
       enqueue(world, {
         from: u.callsign,
         fromId: u.id,
         kind: 'sitrep',
-        text: composeSitrep(u, world),
+        text: order.verb === 'ammo_check' ? composeAmmoReport(u, world) : composeSitrep(u, world),
         priority: PRI.PRIORITY,
         meta: { unitId: u.id, grid: toGrid(u.x, u.y), observedAt: now },
         composedAt: now,
@@ -237,6 +279,11 @@ function ackText(u, order, rng) {
     withdraw: `${order.grid}へ下がる`,
     fire_mission: `${order.grid}、射撃用意`,
     smoke: `${order.grid}に発煙`,
+    register: `${order.grid}を標定する`,
+    ammo_check: '弾薬を確認する',
+    roe_hold_fast: '死守する。ここは渡さん',
+    roe_standard: '陣地を保持する',
+    roe_elastic: '弾力防御に移る',
   }[order.verb] ?? spec.label;
 
   return rng.pick([
@@ -246,6 +293,17 @@ function ackText(u, order, rng) {
   ]);
 }
 
+/** 経路点つきの命令なら第1脚へ、そうでなければ最終目標へ向かわせる */
+function routeTo(world, u, order) {
+  if (order.legs?.length) {
+    u._legs = order.legs.slice(1);
+    setDestination(u, world.terrain, order.legs[0].x, order.legs[0].y);
+  } else {
+    u._legs = null;
+    setDestination(u, world.terrain, order.x, order.y);
+  }
+}
+
 function beginExecution(world, u, order) {
   const posture = order.modifier ?? 'normal';
 
@@ -253,21 +311,28 @@ function beginExecution(world, u, order) {
   // 「撃つな」と言われたまま突撃させられる部隊はいない。
   if (['advance', 'attack', 'defend'].includes(order.verb)) u.weaponsHold = false;
 
+  // 交戦規定は「命令」ではなく「枠」。中身は部下が決める。
+  if (VERBS[order.verb].roe) {
+    setRoe(u, VERBS[order.verb].roe);
+    u._selfWithdrawing = false;
+    return;
+  }
+
   switch (order.verb) {
     case 'move':
       u.state = 'moving';
       u.posture = posture;
-      setDestination(u, world.terrain, order.x, order.y);
+      routeTo(world, u, order);
       break;
     case 'advance':
       u.state = 'attacking';
       u.posture = posture === 'normal' ? 'cautious' : posture;
-      setDestination(u, world.terrain, order.x, order.y);
+      routeTo(world, u, order);
       break;
     case 'attack':
       u.state = 'attacking';
       u.posture = posture;
-      setDestination(u, world.terrain, order.x, order.y);
+      routeTo(world, u, order);
       break;
     case 'defend':
       u.state = 'defending';
@@ -307,25 +372,43 @@ function beginExecution(world, u, order) {
     case 'recon':
       u.state = 'recon';
       u.posture = posture === 'normal' ? 'stealth' : posture;
-      setDestination(u, world.terrain, order.x, order.y);
+      routeTo(world, u, order);
       break;
     case 'withdraw':
       u.state = 'withdrawing';
       u.posture = posture === 'normal' ? 'rapid' : posture;
-      setDestination(u, world.terrain, order.x, order.y);
+      routeTo(world, u, order);
       break;
+
+    case 'register': {
+      // 標定そのものは弾を使わない。事前に諸元を出しておくだけである。
+      world.registrations.push({
+        id: `RP${world.registrations.length + 1}`,
+        x: order.x,
+        y: order.y,
+        grid: order.grid,
+        readyAt: world.now + 180, // 諸元が出るまで3分
+      });
+      break;
+    }
+
     case 'fire_mission': {
       const pool = world.support.artillery;
       const rounds = Math.min(pool.rounds, 6);
       pool.rounds -= rounds;
+      // 概定射点の近くなら諸元が出ている。早く、正確に落ちる。
+      const rp = nearestRegistration(world, order.x, order.y);
       const fm = createFireMission('he', order.x, order.y, world.now, {
         side: 'friend',
         requestedBy: u.id,
         rounds,
-        delay: 70 + world.rng.range(0, 25),
+        delay: rp ? 32 + world.rng.range(0, 12) : 70 + world.rng.range(0, 25),
+        spread: rp ? 0.45 : 1,
+        registered: !!rp,
       });
       world.fireMissions.push(fm);
       world.stats.fireMissions++;
+      if (rp) world.stats.registeredMissions = (world.stats.registeredMissions ?? 0) + 1;
       break;
     }
     case 'smoke': {
@@ -346,13 +429,33 @@ function beginExecution(world, u, order) {
   }
 }
 
+/** 指定した点に諸元の出ている概定射点があるか */
+export function nearestRegistration(world, x, y, radius = 260) {
+  let best = null;
+  for (const rp of world.registrations) {
+    if (world.now < rp.readyAt) continue;
+    const d = dist(x, y, rp.x, rp.y);
+    if (d > radius) continue;
+    if (!best || d < best.d) best = { rp, d };
+  }
+  return best?.rp ?? null;
+}
+
+/** 次の経路点へ進む。まだ脚が残っていれば true。 */
+function advanceLeg(world, u) {
+  if (!u._legs?.length) return false;
+  const next = u._legs.shift();
+  setDestination(u, world.terrain, next.x, next.y);
+  return !!u.path.length;
+}
+
 function advanceExecution(world, u, order, dt) {
   if (order.state !== 'executing') return;
 
   switch (order.verb) {
     case 'move':
     case 'withdraw':
-      if (!u.path.length) completeOrder(world, u, order);
+      if (!u.path.length && !advanceLeg(world, u)) completeOrder(world, u, order);
       break;
 
     case 'advance':
@@ -367,6 +470,8 @@ function advanceExecution(world, u, order, dt) {
       } else if (!u.path.length && u._resumePath?.length) {
         u.path = u._resumePath;
         u._resumePath = null;
+      } else if (!u.path.length && u._legs?.length) {
+        advanceLeg(world, u);
       } else if (!u.path.length && dist(u.x, u.y, order.x, order.y) < 120) {
         completeOrder(world, u, order);
       }
@@ -385,7 +490,7 @@ function advanceExecution(world, u, order, dt) {
       break;
 
     case 'recon':
-      if (!u.path.length) completeOrder(world, u, order);
+      if (!u.path.length && !advanceLeg(world, u)) completeOrder(world, u, order);
       break;
 
     case 'rally':
@@ -401,6 +506,10 @@ function advanceExecution(world, u, order, dt) {
     case 'free_fire':
     case 'fire_mission':
     case 'smoke':
+    case 'register':
+    case 'roe_hold_fast':
+    case 'roe_standard':
+    case 'roe_elastic':
       completeOrder(world, u, order, true);
       break;
 

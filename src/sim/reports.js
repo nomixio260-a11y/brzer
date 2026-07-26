@@ -176,14 +176,20 @@ export function stepReporting(world, dt) {
       u.lastUnderFireReportAt = now;
       const grid = toGrid(u.x, u.y);
       const dire = u.strength / u.maxStrength < 0.55;
+      // 同じ文句を繰り返させない。撃たれ続けている部隊ほど言葉が短く、荒くなる。
       const text = dire
-        ? rng.pick([
+        ? pickFreshFor(u, 'dire', rng, [
             `こちら${u.callsign}！${grid}、激しい射撃を受けている、損害が出ている！支援を頼む！`,
             `${u.callsign}！……くっ……${grid}で交戦中、こちらの損害大！このままでは保たない！`,
+            `${u.callsign}！${grid}、頭が上げられない！このままでは押し切られる！`,
+            `こちら${u.callsign}！負傷者が出た！${grid}、増援か火力支援を！`,
+            `${u.callsign}……${grid}、まだ持ちこたえている。だが長くはない。`,
           ])
-        : rng.pick([
+        : pickFreshFor(u, 'hit', rng, [
             `こちら${u.callsign}、${grid}にて射撃を受けている。応戦中。`,
             `${u.callsign}より、交戦開始。${grid}。現在応戦中、どうぞ。`,
+            `こちら${u.callsign}、${grid}で被弾。損害は軽微、戦闘を継続する。`,
+            `${u.callsign}、${grid}に射撃を受けた。位置は保持している。`,
           ]);
       enqueue(world, {
         from: u.callsign,
@@ -294,16 +300,18 @@ function idleChatter(u, world) {
   const tired = u.fatigue > 140;
 
   if (hurt) {
-    return rng.pick([
+    return pickFreshFor(u, 'hurt', rng, [
       `こちら${u.callsign}、${grid}。負傷者を後方に下げた。戦闘は継続できる。`,
       `${u.callsign}より指揮所。${grid}、損害はあるが陣地は保持している。`,
       `こちら${u.callsign}。${grid}にて再編中。もう少し時間が要る。`,
+      `${u.callsign}。${grid}、人員は減ったが陣地は動かさない。`,
     ]);
   }
   if (tired) {
-    return rng.pick([
+    return pickFreshFor(u, 'tired', rng, [
       `こちら${u.callsign}、${grid}到着。息を整えている。`,
       `${u.callsign}。${grid}、隊員に水を回している。異常なし。`,
+      `こちら${u.callsign}。${grid}、装具を整えている。まだ動ける。`,
     ]);
   }
 
@@ -322,6 +330,20 @@ function idleChatter(u, world) {
 }
 
 /** 直前に使った言い回しを避けて引く */
+/**
+ * 部隊ごとに「直前と同じ文句」を避けて選ぶ。
+ * 同じ台詞が2回続けて流れると、それだけで作り物に見える。
+ */
+function pickFreshFor(u, key, rng, variants) {
+  u._lastSaid ??= {};
+  let i = Math.floor(rng.next() * variants.length);
+  if (i === u._lastSaid[key] && variants.length > 1) {
+    i = (i + 1 + Math.floor(rng.next() * (variants.length - 1))) % variants.length;
+  }
+  u._lastSaid[key] = i;
+  return variants[i];
+}
+
 function pickFresh(world, rng, variants) {
   let i = Math.floor(rng.next() * variants.length);
   if (i === world._lastChatter && variants.length > 1) {
@@ -347,6 +369,23 @@ export function composeSitrep(u, world) {
   return (
     `こちら${u.callsign}。現在地${grid}、兵力${Math.round(u.strength)}/${u.maxStrength}${u.tpl.unitJa}、` +
     `弾薬${ammoJa(u)}、隊員の状態は${moraleJa(u.morale)}。${enemyPart}。以上。`
+  );
+}
+
+/**
+ * 弾薬照会への回答。
+ *
+ * 「あと何分撃てるか」は指揮官が本当に知りたいことである。
+ * 数値ではなく、前線が口にする言い方で返す。
+ */
+export function composeAmmoReport(u, world) {
+  const ratio = u.ammo / (u.tpl.maxAmmo || 100);
+  const holdout =
+    ratio > 0.6 ? '当分は保つ' : ratio > 0.3 ? '激しい撃ち合いなら20分といったところだ' :
+    ratio > 0.1 ? '長くは撃てない。補給が要る' : '次の攻撃は凌げない';
+  return (
+    `こちら${u.callsign}、弾薬照会に回答する。残弾${ammoJa(u)}。${holdout}。` +
+    `兵力${Math.round(u.strength)}/${u.maxStrength}${u.tpl.unitJa}。以上。`
   );
 }
 

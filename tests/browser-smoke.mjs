@@ -40,6 +40,141 @@ page.on('console', (m) => {
 });
 page.on('requestfailed', (r) => problems.push(`REQUEST ${r.url()} ${r.failure()?.errorText}`));
 
+function section(title) {
+  console.log(`\n== ${title} ==`);
+}
+
+/**
+ * 版面の検査。
+ *
+ * 「見にくくないように」を人の目で毎回確かめるのは続かないので、機械に見させる。
+ * 検めるのは3つ ── 横に溢れていないか、押せるはずのものが他の要素に覆われていないか、
+ * 文字が箱に入りきらず切れていないか。
+ */
+const VIEWPORTS = [
+  { name: '広い机 1600×950', width: 1600, height: 950, touch: false },
+  { name: '手狭な机 1280×800', width: 1280, height: 800, touch: false },
+  { name: '小型機 1024×768', width: 1024, height: 768, touch: false },
+  { name: '板 820×1180', width: 820, height: 1180, touch: true },
+  { name: '携帯 390×844', width: 390, height: 844, touch: true },
+  { name: '小型携帯 360×640', width: 360, height: 640, touch: true },
+  { name: '携帯・横持ち 740×360', width: 740, height: 360, touch: true },
+];
+
+const AUDIT = () => {
+  const problems = [];
+  const doc = document.documentElement;
+  if (doc.scrollWidth > doc.clientWidth + 1) {
+    problems.push(`横に溢れている (${doc.scrollWidth}>${doc.clientWidth})`);
+  }
+
+  const vw = doc.clientWidth;
+  const vh = doc.clientHeight;
+  // 見えているか。祖先が透明にしていたり、指を通さない設定なら「無い」ものとして扱う。
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      const s = getComputedStyle(n);
+      if (s.visibility === 'hidden' || s.display === 'none') return false;
+      if (+s.opacity <= 0.05) return false;
+      if (s.pointerEvents === 'none') return false;
+    }
+    return true;
+  };
+
+  // 巻ける箱の外へ出ているだけか（それは「覆われている」ではない）
+  const scrolledOut = (el, r) => {
+    for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
+      const s = getComputedStyle(n);
+      if (!/auto|scroll/.test(s.overflowY + s.overflowX)) continue;
+      const b = n.getBoundingClientRect();
+      if (r.bottom > b.bottom + 1 || r.top < b.top - 1 || r.right > b.right + 1 || r.left < b.left - 1) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // 押せるものが画面から出ていないか／他の要素に覆われていないか
+  for (const el of document.querySelectorAll('button, input, .tabbar__btn')) {
+    if (!visible(el)) continue;
+    if (el.closest('.view:not(.is-active)')) continue;
+    const r = el.getBoundingClientRect();
+    const id = el.id || el.className || el.textContent.trim().slice(0, 8);
+    // 縦は巻けるので見ない。横に出るのだけが本当の「はみ出し」である。
+    if (r.right > vw + 1 || r.left < -1) {
+      problems.push(`横にはみ出す: ${id} (${Math.round(r.left)}〜${Math.round(r.right)} / 幅${vw})`);
+      continue;
+    }
+    if (r.top < 0 || r.bottom > vh) continue; // 画面外は覆い判定ができない
+    if (scrolledOut(el, r)) continue; // 巻けば出てくるものは覆われていない
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) {
+      problems.push(`覆われている: ${id} ← ${hit.id || hit.className}`);
+    }
+  }
+
+  // 文字が箱に入りきらず切れていないか（省略記号を明示している所は除く）
+  for (const el of document.querySelectorAll('.panel button, .roster li, .radiolog li, .order__status, .topbar *')) {
+    if (!visible(el)) continue;
+    if (el.closest('.view:not(.is-active)')) continue;
+    const s = getComputedStyle(el);
+    if (s.textOverflow === 'ellipsis') continue;
+    if (s.overflowX === 'auto' || s.overflowX === 'scroll') continue;
+    if (el.scrollWidth > el.clientWidth + 2 && s.overflowX === 'hidden') {
+      problems.push(`文字が切れている: ${el.id || el.className} (${el.scrollWidth}>${el.clientWidth})`);
+    }
+  }
+  return problems;
+};
+
+async function auditLayouts() {
+  for (const vp of VIEWPORTS) {
+    const ctx = await browser.newContext({
+      viewport: { width: vp.width, height: vp.height },
+      hasTouch: vp.touch,
+      isMobile: vp.touch,
+      deviceScaleFactor: vp.touch ? 3 : 1,
+    });
+    const p = await ctx.newPage();
+    const errs = [];
+    p.on('pageerror', (e) => errs.push(e.message));
+    await p.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+
+    const found = [];
+    found.push(...(await p.evaluate(AUDIT)).map((s) => `[ブリーフィング] ${s}`));
+
+    await p.click('#btn-start');
+    await p.waitForTimeout(700);
+
+    // 携帯・板ではタブごとに版面が変わるので、順に開いて見る。
+    // 最後は命令タブで終える（続けて命令パネルの中身を検めるため）。
+    const narrow = await p.evaluate(() => !!document.querySelector('.tabbar')?.offsetParent);
+    const tabs = narrow ? ['map', 'roster', 'log', 'order'] : [null];
+    for (const tab of tabs) {
+      if (tab) {
+        await p.click(`.tabbar__btn[data-tab="${tab}"]`);
+        await p.waitForTimeout(360);
+      }
+      found.push(...(await p.evaluate(AUDIT)).map((s) => `[${tab ?? '全体'}] ${s}`));
+    }
+
+    // 命令パネルを実際に使ったときの版面（分類タブごと）
+    await p.waitForSelector('#order-units button[data-unit="H1"]', { state: 'visible', timeout: 8000 });
+    await p.click('#order-units button[data-unit="H1"]');
+    for (const g of await p.$$eval('#order-groups button', (bs) => bs.map((b) => b.dataset.group))) {
+      await p.click(`#order-groups button[data-group="${g}"]`);
+      await p.waitForTimeout(140);
+      found.push(...(await p.evaluate(AUDIT)).map((s) => `[命令/${g}] ${s}`));
+    }
+
+    check(`${vp.name} で溢れも重なりもない`, found.length === 0, found.slice(0, 4).join(' | '));
+    check(`${vp.name} でエラーが出ない`, errs.length === 0, errs.join(' | '));
+    await ctx.close();
+  }
+}
+
 try {
   console.log('\n== 起動 ==');
   await page.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
@@ -148,10 +283,57 @@ try {
   await page.waitForTimeout(600);
   check('命令が発令された', (await page.evaluate(() => window.__brzer.game.world.stats.ordersIssued)) === 1);
 
+  // 経路点つきの命令。地図を続けて叩くと経由地が積まれる。
+  await page.click('#order-units button[data-unit="H2"]');
+  await page.click('#order-verbs button[data-verb="move"]');
+  await page.mouse.click(box.x + box.width * 0.3, box.y + box.height * 0.6);
+  await page.mouse.click(box.x + box.width * 0.34, box.y + box.height * 0.72);
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.74);
+  check('経路が3点になる',
+    (await page.evaluate(() => window.__brzer.mapView.orderLegs.length)) === 3);
+  check('目標欄に経路が並ぶ', /→.*→/.test(await page.textContent('#order-grid')));
+  await page.click('#order-undoleg');
+  check('取消で1点戻る',
+    (await page.evaluate(() => window.__brzer.mapView.orderLegs.length)) === 2);
+  await page.click('#map-hint-done');
+  check('決定で目標指定が終わる', await page.isHidden('#map-hint'));
+  await page.click('#order-send');
+  await page.waitForTimeout(500);
+  check('経路つきの命令が発令された',
+    (await page.evaluate(() =>
+      window.__brzer.game.world.orders.some((o) => o.verb === 'move' && o.legs?.length === 2))));
+
+  // 交戦規定。分類を切り替えて出す。
+  await page.click('#order-units button[data-unit="H1"]');
+  await page.click('#order-groups button[data-group="roe"]');
+  const roeVerbs = await page.$$eval('#order-verbs button', (bs) => bs.map((b) => b.dataset.verb));
+  check('交戦規定の分類が出る', roeVerbs.includes('roe_hold_fast') && roeVerbs.includes('roe_elastic'),
+    roeVerbs.join(','));
+  await page.click('#order-verbs button[data-verb="roe_hold_fast"]');
+  check('交戦規定は目標を要らない', !(await page.$eval('#order-send', (b) => b.disabled)));
+  await page.click('#order-send');
+  await page.waitForTimeout(400);
+  check('部隊一覧に死守が出る', (await page.textContent('#roster')).includes('死守'));
+
   // 砲兵には移動命令が出せない
   await page.click('#order-units button[data-unit="TH"]');
   const verbs = await page.$$eval('#order-verbs button', (bs) => bs.map((b) => b.dataset.verb));
-  check('兵科ごとに出せる命令が違う', !verbs.includes('attack') && verbs.includes('fire_mission'), verbs.join(','));
+  check('兵科ごとに出せる命令が違う',
+    !verbs.includes('attack') && verbs.includes('fire_mission') && verbs.includes('register'),
+    verbs.join(','));
+
+  // 概定射点。標定しておくと地図に残る。無線で届いてからなので少し待つ。
+  await page.click('#order-verbs button[data-verb="register"]');
+  await page.mouse.click(box.x + box.width * 0.46, box.y + box.height * 0.38);
+  await page.click('#order-send');
+  await page.keyboard.press('3'); // 届くまで早送りする
+  let registered = false;
+  try {
+    await page.waitForFunction(() => window.__brzer.game.world.registrations.length > 0, null,
+      { timeout: 20000 });
+    registered = true;
+  } catch { /* 下の check で落ちる */ }
+  check('概定射点が登録される', registered);
 
   console.log('\n== 操作 ==');
   await page.keyboard.press('Space');
@@ -193,6 +375,7 @@ try {
   check('講評に理由がある', (await page.textContent('#debrief-reason')).length > 5);
   check('統計が出ている', (await page.$$('#debrief-stats dt')).length >= 8);
   check('各部隊の最期が出ている', (await page.$$('#debrief-units li')).length === 6);
+  check('敵の決心が開示される', (await page.$$('#debrief-enemy li')).length >= 1);
 
   const truthPainted = await page.evaluate(() => {
     const c = document.getElementById('truthmap');
@@ -315,6 +498,12 @@ try {
   check('携帯でもエラーが出ていない', mobileProblems.length === 0, mobileProblems.join(' | '));
 
   await phone.close();
+
+  /* ---------------------------------------------------------------- */
+  /* 画面寸法を変えても、はみ出しと重なりが起きないこと                    */
+  /* ---------------------------------------------------------------- */
+  section('版面の検査（各画面寸法）');
+  await auditLayouts();
 } finally {
   await browser.close();
 }

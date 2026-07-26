@@ -42,6 +42,7 @@ import {
   selectUnit,
   setTarget,
   isTargeting,
+  finishTargeting,
   refresh as refreshOrders,
 } from './ui/orderpanel.js';
 import { createHud, renderHud } from './ui/hud.js';
@@ -185,9 +186,11 @@ function startMission() {
   orderPanel = createOrderPanel(
     {
       units: $('order-units'),
+      groups: $('order-groups'),
       verbs: $('order-verbs'),
       mods: $('order-mods'),
       grid: $('order-grid'),
+      undoLeg: $('order-undoleg'),
       send: $('order-send'),
       status: $('order-status'),
     },
@@ -197,13 +200,21 @@ function startMission() {
         mapView.targeting = active;
         const hint = $('map-hint');
         hint.hidden = !active;
+        const legs = mapView.orderLegs?.length ?? 0;
+        $('map-hint-done').hidden = !active || legs < 1;
         if (active) {
-          hint.textContent =
-            verb === 'fire_mission'
+          $('map-hint-text').textContent = legs
+            ? '続けて叩けば経由地を足せる ─ これでよければ「決定」'
+            : verb === 'fire_mission'
               ? '砲弾を落とす地点を地図で指定 ─ そこに味方がいれば味方に落ちる'
-              : '目標にする地点を地図で指定';
+              : verb === 'register'
+                ? '事前に標定しておく地点を指定 ─ 以後ここへの射撃は早く正確になる'
+                : '目標にする地点を地図で指定';
           if (isNarrow()) closeSheet();
         }
+      },
+      onLegsChange: (legs) => {
+        mapView.orderLegs = legs;
       },
       onNotice: (t) => {
         $('order-status').textContent = t;
@@ -282,6 +293,7 @@ function loop(t) {
           canvas: $('truthmap'),
           stats: $('debrief-stats'),
           units: $('debrief-units'),
+          enemy: $('debrief-enemy'),
         },
         game
       );
@@ -557,10 +569,10 @@ function wireMap() {
 
     onTargetPick: (x, y) => {
       setTarget(orderPanel, x, y);
-      mapView.targeting = false;
-      $('map-hint').hidden = true;
       audio.click();
-      if (isNarrow()) openTab('order');
+      // 経路点つきの命令は狙いを保ったままにする（続けて経由地を打てる）。
+      // 一点で済む命令なら、そのまま命令タブへ戻して送信させる。
+      if (!isTargeting(orderPanel) && isNarrow()) openTab('order');
     },
 
     onPlaceMarker: (x, y, ev) => {
@@ -626,6 +638,13 @@ function wireZoom() {
   $('zoom-fit').addEventListener('click', () => {
     setZoom(mapView, ZOOM_MIN, { byUser: true });
     audio.click();
+  });
+
+  // 経路点の指定を打ち切る
+  $('map-hint-done').addEventListener('click', () => {
+    finishTargeting(orderPanel);
+    audio.click();
+    if (isNarrow()) openTab('order');
   });
 }
 
@@ -724,6 +743,8 @@ function applyTab() {
   }
   const side = $('side');
   side.classList.toggle('is-open', currentTab !== 'map');
+  // パネルを上げている間、その下に隠れる地図の操作具は引っ込める
+  document.body.classList.toggle('is-sheet-open', currentTab !== 'map');
   for (const p of side.querySelectorAll('.panel')) {
     p.classList.toggle('is-active', p.dataset.panel === currentTab);
   }

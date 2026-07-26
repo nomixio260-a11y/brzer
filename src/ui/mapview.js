@@ -20,6 +20,7 @@ import {
   getSimTime,
   getCommandPost,
   getOwnFireMissions,
+  getRegistrations,
   getMarkers,
   getSketches,
   getVisibility as getVisibilityLabel,
@@ -206,9 +207,11 @@ export function draw(view) {
   drawAcetateSheen(ctx);
   drawCommandPost(ctx, game, px);
   drawFireMissions(ctx, game, px);
+  drawRegistrations(ctx, game, px);
   drawSketches(ctx, view, game, px);
   drawLiveStroke(ctx, view, px);
   drawMarkers(ctx, view, game, px);
+  drawOrderRoute(ctx, view, px);
   drawGridFlash(ctx, view, px);
   drawTargetingCursor(ctx, view, px);
 
@@ -629,6 +632,76 @@ function drawMarkers(ctx, view, game, px) {
     if (age >= 1) bits.push(`${age}分`);
     penLabel(ctx, bits.join(' / '), m.x, m.y + r * 1.85, spec.color, px(9), alpha);
   }
+  ctx.restore();
+}
+
+/**
+ * 概定射点。標定が済んだものは実線の三角、まだ諸元が出ていないものは破線。
+ * 砲兵の作業図に載っている記号をそのまま紙に写す。
+ */
+function drawRegistrations(ctx, game, px) {
+  const list = getRegistrations(game);
+  if (!list.length) return;
+  ctx.save();
+  for (const rp of list) {
+    const r = px(9);
+    ctx.strokeStyle = rp.ready ? '#1f4f7a' : 'rgba(31, 79, 122, 0.55)';
+    ctx.lineWidth = px(1.6);
+    ctx.setLineDash(rp.ready ? [] : [px(4), px(3)]);
+    ctx.beginPath();
+    ctx.moveTo(rp.x, rp.y - r);
+    ctx.lineTo(rp.x + r * 0.9, rp.y + r * 0.7);
+    ctx.lineTo(rp.x - r * 0.9, rp.y + r * 0.7);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.setLineDash([]);
+    penLabel(
+      ctx,
+      rp.ready ? rp.id : `${rp.id} 標定中`,
+      rp.x,
+      rp.y + r * 2.1,
+      '#1f4f7a',
+      px(9),
+      rp.ready ? 1 : 0.75
+    );
+  }
+  ctx.restore();
+}
+
+/**
+ * 送信前の命令の経路。
+ * まだ出していない命令なので、鉛筆で下書きした線として描く。
+ */
+function drawOrderRoute(ctx, view, px) {
+  const legs = view.orderLegs;
+  if (!legs?.length) return;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(138, 31, 24, 0.85)';
+  ctx.lineWidth = px(1.8);
+  ctx.setLineDash([px(7), px(5)]);
+  if (legs.length > 1) {
+    ctx.beginPath();
+    ctx.moveTo(legs[0].x, legs[0].y);
+    for (let i = 1; i < legs.length; i++) ctx.lineTo(legs[i].x, legs[i].y);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  for (let i = 0; i < legs.length; i++) {
+    const p = legs[i];
+    const last = i === legs.length - 1;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, px(last ? 8 : 5), 0, Math.PI * 2);
+    ctx.stroke();
+    if (!last) penLabel(ctx, String(i + 1), p.x, p.y - px(12), '#8a1f18', px(9));
+  }
+  penLabel(
+    ctx,
+    toGrid(legs[legs.length - 1].x, legs[legs.length - 1].y),
+    legs[legs.length - 1].x,
+    legs[legs.length - 1].y - px(16),
+    '#8a1f18',
+    px(10)
+  );
   ctx.restore();
 }
 

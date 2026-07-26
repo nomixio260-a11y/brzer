@@ -69,6 +69,14 @@ function runEnemy(world, u) {
     return; // 迫撃砲は動かない
   }
 
+  // 予備は集結地で伏せて待つ。投入は敵指揮官が決める。
+  if (ai.task === 'reserve') {
+    u.posture = 'cautious';
+    u.state = 'holding';
+    clearDestination(u);
+    return;
+  }
+
   const targets = visibleEnemies(u, world.unitsById, world.now, 20).filter((t) => !t.tpl.civilian);
   const nearest = targets.reduce(
     (best, t) => {

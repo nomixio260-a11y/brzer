@@ -371,7 +371,26 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   letter-spacing: 0.1em;
   pointer-events: none;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(88%, 560px);
 }
+
+.maphint__done {
+  pointer-events: auto;
+  flex: none;
+  background: #3d6b3f;
+  border: 1px solid #7aa87c;
+  color: #f2ffe8;
+  font: inherit;
+  letter-spacing: 0.14em;
+  padding: 3px 12px;
+  border-radius: 1px;
+  cursor: pointer;
+}
+
+.maphint__done:hover { background: #4c8250; }
 
 .markeredit {
   position: absolute;
@@ -440,7 +459,19 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .roster li.is-hurt { border-left-color: var(--lamp-amber); }
 .roster li.is-critical { border-left-color: var(--lamp-red); }
 
-.roster__top { display: flex; align-items: baseline; gap: 9px; }
+.roster__top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.roster__roe {
+  flex: none;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  padding: 1px 5px;
+  border: 1px solid #3b4a3d;
+  border-radius: 1px;
+  color: #9dbfa4;
+  white-space: nowrap;
+}
+.roster__roe--hold_fast { border-color: #6b3b32; color: #dfa093; }
+.roster__roe--elastic { border-color: #3b4a63; color: #9db0cf; }
 .roster__cs { font-family: var(--mono); font-size: 12.5px; color: var(--lamp-blue); letter-spacing: 0.03em; }
 .roster__grid {
   font-family: var(--mono);
@@ -527,16 +558,73 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 /* 命令送信盤 */
 .order { padding: 0 11px 11px; }
 .order__row { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 5px; }
-.order__row--tail { align-items: center; gap: 9px; margin-top: 7px; }
+.order__row--tail { align-items: center; gap: 9px; margin-top: 7px; flex-wrap: wrap; }
+
+/* 命令の分類。命令書の見出しに当たる。 */
+.order__row--groups {
+  gap: 0;
+  border-bottom: 1px solid var(--hair-soft);
+  margin-bottom: 6px;
+  padding-bottom: 0;
+}
+.tool--group {
+  background: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 1px 1px 0 0;
+  padding: 4px 11px;
+  margin-bottom: -1px;
+  letter-spacing: 0.12em;
+}
+.tool--group.is-on {
+  background: linear-gradient(#302818, #211a11);
+  border-color: #5f4f2c;
+  border-bottom-color: transparent;
+  color: #ffe3ae;
+}
+
+/* 今その部隊に効いている交戦規定 */
+.tool.is-standing {
+  border-color: #4a6b4e;
+  color: #a8d8b2;
+}
+.tool.is-standing::before { content: '▪ '; }
+
 .order__mods { display: flex; gap: 3px; }
-.order__target { font-size: 10px; color: var(--ink-faint); letter-spacing: 0.14em; }
+.order__mods.is-dim { opacity: 0.35; }
+.order__target {
+  font-size: 10px;
+  color: var(--ink-faint);
+  letter-spacing: 0.14em;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.order__target-label { flex: none; }
 .order__target b {
   font-family: var(--mono);
   font-size: 15px;
   color: #ffcf7a;
   letter-spacing: 0.06em;
-  margin-left: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.order__undoleg {
+  flex: none;
+  background: none;
+  border: 1px solid #4a4038;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  padding: 2px 6px;
+  border-radius: 1px;
+  cursor: pointer;
+}
+.order__undoleg:hover { border-color: #7a6334; color: var(--ink); }
 .order__status {
   margin: 5px 0 0;
   font-size: 10.5px;
@@ -628,6 +716,20 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .unitfate b { font-family: var(--mono); color: var(--lamp-blue); font-weight: 500; }
 .unitfate span { color: var(--ink-dim); }
 .unitfate .is-dead { color: #e2685c; }
+
+.enemyintent { list-style: none; margin: 0; padding: 0; }
+.enemyintent li {
+  display: grid;
+  grid-template-columns: 5em minmax(0, 1fr);
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--hair-soft);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.enemyintent b { font-family: var(--mono); color: #d08a6a; font-weight: 500; }
+.enemyintent span { color: var(--ink-dim); overflow-wrap: anywhere; }
+.enemyintent .is-quiet { grid-template-columns: 1fr; color: var(--ink-faint); }
 
 .debrief__foot { text-align: center; margin-top: 40px; }
 
@@ -873,7 +975,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
     bottom: 0;
     height: 56%;
     max-height: 56%;
-    display: block;
+    /* 縦に並べて高さを配る。block のままだと中身が下タブの裏へ流れ出す。 */
+    display: flex;
+    flex-direction: column;
     border-left: none;
     border-top: 1px solid #000;
     box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.7);
@@ -887,6 +991,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   /* 指で掴んで下へ払うと閉じる */
   .sheet-handle {
     display: block;
+    flex: none;
     padding: 9px 0 5px;
     touch-action: none;
     cursor: grab;
@@ -900,7 +1005,6 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
     border-radius: 2px;
     background: #4a4239;
   }
-  .side { display: flex; flex-direction: column; }
   .side .panel { flex: 1; min-height: 0; }
 
   /* 命令は指で押せる大きさに。ここが一番押し間違えやすい。 */
@@ -909,10 +1013,15 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   .panel--order .order__target { font-size: 12px; }
   .panel--order .order__target b { font-size: 17px; }
   .panel--order .order__status { font-size: 12px; }
-  .side .panel { display: none; height: 100%; border-bottom: none; }
+  /* つまみの分だけ短くなる。height:100% にすると下タブの裏へはみ出す。 */
+  .side .panel { display: none; height: auto; border-bottom: none; }
   .side .panel.is-active { display: flex; }
-  .panel--roster .roster { overflow-y: auto; }
-  .panel--order .order { overflow-y: auto; }
+  .panel--roster .roster { flex: 1; min-height: 0; overflow-y: auto; }
+  .panel--log .radiolog { flex: 1; min-height: 0; overflow-y: auto; }
+  /* 命令パネルは「送信」が必ず見えていること。巻けるのは命令の一覧だけにする。 */
+  .panel--order .order { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .panel--order #order-verbs { flex: 1; min-height: 44px; overflow-y: auto; align-content: flex-start; }
+  .panel--order .order__row--tail { flex: none; }
 
   .panel__title { padding: 12px 14px 8px; font-size: 10.5px; }
 
@@ -942,7 +1051,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   .tool { font-size: 12px; padding: 7px 10px; }
   .tool--sym { width: 68px; padding: 5px 2px 6px; font-size: 10px; }
   .zoombtn { width: 46px; height: 46px; font-size: 20px; }
-  .mapzoom { right: 8px; top: auto; bottom: 12px; }
+  .mapzoom { right: 8px; top: auto; bottom: 12px; transition: opacity 0.16s; }
+  /* パネルを上げている間は地図の下端が隠れる。その下に操作具を残さない。 */
+  body.is-sheet-open .mapzoom,
+  body.is-sheet-open .maptools { opacity: 0; pointer-events: none; }
   .maptools { width: min(70vw, 250px); left: 8px; top: 8px; }
   .maptools.is-collapsed { width: auto; }
   .maptools__toggle { padding: 10px 12px; font-size: 11px; }
@@ -959,6 +1071,21 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 @media (max-height: 480px) and (pointer: coarse) {
   .side { height: 74%; max-height: 74%; }
   .tabbar__btn { padding: 9px 0; }
+  /* 縦に余裕がないと倍率の縦積みが下部タブに突き当たる。横に寝かせる。 */
+  .mapzoom { flex-direction: row; top: 6px; right: 6px; }
+  .zoombtn { width: 34px; height: 30px; font-size: 15px; }
+  .zoombtn--fit { font-size: 11px; }
+
+  /* 横持ちは縦が足りない。命令パネルを一段詰めて「送信」を必ず画面に残す。 */
+  .panel__title { padding: 6px 12px 4px; }
+  .sheet-handle { padding: 5px 0 3px; }
+  .panel--order .order__row { gap: 4px; margin-bottom: 4px; }
+  .panel--order .order__row--tail { gap: 7px; margin-top: 4px; }
+  .panel--order .tool { min-height: 30px; padding: 5px 9px; font-size: 12px; }
+  .panel--order .tool--group { padding: 4px 9px; }
+  .panel--order .btn--send { padding: 5px 16px; font-size: 12px; }
+  .panel--order .order__status { font-size: 11px; margin-top: 3px; min-height: 1.3em; }
+  .panel--order #order-verbs { min-height: 32px; }
 }
 
 .msg__act--fire { border-color: #7a3a34; color: #e8a49c; }

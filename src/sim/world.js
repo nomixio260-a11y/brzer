@@ -10,6 +10,8 @@ import { createRadio, stepComms, stepCommsStatus, enqueue, PRI } from './comms.j
 import { stepReporting, composeSpotReport } from './reports.js';
 import { deliverOrders, stepOrders } from './orders.js';
 import { stepAI } from './ai.js';
+import { createEnemyCommand, stepEnemyCommand } from './enemyCommand.js';
+import { stepFriendlyInitiative } from './friendlyAI.js';
 import { pruneSmoke } from './smoke.js';
 import { MISSION, friendlyOrderOfBattle, timeline, evaluate } from './scenario.js';
 
@@ -34,9 +36,11 @@ export function createWorld(opts = {}) {
     orders: [],
     fireMissions: [],
     smokes: [],
+    registrations: [], // 概定射点
 
     enemyIntel: new Map(),
     enemyArty: { rounds: 16, nextAt: MISSION.startTime + 2700 },
+    enemyCommand: null, // 下で組み立てる（world 参照が要るため）
 
     support: {
       artillery: { name: MISSION.support.artillery.name, rounds: MISSION.support.artillery.rounds },
@@ -61,6 +65,8 @@ export function createWorld(opts = {}) {
       responseTimes: [],
     },
   };
+
+  world.enemyCommand = createEnemyCommand(world);
 
   for (const def of friendlyOrderOfBattle()) {
     addUnit(world, def);
@@ -98,7 +104,10 @@ export function tick(world, dt = 1) {
 
   fireTimelineEvents(world);
 
+  // 敵の指揮官が決心し、そのあとで各部隊が動く
+  stepEnemyCommand(world, dt);
   stepAI(world, dt);
+  stepFriendlyInitiative(world, dt);
 
   for (const u of world.units) stepMovement(u, world.terrain, dt);
 

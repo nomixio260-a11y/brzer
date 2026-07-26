@@ -1,8 +1,11 @@
 // 部隊一覧。
 // ここに出るのは「最後に無線で聞いた内容」だけ。今どうなっているかは誰も知らない。
 
-import { getRoster, getSimTime } from '../state.js';
+import { getRoster, getSimTime, getRoeOf, ROE, VERBS } from '../state.js';
 import { formatAgo, formatClock } from '../util.js';
+
+// 砲兵とドローンには交戦規定を与えない（陣地を守る部隊ではない）
+const NO_ROE = new Set(['TH', 'EG']);
 
 export function createRoster(el, game, onSelect, onJumpToGrid) {
   const view = { el, game, onSelect, selectedId: null, _sig: '' };
@@ -28,7 +31,7 @@ export function renderRoster(view) {
 
   // 変化がなければ触らない（毎フレーム DOM を作り直さない）
   const sig = rows
-    .map((r) => `${r.unitId}:${r.heard?.heardAt ?? 0}:${r.heard?.pendingOrder?.at ?? 0}`)
+    .map((r) => `${r.unitId}:${r.heard?.heardAt ?? 0}:${r.heard?.pendingOrder?.at ?? 0}:${getRoeOf(game, r.unitId)}`)
     .join('|') + `:${view.selectedId}:${Math.floor(now / 15)}`;
   if (sig === view._sig) return;
   view._sig = sig;
@@ -58,6 +61,16 @@ export function renderRoster(view) {
         : '<span class="roster__grid roster__grid--none">──</span>') +
       `<span class="roster__age">${heard ? formatClock(heard.heardAt) : '交信なし'}</span>`;
     li.appendChild(top);
+
+    // 与えてある交戦規定。届いたかどうかではなく「自分が何を許したか」の控え。
+    if (!NO_ROE.has(row.unitId)) {
+      const roe = ROE[getRoeOf(game, row.unitId)];
+      const tag = document.createElement('span');
+      tag.className = `roster__roe roster__roe--${roe.key}`;
+      tag.textContent = roe.label;
+      tag.title = roe.note;
+      top.insertBefore(tag, top.lastElementChild); // 時刻は右端に残す
+    }
 
     // 兵力の帯。数字だけより「あとどれだけ保つか」が掴みやすい。
     if (heard?.strengthRatio != null) {
@@ -91,7 +104,9 @@ export function renderRoster(view) {
     if (heard?.pendingOrder && now - heard.pendingOrder.at < 240) {
       const p = document.createElement('div');
       p.className = 'roster__pending';
-      p.textContent = `→ ${heard.pendingOrder.verb} ${heard.pendingOrder.grid}（送信済み）`;
+      const label = VERBS[heard.pendingOrder.verb]?.label ?? heard.pendingOrder.verb;
+      const needsGrid = VERBS[heard.pendingOrder.verb]?.needsTarget;
+      p.textContent = `→ ${label}${needsGrid ? ` ${heard.pendingOrder.grid}` : ''}（送信済み）`;
       li.appendChild(p);
     }
 

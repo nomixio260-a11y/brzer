@@ -7,8 +7,9 @@
 // ものなので地形は見てよいが、その上に誰がいるかは一切見えない。
 
 import { createWorld, tick } from './sim/world.js';
-import { issueOrder as simIssueOrder } from './sim/orders.js';
+import { issueOrder as simIssueOrder, VERBS } from './sim/orders.js';
 import { congestion } from './sim/comms.js';
+import { enemyIntentLog } from './sim/enemyCommand.js';
 import { visibilityJa } from './sim/weather.js';
 import { scoreMission } from './sim/scenario.js';
 import { toGrid, fromGrid, formatClock } from './util.js';
@@ -64,6 +65,7 @@ export function createGame(opts = {}) {
       markers: [],
       sketches: [],
       roster: new Map(), // unitId -> 最後に「聞いた」内容
+      roe: new Map(), // unitId -> 与えた交戦規定
       log: [],
       unread: 0,
     },
@@ -148,13 +150,35 @@ function absorb(game, entry) {
 /* ------------------------------------------------------------------ */
 
 /** 命令を発令する。UI からはここだけを呼ぶ。 */
-export function issueOrder(game, { unitId, verb, x, y, modifier }) {
-  const order = simIssueOrder(game.world, { unitId, verb, x, y, modifier });
+export function issueOrder(game, { unitId, verb, x, y, modifier, legs }) {
+  const order = simIssueOrder(game.world, { unitId, verb, x, y, modifier, legs });
   if (order) {
     const r = game.belief.roster.get(unitId);
     if (r) r.pendingOrder = { verb, grid: order.grid, at: order.issuedAt };
+    // 交戦規定は指揮官自身が出した枠なので、届く前から手元の控えに残る
+    const roe = VERBS[verb]?.roe;
+    if (roe) game.belief.roe.set(unitId, roe);
   }
   return order;
+}
+
+/** 各部隊に与えた交戦規定（指揮官自身の控え） */
+export function getRoeOf(game, unitId) {
+  return game.belief.roe.get(unitId) ?? 'standard';
+}
+
+/**
+ * 概定射点。自分が「ここを標定しておけ」と言った点なので指揮官は当然知っている。
+ */
+export function getRegistrations(game) {
+  return game.world.registrations.map((rp) => ({
+    id: rp.id,
+    x: rp.x,
+    y: rp.y,
+    grid: rp.grid,
+    ready: game.world.now >= rp.readyAt,
+    readyIn: Math.max(0, Math.round(rp.readyAt - game.world.now)),
+  }));
 }
 
 /* ------------------------------------------------------------------ */
@@ -426,8 +450,11 @@ export function revealTruth(game) {
       state: u.state,
       role: u.role ?? null,
     })),
+    // 敵が何を考え、どこで決心を変えたか。ここが講評で一番効く。
+    enemyIntent: enemyIntentLog(game.world).map((e) => ({ at: e.at, text: e.text })),
   };
 }
 
 export { toGrid, fromGrid, formatClock };
-export { VERBS, MODIFIERS } from './sim/orders.js';
+export { VERBS, MODIFIERS, VERB_GROUPS } from './sim/orders.js';
+export { ROE } from './sim/friendlyAI.js';

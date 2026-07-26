@@ -190,6 +190,112 @@ section('射撃統制');
 
 /* ------------------------------------------------------------------ */
 
+section('交戦規定');
+{
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const h1 = w.unitsById.get('H1');
+  check('初期は陣地防御', (h1.roe ?? 'standard') === 'standard');
+
+  issueOrder(w, { unitId: 'H1', verb: 'roe_hold_fast' });
+  for (let i = 0; i < 400; i++) tick(w, 1);
+  check('死守が部隊に届く', h1.roe === 'hold_fast');
+
+  // 死守下では士気に下限が効き、統制喪失に落ちない
+  h1.morale = 4;
+  tick(w, 1);
+  for (let i = 0; i < 40; i++) tick(w, 1);
+  check('死守下では崩れにくい', h1.morale >= 12, `morale=${h1.morale.toFixed(1)}`);
+
+  // 崩れた部隊は命令を受け付けないので、立て直してから切り替える
+  h1.morale = 80;
+  h1.state = 'defending';
+  issueOrder(w, { unitId: 'H1', verb: 'roe_elastic' });
+  for (let i = 0; i < 400; i++) tick(w, 1);
+  check('弾力防御に切り替わる', h1.roe === 'elastic');
+}
+
+section('部下の独断');
+{
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const h3 = w.unitsById.get('H3');
+  issueOrder(w, { unitId: 'H3', verb: 'roe_elastic' });
+  for (let i = 0; i < 400; i++) tick(w, 1);
+
+  // 追い詰められた状態を作る
+  const before = { x: h3.x, y: h3.y };
+  h3.morale = 30;
+  h3.suppression = 90;
+  h3.lastHitAt = w.now;
+  h3.contacts.set('X', {
+    targetId: 'X', x: h3.x, y: h3.y - 300, lastSeenAt: w.now,
+    quality: 1, classified: 'infantry', trueType: 'infantry', count: 1,
+  });
+  h3._initNextAt = -Infinity;
+  for (let i = 0; i < 200; i++) tick(w, 1);
+  const moved = Math.hypot(h3.x - before.x, h3.y - before.y);
+  check('弾力防御なら独断で下がる', !h3.alive || moved > 60 || h3._lastSelfWithdrawAt != null,
+    `moved=${moved.toFixed(0)}`);
+}
+
+section('経路点つきの命令');
+{
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const legs = [{ x: 1500, y: 2400 }, { x: 1500, y: 3000 }, { x: 2400, y: 3000 }];
+  const order = issueOrder(w, { unitId: 'H2', verb: 'move', x: 0, y: 0, legs });
+  check('経路点つきの命令が通る', order != null && order.legs?.length === 3);
+  check('最終目標は最後の点', order.x === 2400 && order.y === 3000);
+
+  const h2 = w.unitsById.get('H2');
+  let sawFirstLeg = false;
+  for (let i = 0; i < 2200 && !sawFirstLeg; i++) {
+    tick(w, 1);
+    if (Math.hypot(h2.x - legs[0].x, h2.y - legs[0].y) < 220) sawFirstLeg = true;
+  }
+  check('第1脚を経由する', sawFirstLeg, `at ${h2.x.toFixed(0)},${h2.y.toFixed(0)}`);
+}
+
+section('概定射点');
+{
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  issueOrder(w, { unitId: 'TH', verb: 'register', x: 2200, y: 1400 });
+  for (let i = 0; i < 400; i++) tick(w, 1);
+  check('概定射点が登録される', w.registrations.length === 1, `${w.registrations.length}`);
+
+  // 諸元が出るまで待ってから撃つと早く落ちる
+  for (let i = 0; i < 200; i++) tick(w, 1);
+  const before = w.fireMissions.length;
+  issueOrder(w, { unitId: 'TH', verb: 'fire_mission', x: 2210, y: 1420 });
+  for (let i = 0; i < 400 && w.fireMissions.length === before; i++) tick(w, 1);
+  const fm = w.fireMissions[w.fireMissions.length - 1];
+  check('概定射点への射撃は諸元が出ている', fm?.registered === true);
+  check('散布界が締まる', (fm?.spread ?? 1) < 1);
+
+  // 遠い点への射撃は通常どおり
+  const b2 = w.fireMissions.length;
+  issueOrder(w, { unitId: 'TH', verb: 'fire_mission', x: 3900, y: 900 });
+  for (let i = 0; i < 400 && w.fireMissions.length === b2; i++) tick(w, 1);
+  const fm2 = w.fireMissions[w.fireMissions.length - 1];
+  check('離れた点は通常の射撃', fm2?.registered === false);
+}
+
+section('敵の指揮官');
+{
+  const w = createWorld();
+  for (let i = 0; i < 7500 && !w.outcome; i++) tick(w, 1);
+  check('敵指揮官が存在する', !!w.enemyCommand);
+  check('両軸を評価している',
+    Number.isFinite(w.enemyCommand.axes.bridge.progress) &&
+    Number.isFinite(w.enemyCommand.axes.ford.progress));
+  check('敵が予備を投入する', w.enemyCommand.reserveCommitted === true);
+  check('決心が記録されている', w.enemyCommand.log.length > 0, `${w.enemyCommand.log.length}件`);
+}
+
+/* ------------------------------------------------------------------ */
+
 section('決定性');
 const a = createWorld();
 const b = createWorld();

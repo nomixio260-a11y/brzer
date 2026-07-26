@@ -57,6 +57,9 @@ export const POSTURES = Object.freeze({
   rapid: { label: '急速', speed: 1.55, exposure: 1.45, coverBonus: -0.12, spot: 0.75 },
   cautious: { label: '慎重', speed: 0.62, exposure: 0.62, coverBonus: 0.12, spot: 1.15 },
   stealth: { label: '隠密', speed: 0.45, exposure: 0.34, coverBonus: 0.18, spot: 1.3 },
+  // 命令なしに分隊が自分で掻いた穴。無いよりはるかにましだが、
+  // 工兵の手が入った陣地には及ばない。ここに差があるから命令に意味が出る。
+  hasty: { label: '掩体（応急）', speed: 0.0, exposure: 0.62, coverBonus: 0.17, spot: 1.05 },
   dug_in: { label: '掩体', speed: 0.0, exposure: 0.42, coverBonus: 0.38, spot: 1.05 },
 });
 

@@ -63,7 +63,12 @@
           <li><b>地図を掴んで動かす</b> ─ 図面をずらす ／ <b>二本指・車輪</b> ─ 拡大縮小</li>
           <li><b>記号を掴んで動かす</b> ─ 位置を直す ／ <b>長押し・右クリック</b> ─ 消す</li>
           <li><b>無線の一行を叩く</b> ─ その方眼へ跳ぶ。<b>「記号」</b>を押せば聞いた位置に一発で置ける</li>
-          <li><b>命令</b> ─ 部隊 → 命令 → 目標（地図を叩く）→ 送信</li>
+          <li><b>命令</b> ─ 部隊 → 分類（機動／火力／交戦規定／情報）→ 命令 → 目標（地図を叩く）→ 送信</li>
+          <li><b>経路の指定</b> ─ 移動・前進・攻撃・偵察・後退は、地図を続けて叩けば経由地を積める。
+            「どこを通れ」まで指定できる。決まったら<b>決定</b>を押す</li>
+          <li><b>交戦規定</b> ─ <b>死守</b>／<b>陣地防御</b>／<b>弾力防御</b>。部下がどこまで独断で下がってよいかの枠。
+            細かく指図しなくても、枠さえ決めておけば分隊長は自分で判断する</li>
+          <li><b>概定射点</b> ─ 撃つ前に地点を標定させておくと、以後そこへの射撃は<b>早く、正確に</b>落ちる（3点まで）</li>
           <li class="only-desktop"><kbd>Space</kbd> 一時停止 ／ <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 速度 ／
             <kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd> 図式 ／ <kbd>Ctrl</kbd>+<kbd>Z</kbd> 取り消し ／
             <kbd>+</kbd><kbd>-</kbd> 拡大縮小 ／ <kbd>Esc</kbd> 解除</li>
@@ -159,7 +164,10 @@
         <button id="zoom-fit" class="zoombtn zoombtn--fit" aria-label="全体表示">全</button>
       </div>
 
-      <div id="map-hint" class="maphint" hidden></div>
+      <div id="map-hint" class="maphint" hidden>
+        <span id="map-hint-text"></span>
+        <button id="map-hint-done" class="maphint__done" hidden>決定</button>
+      </div>
       <div id="toast" class="toast" hidden></div>
 
       <div id="marker-editor" class="markeredit" hidden>
@@ -187,10 +195,15 @@
         <h2 class="panel__title">命令</h2>
         <div class="order">
           <div class="order__row" id="order-units"></div>
+          <div class="order__row order__row--groups" id="order-groups"></div>
           <div class="order__row" id="order-verbs"></div>
           <div class="order__row order__row--tail">
             <div class="order__mods" id="order-mods"></div>
-            <div class="order__target">目標 <b id="order-grid">──</b></div>
+            <div class="order__target">
+              <span class="order__target-label">目標</span>
+              <b id="order-grid">──</b>
+              <button id="order-undoleg" class="order__undoleg" title="最後の点を取り消す" hidden>取消</button>
+            </div>
             <button id="order-send" class="btn btn--send" disabled>送信</button>
           </div>
           <p id="order-status" class="order__status">部隊を選べ。</p>
@@ -233,6 +246,8 @@
         <dl id="debrief-stats" class="stats"></dl>
         <h2>各部隊の最期</h2>
         <ul id="debrief-units" class="unitfate"></ul>
+        <h2>敵は何を考えていたか</h2>
+        <ul id="debrief-enemy" class="enemyintent"></ul>
       </section>
     </div>
 

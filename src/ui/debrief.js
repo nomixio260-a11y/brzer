@@ -32,6 +32,33 @@ export function showDebrief(dom, game) {
   drawTruthMap(dom.canvas, game, truth);
   renderStats(dom.stats, outcome.score, truth);
   renderUnitFates(dom.units, truth);
+  renderEnemyIntent(dom.enemy, truth);
+}
+
+/**
+ * 敵指揮官の決心。
+ * どこで予備を投じ、どこを諦めたか ─ 自分の守りが敵に何をさせたかが分かる。
+ */
+function renderEnemyIntent(el, truth) {
+  if (!el) return;
+  el.innerHTML = '';
+  const log = truth.enemyIntent ?? [];
+  if (!log.length) {
+    const li = document.createElement('li');
+    li.className = 'is-quiet';
+    li.textContent = '敵は当初計画のまま押し切ろうとした。決心を変える必要がなかったということである。';
+    el.appendChild(li);
+    return;
+  }
+  for (const e of log) {
+    const li = document.createElement('li');
+    const t = document.createElement('b');
+    t.textContent = formatClock(e.at);
+    const s = document.createElement('span');
+    s.textContent = e.text;
+    li.append(t, s);
+    el.appendChild(li);
+  }
 }
 
 /* ------------------------------------------------------------------ */

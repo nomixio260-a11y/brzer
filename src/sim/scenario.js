@@ -169,6 +169,18 @@ export function timeline(rng, opts = {}) {
       units: eastUnits,
     },
     {
+      // 予備。集結地で待ち、どちらの軸が通っているかを見てから投じられる。
+      at: jitter(parseClock('0748'), 300),
+      kind: 'spawn',
+      label: '敵の予備（集結地）',
+      units: [
+        { id: 'E-RS1', side: 'enemy', callsign: '敵予備1', type: 'mech', x: 3250, y: 240,
+          ai: { task: 'reserve' } },
+        { id: 'E-RS2', side: 'enemy', callsign: '敵予備2', type: 'infantry', x: 3380, y: 330,
+          ai: { task: 'reserve' } },
+      ],
+    },
+    {
       at: parseClock('0814'),
       kind: 'spawn',
       label: '民間車列',
@@ -242,13 +254,17 @@ export function evaluate(world) {
 
   // --- 0900 到達 ---
   // 南岸に「橋頭堡」が残ったかどうか。半壊した部隊は橋頭堡とは呼べない。
-  const southBankEnemies = world.units.filter(
-    (u) =>
-      u.side === 'enemy' &&
-      u.alive &&
-      u.strength > u.maxStrength * 0.4 &&
-      u.y > riverCenterY(u.x) + 80
-  );
+  // 頭数ではなく戦闘力で測る。斥候が2つ居残っても橋頭堡とは呼ばない。
+  const bridgehead = world.units
+    .filter(
+      (u) =>
+        u.side === 'enemy' &&
+        u.alive &&
+        u.type !== 'recon' &&
+        u.strength > u.maxStrength * 0.4 &&
+        u.y > riverCenterY(u.x) + 80
+    )
+    .reduce((s, u) => s + u.strength / u.maxStrength, 0);
 
   // 橋の上に敵がいても、こちらがまだ橋を押さえているなら「奪われた」ではない。
   if (enemyAtBridge.length > 0 && friendlyAtBridge.length === 0) {
@@ -260,7 +276,7 @@ export function evaluate(world) {
       reason: '橋の上でまだ撃ち合っている。渡らせてはいないが、確保したとは言えない状態で増援を迎えた。',
     };
   }
-  if (southBankEnemies.length >= 3) {
+  if (bridgehead >= 3.5) {
     return {
       status: 'narrow',
       reason: '橋は保持したが、南岸に敵の橋頭堡が残った。増援は掃討から始めることになる。',
