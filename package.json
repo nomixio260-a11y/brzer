@@ -9,7 +9,8 @@
     "serve": "node scripts/serve.mjs",
     "test": "node tests/sim-smoke.mjs",
     "test:browser": "node tests/browser-smoke.mjs",
-    "tunnel": "bash scripts/tunnel.sh"
+    "tunnel": "bash scripts/tunnel.sh",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "engines": {
     "node": ">=18"

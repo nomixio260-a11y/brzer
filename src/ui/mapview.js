@@ -29,7 +29,6 @@ const INK = {
   grid: 'rgba(52, 74, 96, 0.34)',
   gridLabel: 'rgba(38, 60, 82, 0.62)',
   sheetInk: 'rgba(36, 30, 22, 0.9)',
-  pencil: '#2b3d55',
 };
 
 export function createMapView(canvas, game) {

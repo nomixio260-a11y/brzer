@@ -64,8 +64,6 @@ export function createMapViewBase(terrain) {
   return sheet;
 }
 
-export const SHEET_SIZE = { width: SHEET_W, height: SHEET_H };
-
 /* ------------------------------------------------------------------ */
 /* 地色（段彩＋陰影）                                                    */
 /* ------------------------------------------------------------------ */

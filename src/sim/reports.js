@@ -216,7 +216,9 @@ export function stepReporting(world, dt) {
     }
     if (reported) continue;
 
-    // --- 自発的な定時報告（何も起きていないと不安になるので稀に喋る） ---
+    // --- 自発的な定時報告 ---
+    // 何も起きていない時間も無線は流れている。同じ文面が続くと
+    // 「戦場が動いていない」ではなく「作り物」に見えてしまうので言い回しを散らす。
     const quiet = now - Math.max(u.lastReportAt, u.lastHitAt) > 420;
     if (quiet && rng.chance(0.0016 * dt * 60)) {
       u.lastReportAt = now;
@@ -224,16 +226,49 @@ export function stepReporting(world, dt) {
         from: u.callsign,
         fromId: u.id,
         kind: 'sitrep',
-        text: rng.pick([
-          `こちら${u.callsign}、${toGrid(u.x, u.y)}。異常なし。`,
-          `${u.callsign}より指揮所。現在地に異常なし。監視を継続する。`,
-        ]),
+        text: idleChatter(u, world),
         priority: PRI.ROUTINE,
         meta: { unitId: u.id, grid: toGrid(u.x, u.y), observedAt: now },
         composedAt: now,
       });
     }
   }
+}
+
+/**
+ * 手が空いているときの定時連絡。
+ * 部隊の消耗具合と時間帯で口ぶりが変わる。
+ */
+function idleChatter(u, world) {
+  const rng = world.rng;
+  const grid = toGrid(u.x, u.y);
+  const hurt = u.strength < u.maxStrength * 0.7;
+  const tired = u.fatigue > 140;
+
+  if (hurt) {
+    return rng.pick([
+      `こちら${u.callsign}、${grid}。負傷者を後方に下げた。戦闘は継続できる。`,
+      `${u.callsign}より指揮所。${grid}、損害はあるが陣地は保持している。`,
+      `こちら${u.callsign}。${grid}にて再編中。もう少し時間が要る。`,
+    ]);
+  }
+  if (tired) {
+    return rng.pick([
+      `こちら${u.callsign}、${grid}到着。息を整えている。`,
+      `${u.callsign}。${grid}、隊員に水を回している。異常なし。`,
+    ]);
+  }
+
+  return rng.pick([
+    `こちら${u.callsign}、${grid}。異常なし。`,
+    `${u.callsign}より指揮所。現在地に異常なし。監視を継続する。`,
+    `こちら${u.callsign}。${grid}、視界良好。動くものは見えない。`,
+    `${u.callsign}。${grid}にて警戒中。今のところ静かだ。`,
+    `こちら${u.callsign}、定時連絡。${grid}、特記事項なし。`,
+    `${u.callsign}より。${grid}、川向こうに動きはない。以上。`,
+    `こちら${u.callsign}。陣地の構築を続けている。${grid}、異常なし。`,
+    `${u.callsign}。${grid}、静穏。……少し静かすぎる気もするが。`,
+  ]);
 }
 
 /** 状況報告要求への回答を作る */

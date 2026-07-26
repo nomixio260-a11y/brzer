@@ -4,20 +4,26 @@ import { drawSymbol, drawObstacle, drawObjective } from './milsymbol.js';
 
 const SIZE = 30;
 
+/** ブリーフィングの編成表など、任意の記号を刷るための入口 */
+export function symbolFor(opts, size = SIZE) {
+  return symbolChip({ ...opts, _size: size });
+}
+
 export function symbolChip(spec) {
+  const size = spec._size ?? SIZE;
   const c = document.createElement('canvas');
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  c.width = SIZE * dpr;
-  c.height = SIZE * dpr;
-  c.style.width = `${SIZE}px`;
-  c.style.height = `${SIZE}px`;
+  c.width = size * dpr;
+  c.height = size * dpr;
+  c.style.width = `${size}px`;
+  c.style.height = `${size}px`;
   c.className = 'symchip';
 
   const ctx = c.getContext('2d');
   ctx.scale(dpr, dpr);
-  const cx = SIZE / 2;
-  const cy = SIZE / 2;
-  const r = 8.5;
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = size * 0.283;
 
   if (spec.graphic === 'obstacle') {
     drawObstacle(ctx, cx, cy, r, spec.color, 1.6);
@@ -38,10 +44,11 @@ export function symbolChip(spec) {
       x: cx,
       y: cy,
       r,
-      affiliation: spec.affiliation,
+      affiliation: spec.affiliation ?? 'friend',
       icon: spec.icon,
+      echelon: spec.echelon ?? null,
       color: spec.color,
-      lineWidth: 1.6,
+      lineWidth: size > 34 ? 1.9 : 1.6,
     });
   }
   return c;

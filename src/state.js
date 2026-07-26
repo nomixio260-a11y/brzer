@@ -57,9 +57,6 @@ export function createGame() {
     simSecondsPerRealSecond: 6, // x1 で 2時間の戦闘が約20分になる
     finished: false,
     score: null,
-
-    // 命令の組み立て中の状態（UI が触る）
-    draft: { unitId: null, verb: null, modifier: 'normal', x: null, y: null },
   };
 }
 
@@ -229,12 +226,18 @@ export function getRoster(game) {
 // 指揮下の部隊は最初から分かっている（編成表は指揮所にある）。
 // 分からないのは「今どうなっているか」だけ。
 const DEFAULT_ROSTER_ORDER = [
-  { id: 'H1', callsign: 'ハンマー1', typeLabel: '歩兵分隊', role: '橋梁南詰の主陣地' },
-  { id: 'H2', callsign: 'ハンマー2', typeLabel: '歩兵分隊', role: '集落の予備陣地' },
-  { id: 'H3', callsign: 'ハンマー3', typeLabel: '歩兵分隊', role: '北岸の前進哨所' },
-  { id: 'SW', callsign: 'ソード', typeLabel: '対戦車班', role: '対戦車予備' },
-  { id: 'EG', callsign: 'イーグル', typeLabel: '偵察ドローン', role: '偵察' },
-  { id: 'TH', callsign: 'ソーン', typeLabel: '支援砲兵', role: '火力支援' },
+  { id: 'H1', callsign: 'ハンマー1', typeLabel: '歩兵分隊', role: '橋梁南詰の主陣地',
+    icon: 'infantry', echelon: 1 },
+  { id: 'H2', callsign: 'ハンマー2', typeLabel: '歩兵分隊', role: '集落の予備陣地',
+    icon: 'infantry', echelon: 1 },
+  { id: 'H3', callsign: 'ハンマー3', typeLabel: '歩兵分隊', role: '北岸の前進哨所',
+    icon: 'infantry', echelon: 1 },
+  { id: 'SW', callsign: 'ソード', typeLabel: '対戦車班', role: '対戦車予備',
+    icon: 'antitank', echelon: 'Ø' },
+  { id: 'EG', callsign: 'イーグル', typeLabel: '偵察ドローン', role: '偵察',
+    icon: 'uav', echelon: null },
+  { id: 'TH', callsign: 'ソーン', typeLabel: '支援砲兵', role: '火力支援',
+    icon: 'artillery', echelon: 1 },
 ];
 
 export function getRosterOrder() {

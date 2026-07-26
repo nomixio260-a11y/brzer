@@ -6,9 +6,10 @@ name: 公開（GitHub Pages）
 # 初回のみ、リポジトリの Settings → Pages → Source を
 # 「GitHub Actions」に切り替える必要がある。
 
+# 既定ブランチ名は main とは限らないので、名前で決め打ちせず
+# 「そのリポジトリの既定ブランチに入ったとき」で判定する。
 on:
   push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -22,6 +23,9 @@ concurrency:
 
 jobs:
   build:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +54,7 @@ jobs:
 
   deploy:
     needs: build
+    if: needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

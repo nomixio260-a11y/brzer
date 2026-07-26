@@ -15,7 +15,7 @@ import {
 } from './state.js';
 
 import { createMapView, resize, draw, toWorld, isInsideMap, markerAt } from './ui/mapview.js';
-import { symbolChip } from './ui/symbolchip.js';
+import { symbolChip, symbolFor } from './ui/symbolchip.js';
 import { createRoster, renderRoster, selectInRoster } from './ui/roster.js';
 import { createRadioLog, appendEntries } from './ui/radiolog.js';
 import { createOrderPanel, selectUnit, setTarget, isTargeting, refresh as refreshOrders } from './ui/orderpanel.js';
@@ -59,8 +59,27 @@ function fillBriefing() {
   oob.innerHTML = '';
   for (const u of getRosterOrder()) {
     const li = document.createElement('li');
-    li.innerHTML = `<b>${u.callsign}</b><em>${u.typeLabel}</em><span>${u.role}</span>`;
+    li.appendChild(symbolFor({ affiliation: 'friend', icon: u.icon, echelon: u.echelon }, 38));
+    const b = document.createElement('b');
+    b.textContent = u.callsign;
+    const em = document.createElement('em');
+    em.textContent = u.typeLabel;
+    const sp = document.createElement('span');
+    sp.textContent = u.role;
+    li.append(b, em, sp);
     oob.appendChild(li);
+  }
+
+  // 記号の読み方。遊ぶ前にここで覚えてもらう。
+  const legend = $('brief-legend');
+  legend.innerHTML = '';
+  for (const spec of Object.values(MARKER_TYPES)) {
+    const li = document.createElement('li');
+    li.appendChild(symbolChip(spec));
+    const cap = document.createElement('span');
+    cap.textContent = spec.label;
+    li.appendChild(cap);
+    legend.appendChild(li);
   }
 }
 

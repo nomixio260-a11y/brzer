@@ -5,6 +5,8 @@
 #   CLOUDFLARE_TUNNEL_TOKEN=... bash scripts/tunnel.sh   # 固定ドメインの名前付きトンネル
 #
 # 使い捨てトンネルの URL は起動のたびに変わり、プロセスを止めると消える。
+# 名前付きトンネルを使う場合は、Cloudflare のダッシュボードで
+# ingress の向き先を http://127.0.0.1:$PORT に設定しておくこと。
 
 set -euo pipefail
 
@@ -31,8 +33,10 @@ for _ in $(seq 1 40); do
 done
 
 if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then
-  echo "名前付きトンネルで公開します"
-  exec cloudflared tunnel run --token "$CLOUDFLARE_TUNNEL_TOKEN" --url "http://127.0.0.1:$PORT"
+  # 名前付きトンネルの向き先は Cloudflare 側の ingress 設定で決まる。
+  # ダッシュボードで http://127.0.0.1:$PORT を指しておくこと。
+  echo "名前付きトンネルで公開します（向き先は Cloudflare 側の設定に従う）"
+  exec cloudflared tunnel run --token "$CLOUDFLARE_TUNNEL_TOKEN"
 else
   echo "使い捨てトンネルで公開します（URL は毎回変わります）"
   exec cloudflared tunnel --url "http://127.0.0.1:$PORT" --no-autoupdate
