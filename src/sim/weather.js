@@ -8,6 +8,7 @@
 
 import { clamp, parseClock } from '../util.js';
 import { elevationAt } from './terrain.js';
+import { flareLight } from './fires.js';
 
 /** これだけの厚みの霧を貫くと視線が完全に切れる（メートル） */
 const MIST_BLOCK_METERS = 900;
@@ -44,6 +45,19 @@ function smooth(x) {
  */
 export function lightSpotFactor(world) {
   return 0.22 + 0.78 * lightLevel(world);
+}
+
+/**
+ * その一点がどれだけ「見える明るさ」にあるか。
+ *
+ * 空全体の明るさと、そこに掛かっている照明弾の明るい方を採る。
+ * 夜の谷でも、照明が点いているあいだ、その下だけは昼になる ─
+ * 撃つ前に見る、という手順が夜間に成立するのはそのためである。
+ */
+export function localSpotFactor(world, x, y) {
+  const base = lightLevel(world);
+  if (base >= 0.98 || !world.flares?.length) return 0.22 + 0.78 * base;
+  return 0.22 + 0.78 * Math.max(base, flareLight(world, x, y));
 }
 
 /** 光の状態の言い分け（HUD と報告に使う） */

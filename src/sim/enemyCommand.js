@@ -298,6 +298,9 @@ function redirectStragglers(world, ec) {
       !u.tpl.indirect &&
       axisOf(world, u) === stalled &&
       u.ai?.task !== 'pressure' && // 陽動はその場に留めておく
+      // 予備は「手が足りないから」で使うものではない。
+      // 転用の対象に混ぜていたせいで、決心して投入する前に消えていた。
+      u.ai?.task !== 'reserve' &&
       !u._redirected
   );
   if (movable.length < 2) return;

@@ -11,6 +11,7 @@ import { issueOrder as simIssueOrder, VERBS } from './sim/orders.js';
 import { congestion } from './sim/comms.js';
 import { enemyIntentLog } from './sim/enemyCommand.js';
 import { visibilityJa } from './sim/weather.js';
+import { supportGun, layingLeft } from './sim/fires.js';
 import { scoreMission, missionList } from './sim/scenario.js';
 import { toGrid, fromGrid, formatClock } from './util.js';
 
@@ -481,9 +482,18 @@ export function getMarkers(game) {
 }
 
 export function getSupport(game) {
+  const w = game.world;
+  const gun = supportGun(w);
   return {
-    artillery: game.world.support.artillery.rounds,
-    smoke: game.world.support.smoke.rounds,
+    artillery: w.support.artillery.rounds,
+    smoke: w.support.smoke.rounds,
+    illum: w.support.illum.rounds,
+    unlimited: !!w.creative?.unlimitedFires,
+    // 砲の状態は指揮所の帳簿で分かる ─ 自分がそこへ動かしたのだから。
+    gunAlive: !!gun,
+    layingIn: gun ? Math.round(layingLeft(w, gun)) : 0,
+    gunRange: gun ? gun.tpl.indirect : 0,
+    firing: w.fireMissions.some((fm) => !fm.done && fm.side === 'friend'),
   };
 }
 
@@ -563,4 +573,5 @@ export function revealTruth(game) {
 
 export { toGrid, fromGrid, formatClock };
 export { VERBS, MODIFIERS, VERB_GROUPS, TRIGGERS } from './sim/orders.js';
+export { FIRE_MODES, FIRE_MODE_ORDER } from './sim/fires.js';
 export { ROE } from './sim/friendlyAI.js';

@@ -4,10 +4,11 @@
 import { clamp, toGrid, dist, formatClock } from '../util.js';
 import { enqueue, PRI } from './comms.js';
 import { setDestination, clearDestination, POSTURES } from './units.js';
-import { createFireMission } from './combat.js';
+import { createFireMission, checkFire } from './combat.js';
 import { composeSitrep, composeAmmoReport } from './reports.js';
 import { setRoe, ROE } from './friendlyAI.js';
 import { orderResupply } from './logistics.js';
+import { FIRE_MODES, FIRE_MODE_ORDER, fireMode, fireCheck, dangerClose, supportGun } from './fires.js';
 
 /**
  * 命令。
@@ -27,13 +28,32 @@ export const VERBS = Object.freeze({
   observe: { label: '監視', group: 'fires', needsTarget: true, phrase: (g) => `${g}方向を監視せよ。姿を晒すな` },
   hold_fire: { label: '射撃統制', group: 'fires', needsTarget: false, phrase: () => `射撃を統制せよ。撃たれるまで撃つな` },
   free_fire: { label: '射撃自由', group: 'fires', needsTarget: false, phrase: () => `射撃自由。目標を発見しだい交戦せよ` },
-  fire_mission: { label: '砲撃要請', group: 'fires', needsTarget: true, phrase: (g) => `${g}に対し効力射。射撃用意` },
-  smoke: { label: '煙幕要請', group: 'fires', needsTarget: true, phrase: (g) => `${g}に発煙弾。視界を遮れ` },
+  fire_mission: {
+    label: '砲撃要請', group: 'fires', needsTarget: true, indirect: true,
+    phrase: (g) => `${g}に対し効力射。射撃用意`,
+  },
+  smoke: {
+    label: '煙幕要請', group: 'fires', needsTarget: true, indirect: true,
+    phrase: (g) => `${g}に発煙弾。視界を遮れ`,
+  },
+  // 夜間の谷は、弾よりも「見えること」が要る。
+  illum: {
+    label: '照明弾', group: 'fires', needsTarget: true, indirect: true,
+    phrase: (g) => `${g}上空に照明。落ちるまでに見極めろ`,
+  },
   register: {
     label: '概定射点',
     group: 'fires',
     needsTarget: true,
+    indirect: true,
     phrase: (g) => `${g}を概定射点として標定せよ。以後この点への射撃を優先する`,
+  },
+  // 撃ってしまったものは戻らないが、まだ撃っていない弾なら止められる。
+  check_fire: {
+    label: '射撃中止',
+    group: 'fires',
+    needsTarget: false,
+    phrase: () => `射撃中止。繰り返す、射撃中止`,
   },
 
   roe_hold_fast: { label: '死守', group: 'roe', needsTarget: false, roe: 'hold_fast', phrase: () => `死守せよ。一歩も退くな` },
@@ -190,13 +210,25 @@ export function issueOrder(
   // 線が渡されていなければ統制線条件は成立しない
   if (trig.needsLine && !(line?.length >= 2)) trigger = 'now';
 
-  // 砲撃・煙幕は砲兵に対する要請なので、弾数を先に確認する
-  if (verb === 'fire_mission' || verb === 'smoke') {
-    const pool = verb === 'smoke' ? world.support.smoke : world.support.artillery;
-    if (pool.rounds <= 0) {
-      pushSystemMessage(world, `${u.callsign}: 弾がない。射撃要請には応じられない。`);
+  // 砲撃・煙幕・照明は砲兵に対する要請である。
+  // 弾があるか、そもそも届くか ─ 指揮所の火力係はそれを知っている。
+  if (VERBS[verb].indirect) {
+    if (verb !== 'register') {
+      const pool = poolFor(world, verb);
+      if (!pool || pool.rounds <= 0) {
+        pushSystemMessage(world, `${u.callsign}: ${poolNameJa(verb)}が残っていない。要請には応じられない。`);
+        return null;
+      }
+    }
+    const chk = fireCheck(world, x, y, { ignoreLaying: verb === 'register' });
+    if (!chk.ok) {
+      pushSystemMessage(world, chk.text);
       return null;
     }
+  }
+  if (verb === 'check_fire' && !world.fireMissions.some((fm) => !fm.done && fm.side === 'friend')) {
+    pushSystemMessage(world, '止めるべき射撃がない。');
+    return null;
   }
   if (verb === 'register' && world.registrations.length >= 3) {
     pushSystemMessage(world, `${u.callsign}: 概定射点はこれ以上抱えられない。どれかを撤する必要がある。`);
@@ -521,8 +553,10 @@ function shortOrderJa(order) {
       free_fire: '射撃自由で交戦する',
       recon: `${order.grid}を偵察する`,
       withdraw: `${order.grid}へ下がる`,
-      fire_mission: `${order.grid}、射撃用意`,
+      fire_mission: `${order.grid}、${FIRE_MODES[order.modifier]?.label ?? '着発'}で射撃用意`,
       smoke: `${order.grid}に発煙`,
+      illum: `${order.grid}上空に照明`,
+      check_fire: '射撃を止める',
       register: `${order.grid}を標定する`,
       ammo_check: '弾薬を確認する',
       roe_hold_fast: '死守する。ここは渡さん',
@@ -673,16 +707,28 @@ function beginExecution(world, u, order) {
       break;
     }
 
-    case 'fire_mission': {
-      const pool = world.support.artillery;
-      const rounds = Math.min(pool.rounds, 6);
-      // 予令として抱えているうちに撃ち尽くしていることがある
+    case 'fire_mission':
+    case 'smoke':
+    case 'illum': {
+      const kind = order.verb === 'fire_mission' ? 'he' : order.verb === 'smoke' ? 'smoke' : 'illum';
+      const pool = poolFor(world, order.verb);
+      const mode = fireMode(order.verb === 'fire_mission' ? order.modifier : null);
+      const want = kind === 'he' ? mode.rounds : kind === 'smoke' ? 4 : 2;
+      const rounds = Math.min(pool.rounds, want);
+
+      // 予令として抱えているうちに、弾を撃ち尽くしていることがある。
+      // 砲が陣地変換していることも、射程から外れていることもある。
       if (rounds <= 0) {
+        refuseFire(world, u, order, `${poolNameJa(order.verb)}が残っていない`);
+        break;
+      }
+      const chk = fireCheck(world, order.x, order.y);
+      if (!chk.ok) {
         enqueue(world, {
           from: u.callsign,
           fromId: u.id,
           kind: 'refuse',
-          text: `こちら${u.callsign}、${order.grid}への射撃要請、応じられない。弾が残っていない。`,
+          text: chk.text,
           priority: PRI.PRIORITY,
           meta: { unitId: u.id, orderId: order.id, observedAt: world.now },
           composedAt: world.now,
@@ -690,39 +736,104 @@ function beginExecution(world, u, order) {
         });
         break;
       }
+
       pool.rounds -= rounds;
       // 概定射点の近くなら諸元が出ている。早く、正確に落ちる。
       const rp = nearestRegistration(world, order.x, order.y);
-      const fm = createFireMission('he', order.x, order.y, world.now, {
+      const baseDelay =
+        kind === 'he'
+          ? rp
+            ? 32 + world.rng.range(0, 12)
+            : 70 + world.rng.range(0, 25)
+          : kind === 'smoke'
+            ? 50 + world.rng.range(0, 20)
+            : 34 + world.rng.range(0, 14);
+
+      const fm = createFireMission(kind, order.x, order.y, world.now, {
         side: 'friend',
         requestedBy: u.id,
         rounds,
-        delay: rp ? 32 + world.rng.range(0, 12) : 70 + world.rng.range(0, 25),
+        mode: kind === 'he' ? mode.key : null,
+        delay: baseDelay * (kind === 'he' ? mode.delayMul : 1),
         spread: rp ? 0.45 : 1,
         registered: !!rp,
       });
       world.fireMissions.push(fm);
-      world.stats.fireMissions++;
-      if (rp) world.stats.registeredMissions = (world.stats.registeredMissions ?? 0) + 1;
+
+      if (kind === 'he') {
+        world.stats.fireMissions++;
+        if (rp) world.stats.registeredMissions = (world.stats.registeredMissions ?? 0) + 1;
+        // 危近弾。砲側は自軍の配置を知っているので、必ず言ってくる ―
+        // 言ったうえで撃つ。撃たないと決めるのは指揮官の仕事である。
+        const near = dangerClose(world, order.x, order.y);
+        if (near) {
+          world.stats.dangerClose = (world.stats.dangerClose ?? 0) + 1;
+          enqueue(world, {
+            from: chk.gun.callsign,
+            fromId: chk.gun.id,
+            kind: 'firecontrol',
+            text:
+              `こちら${chk.gun.callsign}、危近弾！${order.grid}の至近に${near.u.callsign}がいる。` +
+              `およそ${Math.round(near.d / 10) * 10}m。……承知の上と判断し、射撃する。`,
+            priority: PRI.FLASH,
+            meta: { grid: order.grid, observedAt: world.now },
+            composedAt: world.now,
+            duration: 5,
+          });
+        }
+      }
       break;
     }
-    case 'smoke': {
-      const pool = world.support.smoke;
-      const rounds = Math.min(pool.rounds, 4);
-      if (rounds <= 0) break;
-      pool.rounds -= rounds;
-      const fm = createFireMission('smoke', order.x, order.y, world.now, {
-        side: 'friend',
-        requestedBy: u.id,
-        rounds,
-        delay: 50 + world.rng.range(0, 20),
+
+    case 'check_fire': {
+      const res = checkFire(world, 'friend');
+      world.support.artillery.rounds += res.returned.he ?? 0;
+      world.support.smoke.rounds += res.returned.smoke ?? 0;
+      world.support.illum.rounds += res.returned.illum ?? 0;
+      world.stats.checkFires = (world.stats.checkFires ?? 0) + 1;
+      const back = (res.returned.he ?? 0) + (res.returned.smoke ?? 0) + (res.returned.illum ?? 0);
+      enqueue(world, {
+        from: u.callsign,
+        fromId: u.id,
+        kind: 'firecontrol',
+        text:
+          res.cancelled > 0
+            ? `こちら${u.callsign}、射撃中止。手を止めた。${back}発、砲側に残る。`
+            : `こちら${u.callsign}、射撃中止 ─ だが、もう全弾出たあとだ。`,
+        priority: PRI.FLASH,
+        meta: { unitId: u.id, observedAt: world.now },
+        composedAt: world.now,
+        duration: 4,
       });
-      world.fireMissions.push(fm);
       break;
     }
     default:
       break;
   }
+}
+
+/** その要請が食う弾の在庫 */
+function poolFor(world, verb) {
+  if (verb === 'smoke') return world.support.smoke;
+  if (verb === 'illum') return world.support.illum;
+  return world.support.artillery;
+}
+
+function poolNameJa(verb) {
+  return verb === 'smoke' ? '発煙弾' : verb === 'illum' ? '照明弾' : '砲弾';
+}
+
+function refuseFire(world, u, order, why) {
+  enqueue(world, {
+    from: u.callsign,
+    fromId: u.id,
+    kind: 'refuse',
+    text: `こちら${u.callsign}、${order.grid}への要請、応じられない。${why}。`,
+    priority: PRI.PRIORITY,
+    meta: { unitId: u.id, orderId: order.id, observedAt: world.now },
+    composedAt: world.now,
+    duration: 4,
+  });
 }
 
 /** 指定した点に諸元の出ている概定射点があるか */
@@ -803,6 +914,8 @@ function advanceExecution(world, u, order, dt) {
     case 'free_fire':
     case 'fire_mission':
     case 'smoke':
+    case 'illum':
+    case 'check_fire':
     case 'register':
     case 'roe_hold_fast':
     case 'roe_standard':

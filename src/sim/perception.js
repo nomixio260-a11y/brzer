@@ -5,7 +5,7 @@ import { clamp, dist } from '../util.js';
 import { lineOfSight, concealAt } from './terrain.js';
 import { POSTURES } from './units.js';
 import { smokeAttenuation } from './smoke.js';
-import { mistAttenuation, lightSpotFactor } from './weather.js';
+import { mistAttenuation, localSpotFactor } from './weather.js';
 
 /** 相手の兵種をどう見誤るか（近い見た目のものと取り違える） */
 const CONFUSION = {
@@ -30,17 +30,21 @@ export function stepPerception(u, others, terrain, now, dt, rng, smokes, world) 
   const posture = POSTURES[u.posture] ?? POSTURES.normal;
   // 撃たずに見ることに徹している部隊は、遠くまでよく見える
   const watching = u.weaponsHold ? 1.15 : 1;
-  // 闇夜では目が利かない。上空の機体だけが熱で見る。
-  const light = world ? (u.tpl.flying ? 0.55 + 0.45 * lightSpotFactor(world) : lightSpotFactor(world)) : 1;
   // 何時間も起きている部隊は、見落とす
   const alert = 1 - clamp(u.fatigue / 700, 0, 0.3);
-  const spotRange =
-    u.tpl.spot * posture.spot * watching * light * alert *
+  const baseSpot =
+    u.tpl.spot * posture.spot * watching * alert *
     (1 - clamp(u.suppression / 200, 0, 0.5));
 
   for (const t of others) {
     if (t === u || !t.alive) continue;
     if (t.side === u.side) continue;
+    // 闇夜では目が利かない。上空の機体だけが熱で見る。
+    // 照明弾が掛かっていれば、その下だけは見える ─ 明るさは目標側で決まる。
+    const lit = world ? localSpotFactor(world, t.x, t.y) : 1;
+    const light = u.tpl.flying ? 0.55 + 0.45 * lit : lit;
+    const spotRange = baseSpot * light;
+
     // 民間人は敵ではないが、目視対象にはなる
     const d = dist(u.x, u.y, t.x, t.y);
     if (d > spotRange) {

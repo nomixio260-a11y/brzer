@@ -58,8 +58,20 @@ export function renderHud(hud) {
   dom.queue.textContent = radio.queued > 0 ? `待ち ${radio.queued}` : '';
   dom.jam.hidden = radio.jamming < 0.15;
 
-  dom.he.textContent = support.artillery;
-  dom.smoke.textContent = support.smoke;
+  // 弾数。演習では数えても意味がないので、そう表示する。
+  dom.he.textContent = support.unlimited ? '∞' : support.artillery;
+  dom.smoke.textContent = support.unlimited ? '∞' : support.smoke;
+  if (dom.illum) dom.illum.textContent = support.unlimited ? '∞' : support.illum;
+  if (dom.heItem) {
+    // 砲が陣地変換中なら、要請しても通らない。先に分かっていたほうがよい。
+    const note = !support.gunAlive
+      ? '砲兵は沈黙している'
+      : support.layingIn > 0
+        ? `陣地変換中 ─ あと約${support.layingIn}秒で撃てる`
+        : `射程 ${Math.round(support.gunRange / 100) * 100}m`;
+    dom.heItem.classList.toggle('is-cold', !support.gunAlive || support.layingIn > 0);
+    dom.heItem.title = note;
+  }
 
   // 段列。長期戦では、これが尽きた時点で「あとは撃つだけ」になる。
   const trains = getTrains(game);

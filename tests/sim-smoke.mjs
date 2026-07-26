@@ -1,13 +1,19 @@
 // シミュレーションの健全性テスト。ブラウザ無しで node から走らせる。
 //   node tests/sim-smoke.mjs
 
-import { createWorld, tick } from '../src/sim/world.js';
+import { createWorld, tick, addUnit } from '../src/sim/world.js';
 import { issueOrder, crossedLine } from '../src/sim/orders.js';
+import { createFireMission, stepFireMissions } from '../src/sim/combat.js';
+import { supportGun, layingLeft, createFlare, stepFires } from '../src/sim/fires.js';
+import { aspectOf, penetrationRatio, canDefeat } from '../src/sim/armor.js';
+import { createUnit } from '../src/sim/units.js';
 import { evaluate, missionList } from '../src/sim/scenario.js';
 import { WORLD, toGrid, fromGrid, formatClock, parseClock } from '../src/util.js';
 import { generateTerrain, lineOfSight, terrainAt, isPassable, T, TERRAIN_NAME_JA } from '../src/sim/terrain.js';
 import { mapList } from '../src/sim/maps.js';
-import { mistDensity, mistAttenuation, lightLevel, lightSpotFactor } from '../src/sim/weather.js';
+import {
+  mistDensity, mistAttenuation, lightLevel, lightSpotFactor, localSpotFactor,
+} from '../src/sim/weather.js';
 import { fatigueFactor, fatigueJa } from '../src/sim/logistics.js';
 import { applyDamage } from '../src/sim/units.js';
 import { findPath } from '../src/sim/pathfind.js';
@@ -277,9 +283,9 @@ section('概定射点');
   check('概定射点への射撃は諸元が出ている', fm?.registered === true);
   check('散布界が締まる', (fm?.spread ?? 1) < 1);
 
-  // 遠い点への射撃は通常どおり
+  // 遠い点への射撃は通常どおり（ただし射程内であること）
   const b2 = w.fireMissions.length;
-  issueOrder(w, { unitId: 'TH', verb: 'fire_mission', x: 3900, y: 900 });
+  issueOrder(w, { unitId: 'TH', verb: 'fire_mission', x: 3200, y: 1500 });
   for (let i = 0; i < 400 && w.fireMissions.length === b2; i++) tick(w, 1);
   const fm2 = w.fireMissions[w.fireMissions.length - 1];
   check('離れた点は通常の射撃', fm2?.registered === false);
@@ -638,6 +644,166 @@ for (let i = 0; i < 900; i++) {
 const sig = (w) =>
   w.units.map((u) => `${u.id}:${u.x.toFixed(2)}:${u.y.toFixed(2)}:${u.strength.toFixed(3)}`).join('|');
 check('同シードなら同じ展開になる', sig(a) === sig(b));
+
+/* ------------------------------------------------------------------ */
+
+section('射撃要領');
+{
+  // 同じ的・同じ距離で、要領だけを変えて比べる
+  function trial(mode, posture) {
+    const w = createWorld();
+    w.units = [];
+    w.unitsById.clear();
+    const t = addUnit(w, {
+      id: 'X', side: 'enemy', callsign: '的', type: 'infantry', x: 2200, y: 1500, posture,
+    });
+    w.fireMissions.push(createFireMission('he', t.x, t.y, w.now, { side: 'friend', mode, delay: 1 }));
+    let held = 0;
+    for (let i = 0; i < 400; i++) {
+      w.now += 1;
+      stepFireMissions(w, 1);
+      if (t.suppression >= 60) held++;
+      if (w.now - t.lastHitAt > 12) t.suppression = Math.max(0, t.suppression - 2.4);
+    }
+    return { loss: t.maxStrength - t.strength, held };
+  }
+
+  const openImpact = trial('impact', 'normal');
+  const openAir = trial('airburst', 'normal');
+  const digImpact = trial('impact', 'fortified');
+  const digAir = trial('airburst', 'fortified');
+  const sustained = trial('sustained', 'normal');
+  const salvo = trial('salvo', 'normal');
+
+  check('開豁地では着発が効く', openImpact.loss > openAir.loss,
+    `${openImpact.loss.toFixed(2)} vs ${openAir.loss.toFixed(2)}`);
+  check('陣地の敵には曳火が効く', digAir.loss > digImpact.loss * 2,
+    `${digAir.loss.toFixed(2)} vs ${digImpact.loss.toFixed(2)}`);
+  check('一斉射は最も削る', salvo.loss > openImpact.loss, `${salvo.loss.toFixed(2)}`);
+  check('制圧射は長く押さえる', sustained.held > salvo.held * 2,
+    `${sustained.held}秒 vs ${salvo.held}秒`);
+  check('制圧射は撃破を狙わない', sustained.loss < openImpact.loss,
+    `${sustained.loss.toFixed(2)}`);
+}
+
+section('曲射の射程と陣地変換');
+{
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const gun = supportGun(w);
+  check('曲射部隊がいる', !!gun);
+
+  const far = issueOrder(w, { unitId: 'TH', verb: 'fire_mission', x: 4900, y: 150 });
+  check('射程外は断られる', far === null);
+  check('断りの理由が無線に残る',
+    w.radio.log.some((e) => e.text?.includes('射程外')));
+
+  const near = issueOrder(w, { unitId: 'TH', verb: 'fire_mission', x: 2200, y: 1800 });
+  check('射程内は通る', near !== null);
+
+  // 砲を動かせば、動いているあいだは撃てない
+  const w2 = createWorld();
+  for (let i = 0; i < 60; i++) tick(w2, 1);
+  issueOrder(w2, { unitId: 'TH', verb: 'move', x: 1600, y: 3000 });
+  for (let i = 0; i < 120; i++) tick(w2, 1);
+  const g2 = supportGun(w2);
+  check('陣地変換中は諸元が出ていない', layingLeft(w2, g2) > 0, `${layingLeft(w2, g2)}`);
+  check('陣地変換中の要請は断られる',
+    issueOrder(w2, { unitId: 'TH', verb: 'fire_mission', x: 2200, y: 1800 }) === null);
+}
+
+section('照明弾');
+{
+  const w = createWorld({ missionId: 'kolp_delay' });
+  const x = 2400;
+  const y = 1500;
+  const dark = localSpotFactor(w, x, y);
+  w.flares.push(createFlare(x, y, w.now));
+  w.now += 20;
+  check('照明の下は明るくなる', localSpotFactor(w, x, y) > dark + 0.3,
+    `${dark.toFixed(2)} → ${localSpotFactor(w, x, y).toFixed(2)}`);
+  check('離れれば効かない', localSpotFactor(w, x + 1400, y) <= dark + 0.01);
+  w.now += 240;
+  stepFires(w);
+  check('照明は燃え尽きる', w.flares.length === 0);
+
+  // 弾数を食い、要請として通る
+  const w2 = createWorld({ missionId: 'kolp_delay' });
+  for (let i = 0; i < 60; i++) tick(w2, 1);
+  const before = w2.support.illum.rounds;
+  check('照明弾を持っている', before > 0);
+  issueOrder(w2, { unitId: 'TH', verb: 'illum', x: 2400, y: 1500 });
+  for (let i = 0; i < 300; i++) tick(w2, 1);
+  check('照明弾を消費する', w2.support.illum.rounds < before,
+    `${before} → ${w2.support.illum.rounds}`);
+}
+
+section('射撃中止');
+{
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  issueOrder(w, { unitId: 'TH', verb: 'fire_mission', x: 2200, y: 1700 });
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const flying = w.fireMissions.filter((fm) => !fm.done).length;
+  const left = w.support.artillery.rounds;
+  check('射撃任務が飛んでいる', flying > 0);
+  issueOrder(w, { unitId: 'TH', verb: 'check_fire' });
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  check('射撃が止まる', w.fireMissions.every((fm) => fm.done));
+  check('撃っていない弾は戻る', w.support.artillery.rounds > left,
+    `${left} → ${w.support.artillery.rounds}`);
+}
+
+section('装甲の面と貫徹');
+{
+  const tank = createUnit({ id: 'T', side: 'enemy', type: 'tank', x: 0, y: 0 });
+  tank.heading = 0; // 東を向いている
+  const from = (x, y) => createUnit({ id: 'A', side: 'friend', type: 'at_team', x, y });
+  const inf = (x, y) => createUnit({ id: 'I', side: 'friend', type: 'infantry', x, y });
+
+  check('正面を判別する', aspectOf(from(500, 0), tank) === 'front');
+  check('側面を判別する', aspectOf(from(0, 500), tank) === 'side');
+  check('背面を判別する', aspectOf(from(-500, 0), tank) === 'rear');
+
+  const pf = penetrationRatio(from(500, 0), tank, 500);
+  const ps = penetrationRatio(from(0, 500), tank, 500);
+  const pr = penetrationRatio(from(-500, 0), tank, 500);
+  check('横腹ほど抜けやすい', ps > pf && pr > ps, `${pf.toFixed(2)}/${ps.toFixed(2)}/${pr.toFixed(2)}`);
+
+  check('歩兵は戦車の正面を抜けない', !canDefeat(inf(500, 0), tank, 500));
+  check('歩兵でも背面なら抜ける', canDefeat(inf(-500, 0), tank, 500));
+  check('対戦車班は正面からでも抜ける', canDefeat(from(500, 0), tank, 500));
+
+  // 成形炸薬は距離で威力を落とさない
+  const heat = penetrationRatio(from(1400, 0), tank, 1400);
+  check('対戦車ミサイルは遠くても威力が落ちない', Math.abs(heat - pf) < 0.01);
+}
+
+section('装甲戦闘');
+{
+  // 対戦車班と戦車を向かい合わせ、一発ずつ決着がつくことを見る
+  const w = createWorld();
+  w.units = [];
+  w.unitsById.clear();
+  const at = addUnit(w, {
+    id: 'AT', side: 'friend', callsign: 'ソード', type: 'at_team',
+    x: 2200, y: 2400, posture: 'dug_in',
+  });
+  const tk = addUnit(w, {
+    id: 'TK', side: 'enemy', callsign: '敵戦車', type: 'tank', x: 2200, y: 1600,
+  });
+  const results = {};
+  for (let i = 0; i < 900 && tk.alive; i++) {
+    tick(w, 1);
+    for (const ev of w.armorEvents) results[ev.result] = (results[ev.result] ?? 0) + 1;
+  }
+  const shots = Object.values(results).reduce((a, b) => a + b, 0);
+  check('一発ずつ解決している', shots > 0, JSON.stringify(results));
+  check('外れることもある', (results.miss ?? 0) > 0, JSON.stringify(results));
+  check('対戦車班は戦車を仕留められる', !tk.alive || tk.strength < tk.maxStrength,
+    `${tk.strength}/${tk.maxStrength}`);
+  check('射撃のたびに弾が減る', at.ammo < at.tpl.maxAmmo, `${at.ammo.toFixed(0)}`);
+}
 
 /* ------------------------------------------------------------------ */
 

@@ -14,11 +14,15 @@ export const UNIT_TYPES = Object.freeze({
     label: '歩兵分隊', unitJa: '名', maxStrength: 9,
     speed: 1.25, spot: 720, range: 480, firepower: 1.0, ap: 0.5, armor: 0.0,
     ammoDrain: 1.0, maxAmmo: 100, radio: 1.0, skill: 0.72,
+    // 分隊が持つ対戦車火器は成形炸薬 ─ 正面は抜けないが、横腹と背中は抜ける。
+    heat: true,
   },
   at_team: {
     label: '対戦車班', unitJa: '名', maxStrength: 5,
     speed: 1.15, spot: 820, range: 1600, firepower: 0.35, ap: 4.2, armor: 0.0,
     ammoDrain: 2.6, maxAmmo: 100, radio: 1.0, skill: 0.78,
+    // 対戦車ミサイル。距離で威力が落ちないかわりに、命中まで身を晒す。
+    heat: true,
   },
   recon: {
     label: '偵察班', unitJa: '名', maxStrength: 4,
@@ -38,7 +42,10 @@ export const UNIT_TYPES = Object.freeze({
   mortar: {
     label: '迫撃砲班', unitJa: '名', maxStrength: 6,
     speed: 0.95, spot: 380, range: 0, firepower: 0.2, ap: 0.05, armor: 0.0,
-    ammoDrain: 1.0, maxAmmo: 100, radio: 1.0, skill: 0.7, indirect: 2800,
+    ammoDrain: 1.0, maxAmmo: 100, radio: 1.0, skill: 0.7,
+    // 中迫の射程。地図の端までは届かない ─ どこに据えるかで、
+    // 掩護できる範囲が変わる。それが火力の配置というものである。
+    indirect: 4200,
   },
   drone: {
     label: '偵察ドローン', unitJa: '機', maxStrength: 1,
@@ -150,6 +157,9 @@ export function isDestroyed(u) {
 
 /** 移動速度（m/s）。地形・態勢・被制圧・士気を反映。 */
 export function currentSpeed(u, terrain) {
+  // 履帯をやられた車輌は、その場から動けない。撃つことはできる ―
+  // 動かない戦車は、もはや戦車ではなく、掩体に据えた砲である。
+  if (u._immobile) return 0;
   const posture = POSTURES[u.posture] ?? POSTURES.normal;
   const mob = u.tpl.flying ? 1 : mobilityAt(terrain, u.x, u.y);
   // 経路の脚と脚の間で、通行不能な角をかすめてしまうことがある。
@@ -184,6 +194,11 @@ export function clearDestination(u) {
 /** 1ティック分の移動処理 */
 export function stepMovement(u, terrain, dt) {
   if (!u.alive) return;
+  if (u._immobile) {
+    u.path = [];
+    u.dest = null;
+    return;
+  }
   // 疲労の増減は logistics.js が一手に見る。
   // ここでも引いていたせいで、止まっている部隊の疲れが毎秒消えていた。
   if (!u.path.length) return;
@@ -316,6 +331,7 @@ export function effectiveCover(u, terrain) {
 /** 日本語の状態表記 */
 export function stateJa(u) {
   if (!u.alive) return '戦闘不能';
+  if (u._immobile) return '行動不能（射撃可）';
   switch (u.state) {
     case 'holding': return '現在地保持';
     case 'moving': return '移動中';

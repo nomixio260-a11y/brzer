@@ -1,10 +1,13 @@
 // 敵の行動。プレイヤーには見えないので、派手さより「筋の通った圧力」を優先する。
 
-import { clamp, dist } from '../util.js';
+import { clamp, dist, toGrid, bearing, compassJa } from '../util.js';
 
 import { setDestination, clearDestination } from './units.js';
 import { createFireMission } from './combat.js';
 import { visibleEnemies } from './perception.js';
+import { backOffPoint } from './armor.js';
+import { flareLight } from './fires.js';
+import { enqueue, PRI } from './comms.js';
 
 /** 敵side内で共有される目標情報 */
 function updateEnemyIntel(world) {
@@ -54,6 +57,27 @@ function runEnemy(world, u) {
     if (!u.path.length) {
       setDestination(u, world.terrain, u.x + world.rng.range(-300, 300), Math.max(40, u.y - 1400));
     }
+    return;
+  }
+
+  // --- 履帯をやられた車輌 ----------------------------------------
+  // もう動けない。動けないなら、その場を撃つ台にするしかない。
+  if (u._immobile) {
+    u.posture = 'dug_in';
+    u.state = visibleEnemies(u, world.unitsById, world.now, 20).length ? 'attacking' : 'defending';
+    clearDestination(u);
+    return;
+  }
+
+  // --- 対戦車火器に撃たれた車輌は、煙を張って退がる ---------------
+  // 撃たれた場所に留まる戦車はない。まず遮蔽の裏へ出て、それから考える。
+  if (world.now - (u._backingOffAt ?? -Infinity) < 28) {
+    if (!u.path.length && u._threatFrom) {
+      const p = backOffPoint(u, u._threatFrom, 300);
+      setDestination(u, world.terrain, p.x, p.y);
+    }
+    u.posture = 'rapid';
+    u.state = 'moving';
     return;
   }
 
@@ -134,7 +158,14 @@ function runEnemy(world, u) {
       return;
     }
     if (canHurt && nearest.d < u.tpl.range * 2.2) {
-      // 射程外だが見えている。詰める。
+      // 射程外だが見えている。ただし全部が同時に駆け出したりはしない ―
+      // 半分が止まって撃ち、半分が動く。躍進前進である。
+      if (overwatchPhase(world, u) && nearest.d < u.tpl.range) {
+        u.path = [];
+        u.posture = 'cautious';
+        u.state = 'attacking';
+        return;
+      }
       u.posture = 'cautious';
       u.state = 'attacking';
       if (!u.path.length) setDestination(u, world.terrain, nearest.t.x, nearest.t.y);
@@ -170,11 +201,30 @@ function runEnemy(world, u) {
   // 迂回部隊は渡河を終えるまで急ぐ（浅瀬の徒渉が遅いぶんを取り返す）。
   const hurrying = ai.task === 'flank' && !(u.y > world.terrain.front(u.x) + 70);
   u.posture = ai.task === 'probe' ? 'stealth' : hurrying ? 'rapid' : 'normal';
+  // 照明の下を駆け抜ける部隊はいない。光が落ちるまで身を低くする。
+  if (flareLight(world, u.x, u.y) > 0.45 && u.posture !== 'stealth') u.posture = 'cautious';
   u.state = 'moving';
   if (!u.path.length || u._goalKey !== goalKey(goal)) {
     u._goalKey = goalKey(goal);
     setDestination(u, world.terrain, goal.x, goal.y);
   }
+}
+
+/**
+ * 躍進の位相。
+ *
+ * 同じ軸の部隊を二組に分け、片方が動くあいだ、もう片方は止まって撃つ。
+ * 全部が同時に走り出すのは映画のなかだけである ―
+ * 実際の前進は、掩護と機動の交代でできている。
+ */
+function overwatchPhase(world, u) {
+  if (u._boundParity == null) {
+    let h = 0;
+    for (let i = 0; i < u.id.length; i++) h = (h * 31 + u.id.charCodeAt(i)) | 0;
+    u._boundParity = Math.abs(h) % 2;
+  }
+  const phase = Math.floor(world.now / 45) % 2;
+  return u._boundParity === phase;
 }
 
 /**
@@ -276,7 +326,13 @@ function stepEnemyIndirect(world) {
     return;
   }
 
-  const rounds = Math.min(world.enemyArty.rounds, 4);
+  // 突撃が始まっていれば制圧射に切り替える。
+  // 敵の砲もまた、撃破のためでなく「頭を上げさせない」ために撃つ。
+  const assaulting = world.units.filter(
+    (e) => e.alive && e.side === 'enemy' && e.state === 'attacking'
+  ).length;
+  const mode = assaulting >= 3 ? 'sustained' : world.rng.chance(0.35) ? 'salvo' : 'impact';
+  const rounds = Math.min(world.enemyArty.rounds, mode === 'sustained' ? 6 : 4);
   world.enemyArty.rounds -= rounds;
   world.enemyArty.nextAt = world.now + 150 + world.rng.range(0, 90);
 
@@ -288,10 +344,61 @@ function stepEnemyIndirect(world) {
     createFireMission('he', ex, ey, world.now, {
       side: 'enemy',
       rounds,
+      mode,
       delay: 45 + world.rng.range(0, 25),
       radius: 120,
     })
   );
+
+  reportGunSound(world, mortars[0]);
+}
+
+/**
+ * 砲声。
+ *
+ * 発射音は隠せない。近くにいる部隊は「どちらで撃ったか」を聞き取り、
+ * おおよその方向と距離を言ってくる ── 音源標定である。
+ * 正確ではない。だが、敵の迫がどのあたりにいるかは、それで分かる。
+ * 分かれば、こちらの砲で潰せる。
+ */
+function reportGunSound(world, gun) {
+  if (!gun) return;
+  for (const o of world.units) {
+    if (o.side !== 'friend' || !o.alive || !o.commsOk || !o.tpl.radio) continue;
+    if (o.tpl.flying) continue;
+    const d = dist(o.x, o.y, gun.x, gun.y);
+    if (d > 3400) continue;
+    if (world.now - (o._gunSoundAt ?? -Infinity) < 300) continue;
+    o._gunSoundAt = world.now;
+
+    // 音だけで出せる精度には限りがある。遠いほど、大きく外す。
+    const err = 130 + d * 0.15;
+    const gx = gun.x + world.rng.gauss(0, err);
+    const gy = gun.y + world.rng.gauss(0, err);
+    const dir = compassJa(bearing(o.x, o.y, gx, gy));
+
+    enqueue(world, {
+      from: o.callsign,
+      fromId: o.id,
+      kind: 'contact',
+      text:
+        `こちら${o.callsign}、砲声を聞いた。${dir}、${toGrid(gx, gy)}付近と見る。` +
+        `敵の迫だ ─ 潰せるなら潰してほしい。`,
+      priority: PRI.PRIORITY,
+      meta: {
+        unitId: o.id,
+        grid: toGrid(gx, gy),
+        reportedX: gx,
+        reportedY: gy,
+        classified: 'mortar',
+        quality: 0.35,
+        observedAt: world.now,
+      },
+      composedAt: world.now,
+      duration: 4.5,
+    });
+    return; // 一人が言えば足りる
+  }
 }
 
 /* ------------------------------------------------------------------ */

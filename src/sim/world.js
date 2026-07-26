@@ -14,6 +14,8 @@ import { createEnemyCommand, stepEnemyCommand, stepEnemyRecovery } from './enemy
 import { stepFriendlyInitiative } from './friendlyAI.js';
 import { pruneSmoke } from './smoke.js';
 import { createTrains, stepLogistics, stepAttrition } from './logistics.js';
+import { stepFires, FIRE_MODES } from './fires.js';
+import { ASPECT_JA } from './armor.js';
 import { getMission, friendlyOrderOfBattle, timeline, evaluate } from './scenario.js';
 
 export function createWorld(opts = {}) {
@@ -38,7 +40,10 @@ export function createWorld(opts = {}) {
     orders: [],
     fireMissions: [],
     smokes: [],
+    flares: [], // 照明弾。夜の谷を、しばらくのあいだ昼にする。
     registrations: [], // 概定射点
+    // 装甲戦闘の結果。報告を組み立てるあいだだけ置いておく。
+    armorEvents: [],
 
     enemyIntel: new Map(),
     // 長期戦の敵は、半日ぶんの弾を持ってくる
@@ -51,6 +56,11 @@ export function createWorld(opts = {}) {
     support: {
       artillery: { name: mission.support.artillery.name, rounds: mission.support.artillery.rounds },
       smoke: { name: mission.support.smoke.name, rounds: mission.support.smoke.rounds },
+      // 照明弾。夜明け前の戦闘では、これが弾薬より効くことがある。
+      illum: {
+        name: mission.support.illum?.name ?? mission.support.artillery.name,
+        rounds: mission.support.illum?.rounds ?? (mission.duration === 'long' ? 8 : 4),
+      },
     },
 
     commandPost: mission.commandPost,
@@ -127,8 +137,10 @@ export function tick(world, dt = 1) {
   const beforeDeaths = new Set(world.units.filter((u) => !u.alive).map((u) => u.id));
   const beforeFF = new Set(world.units.filter((u) => u.killedByFriendly).map((u) => u.id));
 
+  world.armorEvents.length = 0;
   stepDirectFire(world, dt);
   stepFireMissions(world, dt);
+  stepFires(world);
 
   for (const u of world.units) stepMorale(u, world.now, dt);
 
@@ -139,6 +151,7 @@ export function tick(world, dt = 1) {
   handleBrokenFriendlies(world);
   reportFriendlyFire(world, beforeFF);
   reportDeaths(world, beforeDeaths);
+  reportArmorEngagements(world);
   reportFireControl(world);
   reportFireMissions(world);
   reportAmmoState(world);
@@ -271,6 +284,91 @@ function reportDeaths(world, beforeDeaths) {
 }
 
 /**
+ * 装甲戦闘の報告。
+ *
+ * 対戦車の撃ち合いは一発ごとに決着がつくので、そのつど無線に乗る。
+ * 「効果なし」も必ず伝える ─ 正面から抜けなかったという事実こそが、
+ * 指揮官に「回り込ませろ」と決心させる材料になるからである。
+ */
+function reportArmorEngagements(world) {
+  for (const ev of world.armorEvents) {
+    const shooter = ev.shooter;
+    const target = ev.target;
+
+    // 撃ったのが自軍なら、撃った本人が報告する
+    if (shooter.side === 'friend' && shooter.commsOk && shooter.tpl.radio > 0) {
+      if (ev.result === 'kill') {
+        enqueue(world, {
+          from: shooter.callsign,
+          fromId: shooter.id,
+          kind: 'kill',
+          text:
+            `こちら${shooter.callsign}、命中！${toGrid(target.x, target.y)}、` +
+            `${target.tpl.label}1${target.tpl.unitJa}撃破。炎上している。`,
+          priority: PRI.FLASH,
+          meta: { unitId: shooter.id, grid: toGrid(target.x, target.y), observedAt: world.now },
+          composedAt: world.now,
+          duration: 4.5,
+        });
+        continue;
+      }
+      if (ev.result === 'mobility') {
+        enqueue(world, {
+          from: shooter.callsign,
+          fromId: shooter.id,
+          kind: 'kill',
+          text:
+            `こちら${shooter.callsign}、命中。${toGrid(target.x, target.y)}の${target.tpl.label}、` +
+            `動きが止まった。まだ撃ってくる。`,
+          priority: PRI.PRIORITY,
+          meta: { unitId: shooter.id, grid: toGrid(target.x, target.y), observedAt: world.now },
+          composedAt: world.now,
+          duration: 4,
+        });
+        continue;
+      }
+      // 弾かれたことは、そう何度も言わない。一度言えば十分である。
+      if (ev.result === 'bounce' && world.now - (shooter._bounceReportedAt ?? -Infinity) > 180) {
+        shooter._bounceReportedAt = world.now;
+        enqueue(world, {
+          from: shooter.callsign,
+          fromId: shooter.id,
+          kind: 'engagement',
+          text:
+            `こちら${shooter.callsign}、命中したが効果なし。${ASPECT_JA[ev.aspect]}では抜けない。` +
+            `横を取れる位置がほしい。`,
+          priority: PRI.PRIORITY,
+          meta: { unitId: shooter.id, grid: toGrid(target.x, target.y), observedAt: world.now },
+          composedAt: world.now,
+          duration: 4.5,
+        });
+      }
+      continue;
+    }
+
+    // 撃たれたのが自軍の車輌なら、撃たれた側が叫ぶ
+    if (target.side === 'friend' && target.alive && target.commsOk && target.tpl.radio > 0) {
+      if (ev.result !== 'kill' && ev.result !== 'mobility') continue;
+      if (world.now - (target._hitReportedAt ?? -Infinity) < 40) continue;
+      target._hitReportedAt = world.now;
+      enqueue(world, {
+        from: target.callsign,
+        fromId: target.id,
+        kind: 'contact',
+        text:
+          `こちら${target.callsign}、被弾！${toGrid(target.x, target.y)}、` +
+          (ev.result === 'kill' ? '1両やられた！' : '動けない、履帯をやられた！') +
+          `${toGrid(ev.shooter.x, ev.shooter.y)}方向から撃たれている！`,
+        priority: PRI.FLASH,
+        meta: { unitId: target.id, grid: toGrid(target.x, target.y), observedAt: world.now },
+        composedAt: world.now,
+        duration: 5,
+      });
+    }
+  }
+}
+
+/**
  * 射撃指揮の通話。
  * 実際の火力要請は「撃った」「弾着5秒前」が返ってきて初めて成立する。
  * これが無いと、指揮官は自分の砲弾がいつ落ちるのか分からない。
@@ -278,21 +376,44 @@ function reportDeaths(world, beforeDeaths) {
 function reportFireControl(world) {
   for (const fm of world.fireMissions) {
     if (fm.side !== 'friend' || fm.done) continue;
-    const gun = world.support[fm.kind === 'smoke' ? 'smoke' : 'artillery'].name;
+    const pool = fm.kind === 'smoke' ? 'smoke' : fm.kind === 'illum' ? 'illum' : 'artillery';
+    const gun = world.support[pool].name;
 
     if (!fm._shotCalled && world.now >= fm.firstImpactAt - 22) {
       fm._shotCalled = true;
       const eta = Math.max(1, Math.round(fm.firstImpactAt - world.now));
+      const how =
+        fm.kind === 'smoke' ? '発煙' : fm.kind === 'illum' ? '照明' : `${FIRE_MODES[fm.mode]?.label ?? '着発'}`;
       enqueue(world, {
         from: gun,
         fromId: null,
         kind: 'firecontrol',
-        text: `こちら${gun}、撃った。${toGrid(fm.x, fm.y)}、弾着まで約${eta}秒。どうぞ`,
+        text: `こちら${gun}、撃った。${toGrid(fm.x, fm.y)}、${how}、弾着まで約${eta}秒。どうぞ`,
         priority: PRI.PRIORITY,
         meta: { grid: toGrid(fm.x, fm.y), missionId: fm.id, observedAt: world.now },
         composedAt: world.now,
         duration: 4,
       });
+    }
+
+    // 観測員が弾を引っ張ったら、そのことも無線に乗る
+    if (fm._walkEvent && !fm._walkReported) {
+      fm._walkReported = true;
+      const o = fm._walkEvent.observer;
+      if (o.alive && o.commsOk) {
+        enqueue(world, {
+          from: o.callsign,
+          fromId: o.id,
+          kind: 'spot',
+          text:
+            `こちら${o.callsign}、弾着を見ている。修正 ─ ${fm._walkEvent.grid}。` +
+            `そのまま続けてくれ。`,
+          priority: PRI.PRIORITY,
+          meta: { unitId: o.id, grid: fm._walkEvent.grid, observedAt: world.now },
+          composedAt: world.now,
+          duration: 4,
+        });
+      }
     }
 
     if (!fm._splashCalled && world.now >= fm.firstImpactAt - 5) {
@@ -334,7 +455,7 @@ function reportAmmoState(world) {
 function reportFireMissions(world) {
   for (const fm of world.fireMissions) {
     if (!fm.done || fm._reported) continue;
-    if (fm.side !== 'friend') {
+    if (fm.side !== 'friend' || fm.kind === 'illum') {
       fm._reported = true;
       continue;
     }

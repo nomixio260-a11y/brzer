@@ -5,14 +5,17 @@
 // 「機動」「火力」「交戦規定」「情報」── 指揮官の頭の中もこの順で動く。
 
 import {
-  VERBS, VERB_GROUPS, MODIFIERS, ROE, TRIGGERS,
+  VERBS, VERB_GROUPS, MODIFIERS, ROE, TRIGGERS, FIRE_MODES, FIRE_MODE_ORDER,
   getRosterOrder, getSupport, getRoeOf, getHeldOrder, getSimTime, getTrains, isLongBattle,
   getControlLines, toGrid, formatClock, issueOrder,
 } from '../state.js';
 
 // 部隊ごとに出せる命令は違う。砲兵に「突撃せよ」とは言えない。
 const VERBS_BY_UNIT = {
-  TH: ['fire_mission', 'smoke', 'register', 'resupply', 'sitrep', 'ammo_check'],
+  TH: [
+    'fire_mission', 'smoke', 'illum', 'register', 'check_fire',
+    'move', 'resupply', 'sitrep', 'ammo_check',
+  ],
   EG: ['recon', 'move', 'observe', 'sitrep'],
   // 段列は運ぶのが仕事。補給先はその部隊を選んで「補給要請」を出す。
   LD: ['move', 'hold', 'withdraw', 'sitrep'],
@@ -32,6 +35,31 @@ const TRIGGER_ORDER = ['now', 'on_contact', 'on_pressure', 'on_line', 'at_time']
 // 予令を渡せない命令。今すぐ聞きたいことを「後で」と言っても仕方がない。
 const NO_TRIGGER = new Set(['sitrep', 'ammo_check', 'roe_hold_fast', 'roe_standard', 'roe_elastic']);
 
+// 態勢を選んでも意味がない命令
+const NO_MODS = new Set([
+  'sitrep', 'ammo_check', 'smoke', 'illum', 'register', 'check_fire',
+  'hold', 'hold_fire', 'free_fire', 'roe_hold_fast', 'roe_standard', 'roe_elastic',
+  'rest', 'stand_to', 'resupply',
+]);
+
+/**
+ * 「態勢」の行は、曲射の要請のときだけ「射撃要領」に化ける。
+ * 行を増やさないのは、画面を狭くしないためである ―
+ * 指揮官が一度に見るべきものは、そう多くない。
+ */
+function modSetFor(panel) {
+  if (panel.verb === 'fire_mission') {
+    return {
+      key: 'fire',
+      items: FIRE_MODE_ORDER.map((k) => ({ key: k, label: FIRE_MODES[k].label, title: FIRE_MODES[k].note })),
+    };
+  }
+  return {
+    key: 'posture',
+    items: MOD_ORDER.map((k) => ({ key: k, label: MODIFIERS[k], title: '' })),
+  };
+}
+
 export function createOrderPanel(dom, game, hooks) {
   const panel = {
     game,
@@ -41,6 +69,7 @@ export function createOrderPanel(dom, game, hooks) {
     group: 'maneuver',
     verb: null,
     modifier: 'normal',
+    fireMode: 'impact',
     trigger: 'now',
     triggerAt: null,
     lineId: null,
@@ -78,8 +107,9 @@ export function createOrderPanel(dom, game, hooks) {
 
   dom.mods.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-mod]');
-    if (!b) return;
-    panel.modifier = b.dataset.mod;
+    if (!b || b.disabled) return;
+    if (dom.mods.dataset.set === 'fire') panel.fireMode = b.dataset.mod;
+    else panel.modifier = b.dataset.mod;
     refresh(panel);
   });
 
@@ -124,9 +154,11 @@ export function selectUnit(panel, unitId) {
   if (panel.unitId !== unitId) {
     panel.verb = null;
     clearLegs(panel);
-    // その部隊に出せる命令が無い分類を選んだままにしない
+    // その部隊にとって薄い分類を選んだままにしない。
+    // 砲兵を選んで「機動」に移動しか出ていない、という画面は役に立たない ─
+    // その部隊が本来やることの分類へ寄せる。
     const allowed = allowedVerbs(panel, unitId);
-    if (!allowed.some((v) => VERBS[v].group === panel.group)) {
+    if (allowed.filter((v) => VERBS[v].group === panel.group).length < 2) {
       panel.group = VERBS[allowed[0]]?.group ?? 'maneuver';
     }
   }
@@ -220,7 +252,8 @@ function send(panel) {
     x: spec.needsTarget ? last.x : null,
     y: spec.needsTarget ? last.y : null,
     legs: spec.multi && panel.legs.length > 1 ? panel.legs.slice() : null,
-    modifier: panel.modifier,
+    // 曲射の要請では、この枠が運ぶのは態勢ではなく射撃要領である
+    modifier: panel.verb === 'fire_mission' ? panel.fireMode : panel.modifier,
     trigger: NO_TRIGGER.has(panel.verb) ? 'now' : panel.trigger,
     triggerAt: panel.triggerAt,
     lineId: panel.trigger === 'on_line' ? panel.lineId : null,
@@ -302,23 +335,26 @@ export function refresh(panel, status) {
     b.classList.toggle('is-standing', !!roe && panel.unitId && getRoeOf(game, panel.unitId) === roe);
   }
 
-  // --- 態勢 ---------------------------------------------------------
-  if (!dom.mods.childElementCount) {
-    for (const m of MOD_ORDER) {
+  // --- 態勢／射撃要領 -------------------------------------------------
+  const modSet = modSetFor(panel);
+  if (dom.mods.dataset.set !== modSet.key) {
+    dom.mods.dataset.set = modSet.key;
+    dom.mods.innerHTML = '';
+    for (const it of modSet.items) {
       const b = document.createElement('button');
       b.className = 'tool';
-      b.dataset.mod = m;
-      b.textContent = MODIFIERS[m];
+      b.dataset.mod = it.key;
+      b.textContent = it.label;
+      if (it.title) b.title = it.title;
       dom.mods.appendChild(b);
     }
   }
-  const modsUseful =
-    panel.verb &&
-    !['sitrep', 'ammo_check', 'fire_mission', 'smoke', 'register', 'hold', 'hold_fire', 'free_fire',
-      'roe_hold_fast', 'roe_standard', 'roe_elastic'].includes(panel.verb);
+  const isFireSet = modSet.key === 'fire';
+  const modsUseful = !!panel.verb && (isFireSet || !NO_MODS.has(panel.verb));
+  const currentMod = isFireSet ? panel.fireMode : panel.modifier;
   dom.mods.classList.toggle('is-dim', !modsUseful);
   for (const b of dom.mods.querySelectorAll('button')) {
-    b.classList.toggle('is-on', b.dataset.mod === panel.modifier && modsUseful);
+    b.classList.toggle('is-on', b.dataset.mod === currentMod && modsUseful);
     b.disabled = !modsUseful;
   }
 
@@ -420,9 +456,15 @@ export function refresh(panel, status) {
           trains.busyWith ? `・${trains.busyWith}へ運搬中` : ''
         }。`
       : '';
+    const rounds = (n) => (s.unlimited ? '∞' : n);
     dom.status.textContent =
       (panel.unitId === 'TH'
-        ? `ソーン：砲弾${s.artillery}発、発煙${s.smoke}発。命令を選べ。`
+        ? `ソーン：砲弾${rounds(s.artillery)}・発煙${rounds(s.smoke)}・照明${rounds(s.illum)}。` +
+          (!s.gunAlive
+            ? '砲は沈黙している。'
+            : s.layingIn > 0
+              ? `陣地変換中 ─ あと約${s.layingIn}秒で撃てる。`
+              : '命令を選べ。')
         : panel.unitId === 'LD'
           ? '段列。運ぶのが仕事である。補給は受け取る側の部隊に「補給要請」を出す。'
           : `${ROE[getRoeOf(game, panel.unitId)].label}下。命令を選べ。`) + heldNote + trainsNote;
@@ -439,6 +481,8 @@ export function refresh(panel, status) {
   } else if (VERBS[panel.verb].needsTarget && !panel.legs.length) {
     dom.status.textContent = '地図を叩いて目標を指定せよ。';
     dom.status.classList.add('is-warn');
+  } else if (panel.verb === 'fire_mission') {
+    dom.status.textContent = `${FIRE_MODES[panel.fireMode].label} ─ ${FIRE_MODES[panel.fireMode].note}`;
   } else if (VERBS[panel.verb].multi && panel.legs.length) {
     dom.status.textContent =
       panel.legs.length < 5
