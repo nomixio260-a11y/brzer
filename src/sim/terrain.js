@@ -269,6 +269,9 @@ export function generateTerrain(seed = 20260726) {
     ford: { x: FORD_X, y: riverCenterY(FORD_X) },
     hills: HILLS,
     towns: TOWNS,
+    // 描画側がベクタとして道路と河川をなぞれるように残しておく
+    roads: [mainRoad, lateralRoad, northRoad],
+    riverHalfWidth: RIVER_HALF_WIDTH,
   };
 
   return terrain;

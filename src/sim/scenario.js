@@ -6,6 +6,12 @@ import { riverCenterY } from './terrain.js';
 const T0 = parseClock('0700');
 const TEND = parseClock('0900');
 
+// 地名は地形から引く。手で書くと地形をいじった瞬間に嘘になる。
+const BRIDGE_X = 2200;
+const FORD_X = 4180;
+export const BRIDGE_GRID = toGrid(BRIDGE_X, riverCenterY(BRIDGE_X));
+export const FORD_GRID = toGrid(FORD_X, riverCenterY(FORD_X));
+
 export const MISSION = Object.freeze({
   id: 'bridge_hold',
   title: '橋梁死守',
@@ -21,7 +27,7 @@ export const MISSION = Object.freeze({
       'ヴォルネ川に架かる唯一の橋梁が敵の主攻正面にある。橋を渡られれば、後方の第2大隊の側面が開く。' +
       '敵は昨夜のうちに北岸に前進しており、払暁からの攻撃が予期される。',
     mission:
-      '0900に到着する増援部隊が展開を終えるまで、橋梁 F5 を確保せよ。' +
+      `0900に到着する増援部隊が展開を終えるまで、橋梁 ${BRIDGE_GRID} を確保せよ。` +
       '橋の南岸を敵に渡らせてはならない。',
     execution:
       '貴官は指揮所から出られない。前線は見えない。地図と無線だけが判断材料である。' +
@@ -29,13 +35,13 @@ export const MISSION = Object.freeze({
     notes: [
       '砲兵「ソーン」は12発しか持たない。撃つ場所は貴官が決める。',
       '砲弾は敵味方を区別しない。マーカーが間違っていれば、味方の上に落ちる。',
-      '東（K5付近）に浅瀬がある。渡れるのは橋だけではない。',
+      `東（${FORD_GRID}付近）に浅瀬がある。渡れるのは橋だけではない。`,
       '無線は同時に一人しか使えない。聞きすぎれば、肝心の報告が遅れる。',
     ],
   },
 
   objectives: [
-    { id: 'hold_bridge', text: '0900まで橋梁 F5 を確保する', primary: true },
+    { id: 'hold_bridge', text: `0900まで橋梁 ${BRIDGE_GRID} を確保する`, primary: true },
     { id: 'keep_force', text: '2個分隊以上を戦闘可能な状態で維持する', primary: true },
     { id: 'civilians', text: '民間車列を安全に通過させる', primary: false },
   ],

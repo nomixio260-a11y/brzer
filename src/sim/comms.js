@@ -1,8 +1,9 @@
 // 無線ネット。指揮官が得られる情報は全てここを通る。
 // 「一度に喋れるのは一人だけ」「遅れる」「途切れる」「聞こえない」を作るための層。
 
-import { clamp, dist } from '../util.js';
+import { clamp, dist, toGrid } from '../util.js';
 import { lineOfSight } from './terrain.js';
+import { moraleJa, stateJa, strengthJa } from './units.js';
 
 export const PRI = Object.freeze({
   ROUTINE: 0,
@@ -30,6 +31,24 @@ export function createRadio() {
  */
 export function enqueue(world, tx) {
   const radio = world.radio;
+
+  // 送信時点での「その部隊自身の様子」を添える。
+  // 指揮官の手元にある部隊一覧は、この断片だけを積み上げて作られる。
+  // ＝ 黙っている部隊の情報は、黙った時点で止まったままになる。
+  const sender = tx.fromId ? world.unitsById.get(tx.fromId) : null;
+  const meta = { ...(tx.meta ?? {}) };
+  if (sender && sender.side === 'friend') {
+    meta.self = {
+      grid: toGrid(sender.x, sender.y),
+      strength: strengthJa(sender),
+      strengthRatio: sender.strength / sender.maxStrength,
+      morale: moraleJa(sender.morale),
+      state: stateJa(sender),
+      posture: sender.posture,
+      ammoRatio: sender.ammo / (sender.tpl.maxAmmo || 100),
+    };
+  }
+
   const entry = {
     id: `TX${txSeq++}`,
     from: tx.from ?? '不明局',
@@ -37,7 +56,7 @@ export function enqueue(world, tx) {
     kind: tx.kind ?? 'report',
     text: tx.text,
     priority: tx.priority ?? PRI.ROUTINE,
-    meta: tx.meta ?? {},
+    meta,
     composedAt: tx.composedAt ?? world.now,
     outbound: !!tx.outbound, // 指揮官 → 部隊
     duration: tx.duration ?? 5 + tx.text.length * 0.16,

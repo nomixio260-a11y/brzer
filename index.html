@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BRZER ─ 橋梁死守</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230d0f10'/%3E%3Cpath d='M4 20h24M10 12v16M22 12v16' stroke='%23e0a33c' stroke-width='2.5' fill='none'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+
+<!-- ============================= ブリーフィング ============================= -->
+<section id="view-briefing" class="view is-active">
+  <div class="briefing">
+    <header class="briefing__head">
+      <div class="briefing__eyebrow">機密 ─ 第3中隊戦闘団 指揮所</div>
+      <h1 class="briefing__title">橋梁死守</h1>
+      <div class="briefing__sub">ヴォルネ川 ／ 0700 ─ 0900</div>
+    </header>
+
+    <div class="briefing__body">
+      <section class="brief-block">
+        <h2>状況</h2>
+        <p id="brief-situation"></p>
+      </section>
+      <section class="brief-block">
+        <h2>任務</h2>
+        <p id="brief-mission"></p>
+      </section>
+      <section class="brief-block">
+        <h2>実施要領</h2>
+        <p id="brief-execution"></p>
+      </section>
+      <section class="brief-block">
+        <h2>留意事項</h2>
+        <ul id="brief-notes"></ul>
+      </section>
+      <section class="brief-block">
+        <h2>指揮下の部隊</h2>
+        <ul id="brief-oob" class="oob"></ul>
+      </section>
+      <section class="brief-block brief-block--howto">
+        <h2>操作</h2>
+        <ul>
+          <li><b>地図をクリック</b> ─ 選択中のマーカーを置く（無線で聞いた敵の位置は、自分で書き込む）</li>
+          <li><b>マーカーをドラッグ</b> ─ 動かす ／ <b>右クリック</b> ─ 消す</li>
+          <li><b>命令</b> ─ 右下で 部隊 → 命令 → 目標(地図をクリック) → 送信</li>
+          <li><b>スペース</b> ─ 一時停止 ／ <b>1 2 3</b> ─ 速度 ／ <b>M</b> ─ マーカー種別の切替</li>
+        </ul>
+      </section>
+    </div>
+
+    <footer class="briefing__foot">
+      <p class="briefing__warn">貴官は前線を見ることができない。地図と無線だけが判断材料である。</p>
+      <button id="btn-start" class="btn btn--primary">配置につく</button>
+    </footer>
+  </div>
+</section>
+
+<!-- ================================ ゲーム ================================ -->
+<section id="view-game" class="view">
+  <header class="topbar">
+    <div class="topbar__clock">
+      <span id="clock" class="clock">0700</span>
+      <span id="clock-phase" class="clock__phase">静穏</span>
+    </div>
+
+    <div class="speed" role="group" aria-label="時間の速さ">
+      <button class="speed__btn" data-speed="0" title="一時停止 (Space)">❚❚</button>
+      <button class="speed__btn is-on" data-speed="1" title="標準 (1)">▶</button>
+      <button class="speed__btn" data-speed="2" title="2倍 (2)">▶▶</button>
+      <button class="speed__btn" data-speed="4" title="4倍 (3)">▶▶▶</button>
+    </div>
+
+    <div class="radiostate">
+      <span class="radiostate__label">無線</span>
+      <span id="radio-net" class="radiostate__net">空き</span>
+      <span id="radio-queue" class="radiostate__queue"></span>
+      <span id="radio-jam" class="radiostate__jam" hidden>妨害</span>
+    </div>
+
+    <div class="support">
+      <span class="support__item">砲弾 <b id="ammo-he">12</b></span>
+      <span class="support__item">発煙 <b id="ammo-smoke">6</b></span>
+    </div>
+
+    <div class="objective" id="objective-line"></div>
+
+    <button id="btn-sound" class="iconbtn" title="音">♪</button>
+  </header>
+
+  <main class="layout">
+    <div class="mapwrap">
+      <canvas id="map" class="map"></canvas>
+
+      <div class="maptools">
+        <div class="maptools__group" id="marker-tools"></div>
+        <div class="maptools__group" id="confidence-tools"></div>
+        <button id="btn-clear-markers" class="tool tool--wide" title="全マーカーを消す">全消去</button>
+      </div>
+
+      <div id="map-hint" class="maphint" hidden></div>
+      <div id="marker-editor" class="markeredit" hidden>
+        <input id="marker-label" type="text" maxlength="18" placeholder="ラベル">
+        <button id="marker-delete" class="tool" title="削除">削除</button>
+      </div>
+    </div>
+
+    <aside class="side">
+      <section class="panel panel--roster">
+        <h2 class="panel__title">部隊 <span class="panel__hint">最後に聞いた内容</span></h2>
+        <ul id="roster" class="roster"></ul>
+      </section>
+
+      <section class="panel panel--log">
+        <h2 class="panel__title">無線 <span class="panel__hint" id="log-filter-hint">全て</span></h2>
+        <ul id="radiolog" class="radiolog"></ul>
+      </section>
+
+      <section class="panel panel--order">
+        <h2 class="panel__title">命令</h2>
+        <div class="order">
+          <div class="order__row" id="order-units"></div>
+          <div class="order__row" id="order-verbs"></div>
+          <div class="order__row order__row--tail">
+            <div class="order__mods" id="order-mods"></div>
+            <div class="order__target">
+              目標 <b id="order-grid">──</b>
+            </div>
+            <button id="order-send" class="btn btn--send" disabled>送信</button>
+          </div>
+          <p id="order-status" class="order__status">部隊を選べ。</p>
+        </div>
+      </section>
+    </aside>
+  </main>
+</section>
+
+<!-- ================================ 講評 ================================ -->
+<section id="view-debrief" class="view">
+  <div class="debrief">
+    <header class="debrief__head">
+      <div id="debrief-verdict" class="debrief__verdict">─</div>
+      <p id="debrief-reason" class="debrief__reason"></p>
+    </header>
+
+    <div class="debrief__body">
+      <section class="debrief__mapblock">
+        <h2>貴官が見ていた戦場と、実際の戦場</h2>
+        <canvas id="truthmap" class="truthmap"></canvas>
+        <div class="legend">
+          <span><i class="legend__swatch legend__swatch--marker"></i>貴官のマーカー</span>
+          <span><i class="legend__swatch legend__swatch--enemy"></i>実際の敵</span>
+          <span><i class="legend__swatch legend__swatch--friend"></i>実際の友軍</span>
+          <span><i class="legend__swatch legend__swatch--dead"></i>戦闘不能</span>
+        </div>
+      </section>
+
+      <section class="debrief__stats">
+        <h2>戦闘後報告</h2>
+        <dl id="debrief-stats" class="stats"></dl>
+        <h2>各部隊の最期</h2>
+        <ul id="debrief-units" class="unitfate"></ul>
+      </section>
+    </div>
+
+    <footer class="debrief__foot">
+      <button id="btn-again" class="btn btn--primary">もう一度戦う</button>
+    </footer>
+  </div>
+</section>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

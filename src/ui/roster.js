@@ -1,0 +1,85 @@
+// 部隊一覧。
+// ここに出るのは「最後に無線で聞いた内容」だけ。今どうなっているかは誰も知らない。
+
+import { getRoster, getSimTime } from '../state.js';
+import { formatAgo, formatClock } from '../util.js';
+
+export function createRoster(el, game, onSelect) {
+  const view = { el, game, onSelect, selectedId: null, _sig: '' };
+  el.addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-unit]');
+    if (!li) return;
+    view.selectedId = li.dataset.unit;
+    onSelect(li.dataset.unit);
+  });
+  return view;
+}
+
+export function renderRoster(view) {
+  const { game } = view;
+  const now = getSimTime(game);
+  const rows = getRoster(game);
+
+  // 変化がなければ触らない（毎フレーム DOM を作り直さない）
+  const sig = rows
+    .map((r) => `${r.unitId}:${r.heard?.heardAt ?? 0}:${r.heard?.pendingOrder?.at ?? 0}`)
+    .join('|') + `:${view.selectedId}:${Math.floor(now / 15)}`;
+  if (sig === view._sig) return;
+  view._sig = sig;
+
+  view.el.innerHTML = '';
+  for (const row of rows) {
+    const li = document.createElement('li');
+    li.dataset.unit = row.unitId;
+
+    const heard = row.heard;
+    const silentFor = row.silentFor;
+
+    if (view.selectedId === row.unitId) li.classList.add('is-selected');
+    if (!heard) li.classList.add('is-silent');
+    else {
+      if (silentFor > 420) li.classList.add('is-stale');
+      if (heard.strengthRatio != null && heard.strengthRatio <= 0.55) li.classList.add('is-hurt');
+      if (heard.strengthRatio != null && heard.strengthRatio <= 0.3) li.classList.add('is-critical');
+    }
+
+    const top = document.createElement('div');
+    top.className = 'roster__top';
+    top.innerHTML =
+      `<span class="roster__cs">${row.callsign}</span>` +
+      `<span class="roster__grid">${heard ? heard.grid : '──'}</span>` +
+      `<span class="roster__age">${heard ? formatClock(heard.heardAt) : '交信なし'}</span>`;
+    li.appendChild(top);
+
+    const line = document.createElement('div');
+    line.className = 'roster__line';
+    if (!heard) {
+      line.innerHTML = `<span class="roster__unknown">${row.typeLabel} ・${row.role}</span>`;
+    } else {
+      const parts = [heard.strength, heard.morale, heard.state];
+      if (heard.ammoRatio != null && heard.ammoRatio < 0.35) parts.push('弾薬僅少');
+      line.textContent = parts.join(' ／ ');
+      if (silentFor > 300) {
+        const q = document.createElement('span');
+        q.className = 'roster__pending';
+        q.textContent = ` ・${formatAgo(silentFor)}から音沙汰なし`;
+        line.appendChild(q);
+      }
+    }
+    li.appendChild(line);
+
+    if (heard?.pendingOrder && now - heard.pendingOrder.at < 240) {
+      const p = document.createElement('div');
+      p.className = 'roster__pending';
+      p.textContent = `→ ${heard.pendingOrder.verb} ${heard.pendingOrder.grid}（送信済み）`;
+      li.appendChild(p);
+    }
+
+    view.el.appendChild(li);
+  }
+}
+
+export function selectInRoster(view, unitId) {
+  view.selectedId = unitId;
+  view._sig = '';
+}
