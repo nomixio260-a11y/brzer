@@ -363,42 +363,55 @@ function stepEnemyIndirect(world) {
  */
 function reportGunSound(world, gun) {
   if (!gun) return;
-  for (const o of world.units) {
-    if (o.side !== 'friend' || !o.alive || !o.commsOk || !o.tpl.radio) continue;
-    if (o.tpl.flying) continue;
-    const d = dist(o.x, o.y, gun.x, gun.y);
-    if (d > 3400) continue;
-    if (world.now - (o._gunSoundAt ?? -Infinity) < 300) continue;
-    o._gunSoundAt = world.now;
 
-    // 音だけで出せる精度には限りがある。遠いほど、大きく外す。
-    const err = 130 + d * 0.15;
-    const gx = gun.x + world.rng.gauss(0, err);
-    const gy = gun.y + world.rng.gauss(0, err);
-    const dir = compassJa(bearing(o.x, o.y, gx, gy));
+  // その一斉射を聞き取れた部隊。二方向から聞ければ交会がとれる ―
+  // 音源標定が一点に絞れるのは、そこに耳が二つ以上あるときだけである。
+  const hearers = world.units.filter(
+    (o) =>
+      o.side === 'friend' && o.alive && o.commsOk && o.tpl.radio > 0 && !o.tpl.flying &&
+      dist(o.x, o.y, gun.x, gun.y) <= 3400
+  );
+  if (!hearers.length) return;
 
-    enqueue(world, {
-      from: o.callsign,
-      fromId: o.id,
-      kind: 'contact',
-      text:
-        `こちら${o.callsign}、砲声を聞いた。${dir}、${toGrid(gx, gy)}付近と見る。` +
-        `敵の迫だ ─ 潰せるなら潰してほしい。`,
-      priority: PRI.PRIORITY,
-      meta: {
-        unitId: o.id,
-        grid: toGrid(gx, gy),
-        reportedX: gx,
-        reportedY: gy,
-        classified: 'mortar',
-        quality: 0.35,
-        observedAt: world.now,
-      },
-      composedAt: world.now,
-      duration: 4.5,
-    });
-    return; // 一人が言えば足りる
-  }
+  const fresh = hearers.filter((o) => world.now - (o._gunSoundAt ?? -Infinity) >= 300);
+  if (!fresh.length) return;
+
+  // いちばん近い者が読み上げる。近いほど、聞き取りは確かである。
+  const o = fresh.reduce((best, u) =>
+    dist(u.x, u.y, gun.x, gun.y) < dist(best.x, best.y, gun.x, gun.y) ? u : best
+  );
+  for (const h of hearers) h._gunSoundAt = world.now;
+
+  const d = dist(o.x, o.y, gun.x, gun.y);
+  const cross = hearers.length >= 2;
+  // 一方向からでは「あちらの方角」までしか分からない。交会がとれれば点になる。
+  const err = (80 + d * 0.05) * (cross ? 0.5 : 1);
+  const gx = gun.x + world.rng.gauss(0, err);
+  const gy = gun.y + world.rng.gauss(0, err);
+  const dir = compassJa(bearing(o.x, o.y, gx, gy));
+
+  enqueue(world, {
+    from: o.callsign,
+    fromId: o.id,
+    kind: 'contact',
+    text: cross
+      ? `こちら${o.callsign}、砲声。${dir}、${toGrid(gx, gy)}。` +
+        `二方向からの交会だ、位置は確かだと思う。敵の迫 ─ 潰せるなら潰してほしい。`
+      : `こちら${o.callsign}、砲声を聞いた。${dir}、${toGrid(gx, gy)}付近と見る。` +
+        `一方向からなので確かではない。敵の迫だ。`,
+    priority: PRI.PRIORITY,
+    meta: {
+      unitId: o.id,
+      grid: toGrid(gx, gy),
+      reportedX: gx,
+      reportedY: gy,
+      classified: 'mortar',
+      quality: cross ? 0.65 : 0.3,
+      observedAt: world.now,
+    },
+    composedAt: world.now,
+    duration: 5,
+  });
 }
 
 /* ------------------------------------------------------------------ */

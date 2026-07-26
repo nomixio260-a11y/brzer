@@ -588,6 +588,32 @@ try {
   } catch { /* 下の check で落ちる */ }
   check('概定射点が登録される', registered);
 
+  // 射撃要領。砲撃要請のときだけ「態勢」の行が化ける。
+  await page.evaluate(() => { window.__brzer.game.running = false; });
+  await page.click('#order-verbs button[data-verb="fire_mission"]');
+  const modes = await page.$$eval('#order-mods button', (bs) => bs.map((b) => b.dataset.mod));
+  check('射撃要領が選べる',
+    ['impact', 'airburst', 'sustained', 'salvo'].every((m) => modes.includes(m)), modes.join(','));
+  await page.click('#order-mods button[data-mod="airburst"]');
+  check('先に目標を促す', (await page.textContent('#order-status')).includes('目標'),
+    await page.textContent('#order-status'));
+  await page.mouse.click(box.x + box.width * 0.46, box.y + box.height * 0.36);
+  check('要領の説明が出る', (await page.textContent('#order-status')).includes('掩体'),
+    await page.textContent('#order-status'));
+  await page.click('#order-send');
+  await page.waitForTimeout(300);
+  check('曳火で射撃要請が出る', await page.evaluate(() =>
+    window.__brzer.game.world.orders.some((o) => o.verb === 'fire_mission' && o.modifier === 'airburst')));
+
+  // 態勢の行は、機動の命令に戻ると態勢に戻る
+  await page.click('#order-units button[data-unit="H1"]');
+  await page.click('#order-groups button[data-group="maneuver"]');
+  await page.click('#order-verbs button[data-verb="move"]');
+  const posts = await page.$$eval('#order-mods button', (bs) => bs.map((b) => b.dataset.mod));
+  check('機動では態勢に戻る', posts.includes('rapid') && !posts.includes('airburst'), posts.join(','));
+  // 止めたまま次へ渡さない（この先で一時停止そのものを検査するため）
+  await page.evaluate(() => { window.__brzer.game.running = true; });
+
   console.log('\n== 操作 ==');
   await page.keyboard.press('Space');
   check('スペースで止まる', (await page.evaluate(() => window.__brzer.game.running)) === false);

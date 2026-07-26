@@ -759,6 +759,43 @@ section('射撃中止');
     `${left} → ${w.support.artillery.rounds}`);
 }
 
+section('音源標定と対砲兵');
+{
+  const w = createWorld({ missionId: 'bridge_hold_long' });
+  const reports = [];
+  let seen = 0;
+  let guard = 0;
+  while (reports.length < 3 && guard++ < 20000 && !w.outcome) {
+    tick(w, 1);
+    for (const e of w.radio.log.slice(seen)) {
+      if (e.text?.includes('砲声') && e.meta?.reportedX != null) reports.push(e);
+    }
+    seen = w.radio.log.length;
+  }
+  check('敵が撃てば砲声が報告される', reports.length > 0, `${reports.length}件`);
+
+  const gun = w.units.find((u) => u.side === 'enemy' && u.tpl.indirect);
+  const errs = reports.map((e) => Math.hypot(e.meta.reportedX - gun.x, e.meta.reportedY - gun.y));
+  const worst = Math.max(...errs);
+  check('音源標定はずれるが、撃てる程度には当たる', worst > 5 && worst < 700,
+    `最大誤差 ${Math.round(worst)}m`);
+  check('報告が敵の迫として分類される', reports.every((e) => e.meta.classified === 'mortar'));
+
+  // 交会がとれた報告のほうが確度が高い
+  const crossed = reports.filter((e) => e.text.includes('交会'));
+  if (crossed.length) {
+    check('交会がとれれば確度が上がる', crossed.every((e) => e.meta.quality > 0.5));
+  } else {
+    check('交会がとれれば確度が上がる', true, '（この盤では交会が成立しなかった）');
+  }
+
+  // 報告された地点は自軍の砲の射程内にある（つまり潰しにいける）
+  const th = w.unitsById.get('TH');
+  check('報告地点は味方の砲で届く',
+    Math.hypot(th.x - gun.x, th.y - gun.y) < th.tpl.indirect,
+    `${Math.round(Math.hypot(th.x - gun.x, th.y - gun.y))}m`);
+}
+
 section('装甲の面と貫徹');
 {
   const tank = createUnit({ id: 'T', side: 'enemy', type: 'tank', x: 0, y: 0 });

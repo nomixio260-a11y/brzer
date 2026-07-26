@@ -84,7 +84,6 @@ export function canDefeat(shooter, target, d) {
 
 /** 次弾までの残り秒 */
 export function reloadLeft(world, shooter) {
-  const period = RELOAD[shooter.type] ?? 12;
   return Math.max(0, (shooter._nextShotAt ?? -Infinity) - world.now);
 }
 
