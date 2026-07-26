@@ -2,8 +2,8 @@
 // DOM非依存 ― node からそのまま import してテストできる。
 
 import { Rng, toGrid, dist } from '../util.js';
-import { generateTerrain } from './terrain.js';
-import { createUnit, stepMovement, stepMorale, setDestination } from './units.js';
+import { generateTerrain, obstacleAt } from './terrain.js';
+import { createUnit, stepMovement, stepMorale, setDestination, applyDamage, applySuppression } from './units.js';
 import { stepPerception } from './perception.js';
 import { stepDirectFire, stepFireMissions } from './combat.js';
 import { createRadio, stepComms, stepCommsStatus, enqueue, PRI } from './comms.js';
@@ -15,6 +15,7 @@ import { stepFriendlyInitiative } from './friendlyAI.js';
 import { pruneSmoke } from './smoke.js';
 import { createTrains, stepLogistics, stepAttrition } from './logistics.js';
 import { stepFires, FIRE_MODES } from './fires.js';
+import { createCreative, reinforcementDef } from './creative.js';
 import { ASPECT_JA } from './armor.js';
 import { getMission, friendlyOrderOfBattle, timeline, evaluate } from './scenario.js';
 
@@ -84,6 +85,8 @@ export function createWorld(opts = {}) {
 
   world.enemyCommand = createEnemyCommand(world);
   world.trains = createTrains(mission);
+  // 演習モード。制約を外した盤 ─ 弾は減らず、部隊は呼べば来る。
+  world.creative = createCreative(opts.creative ?? {});
 
   for (const def of friendlyOrderOfBattle(mission)) {
     addUnit(world, def);
@@ -96,8 +99,36 @@ export function addUnit(world, def) {
   const u = createUnit(def);
   u.role = def.role;
   u.ai = def.ai ? structuredCloneSafe(def.ai) : null;
+  // 演習では味方は倒れない。ここで一括して掛けておく ―
+  // 途中で湧く増援にも同じ扱いが要るからである。
+  if (world.creative?.invulnerable && u.side === 'friend') u.invulnerable = true;
   world.units.push(u);
   world.unitsById.set(u.id, u);
+  return u;
+}
+
+/**
+ * 演習の増援。0コスト・即時・地図上の任意の点に。
+ * @returns {object|null} 生成された部隊
+ */
+export function spawnReinforcement(world, opts) {
+  const def = reinforcementDef(world, opts);
+  if (!def) return null;
+  const u = addUnit(world, def);
+  if (u.side === 'friend') {
+    world.radio.log.push({
+      id: `CRE${world.radio.log.length}`,
+      at: world.now,
+      from: '演習統裁',
+      kind: 'system',
+      priority: PRI.PRIORITY,
+      text: `${u.callsign}（${u.tpl.label}）が ${toGrid(u.x, u.y)} に到着。指揮下に入った。`,
+      garbled: false,
+      lost: false,
+      meta: { unitId: u.id, grid: toGrid(u.x, u.y) },
+      observedAt: world.now,
+    });
+  }
   return u;
 }
 
@@ -128,6 +159,7 @@ export function tick(world, dt = 1) {
   stepFriendlyInitiative(world, dt);
 
   for (const u of world.units) stepMovement(u, world.terrain, dt);
+  stepObstacles(world, dt);
 
   world.smokes = pruneSmoke(world.smokes, world.now);
   for (const u of world.units) {
@@ -207,6 +239,77 @@ function fireTimelineEvents(world) {
         break;
       default:
         break;
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 障害                                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 地雷原。
+ *
+ * 踏むのは動いているときだけである。伏せている部隊は踏まない ―
+ * だから地雷原の本当の効果は、そこで部隊を止めることであり、
+ * 止まったところに砲を落とすのが、障害と火力の組み合わせというものである。
+ */
+function stepObstacles(world, dt) {
+  for (const u of world.units) {
+    if (!u.alive || u.tpl.flying) continue;
+    const o = obstacleAt(world.terrain, u.x, u.y);
+    if (!o) continue;
+
+    // 敵が敷いた障害は、当たって初めて分かる。当たった部隊がそう言ってくる。
+    if (!o.known && u.side === 'friend' && u.commsOk && u.tpl.radio > 0 && !u._sawObstacle?.[o.id]) {
+      (u._sawObstacle ??= {})[o.id] = true;
+      enqueue(world, {
+        from: u.callsign,
+        fromId: u.id,
+        kind: 'contact',
+        text:
+          `こちら${u.callsign}、${toGrid(u.x, u.y)}に障害 ─ ${o.label}だ。` +
+          `敵が敷いている。まともに進めない、迂回するか処理する必要がある。`,
+        priority: PRI.FLASH,
+        meta: {
+          unitId: u.id,
+          grid: toGrid(u.x, u.y),
+          reportedX: o.x,
+          reportedY: o.y,
+          classified: 'obstacle',
+          quality: 0.85,
+          observedAt: world.now,
+        },
+        composedAt: world.now,
+        duration: 5,
+      });
+    }
+
+    if (o.kind !== 'mines' || !u.path.length) continue;
+
+    // 数分踏み進めば、どこかで1発を踏む勘定。
+    // 地雷原は壁ではない ─ 壁にしてしまうと、そこで戦闘が終わってしまう。
+    if (!world.rng.chance(0.005 * dt)) continue;
+    const lost = applyDamage(u, u.maxStrength * (u.tpl.armor > 0.3 ? 0.3 : 0.09), world.now, {});
+    applySuppression(u, 45);
+    u.path = [];
+    u.dest = null;
+    u._shelledAt = world.now;
+    if (u.tpl.armor > 0.3 && world.rng.chance(0.25)) u._immobile = true;
+
+    if (u.side === 'friend' && u.commsOk && u.tpl.radio > 0 && lost > 0) {
+      enqueue(world, {
+        from: u.callsign,
+        fromId: u.id,
+        kind: 'contact',
+        text:
+          `こちら${u.callsign}、地雷だ！${toGrid(u.x, u.y)}、地雷原に入った。` +
+          `これ以上は進めない、負傷者が出ている！`,
+        priority: PRI.FLASH,
+        meta: { unitId: u.id, grid: toGrid(u.x, u.y), observedAt: world.now },
+        composedAt: world.now,
+        duration: 5,
+      });
     }
   }
 }

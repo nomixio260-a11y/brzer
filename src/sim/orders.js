@@ -213,7 +213,7 @@ export function issueOrder(
   // 砲撃・煙幕・照明は砲兵に対する要請である。
   // 弾があるか、そもそも届くか ─ 指揮所の火力係はそれを知っている。
   if (VERBS[verb].indirect) {
-    if (verb !== 'register') {
+    if (verb !== 'register' && !world.creative?.unlimitedFires) {
       const pool = poolFor(world, verb);
       if (!pool || pool.rounds <= 0) {
         pushSystemMessage(world, `${u.callsign}: ${poolNameJa(verb)}が残っていない。要請には応じられない。`);
@@ -326,8 +326,11 @@ export function deliverOrders(world, delivered) {
 
     order.receivedAt = world.now;
     order.state = 'received';
-    // 受領して応答するまでの間（部隊が状況を見て判断する時間）
-    order.ackDueAt = world.now + 3 + (1 - u.skill) * 14 + world.rng.range(0, 8);
+    // 受領して応答するまでの間（部隊が状況を見て判断する時間）。
+    // 演習では待たせない ─ 手順を試すための盤だからである。
+    order.ackDueAt = world.creative?.instantRadio
+      ? world.now + 1
+      : world.now + 3 + (1 - u.skill) * 14 + world.rng.range(0, 8);
   }
 }
 
@@ -714,7 +717,8 @@ function beginExecution(world, u, order) {
       const pool = poolFor(world, order.verb);
       const mode = fireMode(order.verb === 'fire_mission' ? order.modifier : null);
       const want = kind === 'he' ? mode.rounds : kind === 'smoke' ? 4 : 2;
-      const rounds = Math.min(pool.rounds, want);
+      const unlimited = !!world.creative?.unlimitedFires;
+      const rounds = unlimited ? want : Math.min(pool.rounds, want);
 
       // 予令として抱えているうちに、弾を撃ち尽くしていることがある。
       // 砲が陣地変換していることも、射程から外れていることもある。
@@ -737,7 +741,7 @@ function beginExecution(world, u, order) {
         break;
       }
 
-      pool.rounds -= rounds;
+      if (!unlimited) pool.rounds -= rounds;
       // 概定射点の近くなら諸元が出ている。早く、正確に落ちる。
       const rp = nearestRegistration(world, order.x, order.y);
       const baseDelay =
@@ -787,9 +791,11 @@ function beginExecution(world, u, order) {
 
     case 'check_fire': {
       const res = checkFire(world, 'friend');
-      world.support.artillery.rounds += res.returned.he ?? 0;
-      world.support.smoke.rounds += res.returned.smoke ?? 0;
-      world.support.illum.rounds += res.returned.illum ?? 0;
+      if (!world.creative?.unlimitedFires) {
+        world.support.artillery.rounds += res.returned.he ?? 0;
+        world.support.smoke.rounds += res.returned.smoke ?? 0;
+        world.support.illum.rounds += res.returned.illum ?? 0;
+      }
       world.stats.checkFires = (world.stats.checkFires ?? 0) + 1;
       const back = (res.returned.he ?? 0) + (res.returned.smoke ?? 0) + (res.returned.illum ?? 0);
       enqueue(world, {

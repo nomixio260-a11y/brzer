@@ -64,7 +64,9 @@ export function enqueue(world, tx) {
     meta,
     composedAt: tx.composedAt ?? world.now,
     outbound: !!tx.outbound, // 指揮官 → 部隊
-    duration: tx.duration ?? 5 + tx.text.length * 0.16,
+    // 演習では網は空いている。命令の練習をしたいのに、
+    // 順番待ちで届かないのでは意味がない。
+    duration: world.creative?.instantRadio ? 0.4 : (tx.duration ?? 5 + tx.text.length * 0.16),
   };
   radio.queue.push(entry);
   return entry;
@@ -123,12 +125,14 @@ function finishTransmission(world, tx, delivered) {
   // 通信状態の判定。
   // 部隊→指揮所は送信元の、指揮所→部隊は受信側の電波状態で決まる。
   let quality = 1;
-  const counterpartId = tx.outbound ? tx.meta?.toId : tx.fromId;
-  const counterpart = counterpartId ? world.unitsById.get(counterpartId) : null;
-  if (counterpart) {
-    quality = commsQuality(world, counterpart);
+  if (!world.creative?.instantRadio) {
+    const counterpartId = tx.outbound ? tx.meta?.toId : tx.fromId;
+    const counterpart = counterpartId ? world.unitsById.get(counterpartId) : null;
+    if (counterpart) {
+      quality = commsQuality(world, counterpart);
+    }
+    quality *= 1 - radio.jamming * 0.85;
   }
-  quality *= 1 - radio.jamming * 0.85;
 
   if (quality < 0.18) {
     radio.droppedCount++;
@@ -223,7 +227,7 @@ export function stepCommsStatus(world, dt) {
   const events = [];
   for (const u of world.units) {
     if (!u.alive || u.side !== 'friend') continue;
-    const q = commsQuality(world, u);
+    const q = world.creative?.instantRadio ? 1 : commsQuality(world, u);
     const ok = q >= 0.18;
     if (ok !== u.commsOk) {
       u.commsOk = ok;

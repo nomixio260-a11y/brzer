@@ -22,6 +22,10 @@ import {
   MARKER_TYPES,
   CONFIDENCE,
   SKETCH_TOOLS,
+  isCreative,
+  getCreative,
+  creativeAction,
+  getRevealed,
 } from './state.js';
 
 import {
@@ -51,6 +55,8 @@ import {
 import { createHud, renderHud } from './ui/hud.js';
 import { showDebrief } from './ui/debrief.js';
 import { fromGrid, formatClock, WORLD } from './util.js';
+// 検査用の窓口。?debug=1 のときだけ window に出す（本番の遊びには一切関わらない）。
+import * as stateApi from './state.js';
 import * as audio from './audio.js';
 
 const $ = (id) => document.getElementById(id);
@@ -74,7 +80,7 @@ const tool = {
   sketchTool: 'arrow_enemy',
 };
 
-const options = { variable: false, voice: true };
+const options = { variable: false, voice: true, creative: false };
 
 const isNarrow = () =>
   window.matchMedia('(max-width: 900px), (pointer: coarse) and (max-width: 1100px)').matches;
@@ -200,13 +206,20 @@ function showView(id) {
 function startMission() {
   options.variable = $('opt-variable').checked;
   options.voice = $('opt-voice').checked;
+  options.creative = $('opt-creative').checked;
 
   // 敵の企図を変えるなら、下敷きに作った盤は捨てて作り直す
   game =
-    options.variable || !previewGame || previewGame.world.mission.id !== pickedMission
-      ? createGame({ variable: options.variable, missionId: pickedMission })
+    options.variable || options.creative || !previewGame ||
+    previewGame.world.mission.id !== pickedMission
+      ? createGame({
+          variable: options.variable,
+          missionId: pickedMission,
+          creative: options.creative,
+        })
       : previewGame;
   previewGame = null;
+  document.body.classList.toggle('is-drill', options.creative);
 
   showView('view-game');
   audio.initAudio();
@@ -285,6 +298,12 @@ function startMission() {
         if (isNarrow()) closeSheet();
         showToast('指揮所 発', order.text ?? '命令を送信した。応答を待て。', false);
       },
+      // 演習統裁の操作は無線を通らない。押した瞬間に盤が変わる。
+      onCreative: (verb, res) => {
+        audio.click();
+        $('btn-reveal').classList.toggle('is-on', !!getCreative(game)?.reveal);
+        showToast('演習統裁', res.text, false);
+      },
     }
   );
 
@@ -309,13 +328,17 @@ function startMission() {
     { onSpeed: setSpeed }
   );
 
+  // 演習の釦は演習の盤にしか出ない
+  $('btn-reveal').hidden = !isCreative(game);
+  $('btn-reveal').classList.toggle('is-on', !!getCreative(game)?.reveal);
+
   wireMap();
   wireTabs();
   wireSheet();
   wireZoom();
 
   if (new URLSearchParams(location.search).has('debug')) {
-    window.__brzer = { game, get mapView() { return mapView; }, tool };
+    window.__brzer = { game, get mapView() { return mapView; }, tool, state: stateApi };
   }
 
   // 半日の戦闘では、静穏を飛ばすための x8 を出す
@@ -453,6 +476,7 @@ const CLASSIFIED_TO_MARKER = {
   mech: 'enemy_mech',
   tank: 'enemy_armor',
   mortar: 'enemy_arty',
+  obstacle: 'obstacle',
   convoy: 'unknown',
   drone: 'unknown',
 };
@@ -912,6 +936,15 @@ $('btn-sound').addEventListener('click', () => {
   audio.setEnabled(on);
   $('btn-sound').classList.toggle('is-on', on);
   audio.resume();
+});
+
+// 演習の「真実の地図」。押した瞬間に霧が晴れる ─ 本編には無い釦である。
+$('btn-reveal').addEventListener('click', () => {
+  if (!game || !isCreative(game)) return;
+  const res = creativeAction(game, { action: 'reveal' });
+  $('btn-reveal').classList.toggle('is-on', !!getCreative(game)?.reveal);
+  showToast('演習統裁', res.text, false);
+  audio.click();
 });
 
 fillBriefing();

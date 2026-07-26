@@ -598,6 +598,22 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   border-color: #4a6b4e;
   color: #a8d8b2;
 }
+
+/* 演習統裁 ── 盤の外から手を入れる操作なので、色を変えて区別する */
+.tool--drill {
+  border-color: #6a4f7a;
+  color: #d6b4e6;
+}
+.tool--drill.is-on {
+  background: linear-gradient(#3a2846, #241a2c);
+  border-color: #8d68a4;
+  color: #f0dcff;
+}
+.iconbtn--drill { color: #b58ac8; }
+.iconbtn--drill.is-on { color: #f0c8ff; background: linear-gradient(#3a2846, #241a2c); }
+.setup__row--drill b { color: #d6b4e6; }
+/* 砲が撃てない状態（沈黙・陣地変換中）は数字を沈ませる */
+.support__item.is-cold { opacity: 0.5; }
 .tool.is-standing::before { content: '▪ '; }
 
 /* 戦闘の長さを選ぶ */

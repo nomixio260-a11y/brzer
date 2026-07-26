@@ -299,6 +299,81 @@ async function checkMissions() {
   await ctx.close();
 }
 
+/**
+ * 演習モード。
+ * 増援が呼べ、真実の地図が開き、そして本編ではそれが一切できないこと。
+ */
+async function checkCreative() {
+  const ctx = await browser.newContext({ viewport: { width: 1500, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message));
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+
+  await p.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+  await p.waitForFunction(() => document.querySelectorAll('#mission-pick button').length > 0,
+    null, { timeout: 10000 });
+
+  check('演習の選択肢がある', await p.isVisible('#opt-creative'));
+  await p.check('#opt-creative');
+  await p.click('#btn-start');
+  await p.waitForTimeout(1000);
+
+  check('真実の釦が出る', await p.isVisible('#btn-reveal'));
+  check('統裁が命令パネルに並ぶ', await p.isVisible('#order-units button[data-unit="CRE"]'));
+
+  // 統裁 → 増援要請 → 兵種 → 地図 → 送信
+  await p.click('#order-units button[data-unit="CRE"]');
+  check('演習の分類が出る', await p.isVisible('#order-groups button[data-group="drill"]'));
+  await p.click('#order-verbs button[data-verb="call_friend"]');
+  check('兵種を選ばせる', await p.isVisible('#order-mods button[data-mod="tank"]'));
+  await p.click('#order-mods button[data-mod="tank"]');
+
+  const box = await p.locator('#map').boundingBox();
+  await p.mouse.click(box.x + box.width * 0.45, box.y + box.height * 0.75);
+  const unitsBefore = await p.evaluate(() => window.__brzer.game.world.units.length);
+  await p.click('#order-send');
+  await p.waitForTimeout(300);
+  const after = await p.evaluate(() => ({
+    units: window.__brzer.game.world.units.length,
+    tanks: window.__brzer.game.world.units.filter((u) => u.side === 'friend' && u.type === 'tank').length,
+    buttons: [...document.querySelectorAll('#order-units button')].length,
+  }));
+  check('増援が盤に出る', after.units === unitsBefore + 1 && after.tanks === 1, JSON.stringify(after));
+  check('増援が命令パネルに増える', after.buttons > 7, `${after.buttons}`);
+
+  // 真実の地図
+  check('既定では伏せてある',
+    await p.evaluate(() => window.__brzer.state.getRevealed(window.__brzer.game) === null));
+  await p.click('#btn-reveal');
+  await p.waitForTimeout(200);
+  check('開くと真実が返る',
+    await p.evaluate(() => (window.__brzer.state.getRevealed(window.__brzer.game) ?? []).length > 3));
+  check('釦が点く', await p.$eval('#btn-reveal', (b) => b.classList.contains('is-on')));
+  await p.screenshot({ path: `${SHOTS}/07-creative.png` });
+
+  // 弾が減らない
+  const he = await p.textContent('#ammo-he');
+  check('弾数が無限表示になる', he.trim() === '∞', he);
+
+  check('演習でエラーが出ない', errs.length === 0, errs.slice(0, 3).join(' | '));
+  await ctx.close();
+
+  // 本編には演習の入口が無い
+  const ctx2 = await browser.newContext({ viewport: { width: 1500, height: 900 } });
+  const p2 = await ctx2.newPage();
+  await p2.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+  await p2.waitForFunction(() => document.querySelectorAll('#mission-pick button').length > 0,
+    null, { timeout: 10000 });
+  await p2.click('#btn-start');
+  await p2.waitForTimeout(900);
+  check('本編に真実の釦は出ない', !(await p2.isVisible('#btn-reveal')));
+  check('本編に統裁はいない', !(await p2.isVisible('#order-units button[data-unit="CRE"]')));
+  check('本編では真実が取れない',
+    await p2.evaluate(() => window.__brzer.state.getRevealed(window.__brzer.game) === null));
+  await ctx2.close();
+}
+
 try {
   console.log('\n== 起動 ==');
   await page.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
@@ -688,6 +763,9 @@ try {
 
   section('図幅とミッション');
   await checkMissions();
+
+  section('演習モード');
+  await checkCreative();
 } finally {
   await browser.close();
 }

@@ -1,7 +1,7 @@
 // ユニットのモデル・生成・移動・被害適用。DOM非依存。
 
 import { clamp, dist } from '../util.js';
-import { mobilityAt, coverAt } from './terrain.js';
+import { mobilityAt, coverAt, obstacleAt } from './terrain.js';
 import { findPath } from './pathfind.js';
 
 /**
@@ -79,6 +79,9 @@ export const POSTURES = Object.freeze({
   // 一度出れば二度と戻らない ── 陣地は持ち運べない。
   fortified: { label: '構築陣地', speed: 0.0, exposure: 0.3, coverBonus: 0.52, spot: 1.1 },
 });
+
+// 演習モードで味方が受ける損害の倍率。ほとんど倒れないが、無傷でもない。
+const INVULNERABLE_DAMAGE = 0.05;
 
 let nextId = 1;
 
@@ -168,7 +171,12 @@ export function currentSpeed(u, terrain) {
   if (mob <= 0) return u.tpl.speed * 0.18;
   const suppressionFactor = 1 - clamp(u.suppression / 130, 0, 0.85);
   const fatigueFactor = 1 - clamp(u.fatigue / 260, 0, 0.35);
-  return u.tpl.speed * mob * posture.speed * suppressionFactor * fatigueFactor;
+  // 障害。鉄条網は切らねば通れず、地雷原は一歩ずつ確かめて進むしかない。
+  // 障害の本当の効果は「止めること」ではなく「遅らせること」である ―
+  // 遅れたぶんだけ、こちらの火力がそこに集まる。
+  const obs = u.tpl.flying ? null : obstacleAt(terrain, u.x, u.y);
+  const obstacleFactor = obs ? (obs.kind === 'wire' ? 0.5 : 0.62) : 1;
+  return u.tpl.speed * mob * posture.speed * suppressionFactor * fatigueFactor * obstacleFactor;
 }
 
 /** 目的地を設定して経路を引く */
@@ -256,6 +264,9 @@ export function stepMovement(u, terrain, dt) {
  */
 export function applyDamage(u, amount, now, opts = {}) {
   if (!u.alive) return 0;
+  // 演習では、撃たれはするが倒れない。damage はゼロにしない ―
+  // 数字が全く動かないと、撃たれていることすら分からなくなる。
+  if (u.invulnerable) amount *= INVULNERABLE_DAMAGE;
   const before = u.strength;
   u.strength = Math.max(0, u.strength - amount);
   const lost = before - u.strength;
@@ -295,6 +306,8 @@ export function applySuppression(u, amount) {
 /** 毎ティックの回復・士気判定 */
 export function stepMorale(u, now, dt) {
   if (!u.alive) return;
+  // 演習の部隊は崩れない。崩れる部隊で機動を試しても仕方がない。
+  if (u.invulnerable && u.morale < 58) u.morale = 58;
 
   const underFire = now - u.lastHitAt < 12;
   if (!underFire) {

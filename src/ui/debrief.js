@@ -7,6 +7,7 @@ import {
   getMarkers,
   getTerrain,
   revealTruth,
+  isCreative,
   MARKER_TYPES,
   CONFIDENCE,
 } from '../state.js';
@@ -25,9 +26,11 @@ export function showDebrief(dom, game) {
   if (!outcome || !truth) return;
 
   const v = VERDICT[outcome.status] ?? VERDICT.defeat;
-  dom.verdict.textContent = v.label;
+  dom.verdict.textContent = isCreative(game) ? `${v.label}（演習）` : v.label;
   dom.verdict.className = `debrief__verdict ${v.cls}`;
-  dom.reason.textContent = outcome.reason;
+  dom.reason.textContent = isCreative(game)
+    ? `${outcome.reason} ── 演習モードの盤である。弾は減らず、味方はほとんど倒れなかった。記録には残らない。`
+    : outcome.reason;
 
   drawTruthMap(dom.canvas, game, truth);
   renderStats(dom.stats, outcome.score, truth);

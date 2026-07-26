@@ -2,7 +2,7 @@
 // 川があるので「橋か浅瀬を通らないと対岸に行けない」ことを経路探索で保証する。
 
 import { WORLD, clamp } from '../util.js';
-import { mobilityAt, terrainAt, T } from './terrain.js';
+import { mobilityAt, terrainAt, obstacleAt, T } from './terrain.js';
 
 const NAV_CELL = 100; // メートル
 const NAV_COLS = Math.ceil(WORLD.width / NAV_CELL);
@@ -33,7 +33,12 @@ function navGrid(terrain) {
         sum += m;
         count++;
       }
-      const avg = sum / count;
+      let avg = sum / count;
+      // 障害。通れなくはないが、通りたい場所ではない ―
+      // 迂回する余地があれば迂回する。隘路のように余地が無ければ、通る。
+      // これが無いと、部隊は障害へ真っ直ぐ突っ込んでそこで止まり続けた。
+      const obs = obstacleAt(terrain, x, y);
+      if (obs) avg *= obs.kind === 'mines' ? 0.14 : 0.3;
       // 1点でも水域なら通れない扱い（川の細い部分をすり抜けさせない）
       cost[r * NAV_COLS + c] = worst <= 0 ? 0 : avg;
     }

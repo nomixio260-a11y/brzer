@@ -5,13 +5,35 @@
 // 「機動」「火力」「交戦規定」「情報」── 指揮官の頭の中もこの順で動く。
 
 import {
-  VERBS, VERB_GROUPS, MODIFIERS, ROE, TRIGGERS, FIRE_MODES, FIRE_MODE_ORDER,
+  VERBS, VERB_GROUPS, MODIFIERS, ROE, TRIGGERS, FIRE_MODES, FIRE_MODE_ORDER, REINFORCEMENTS,
   getRosterOrder, getSupport, getRoeOf, getHeldOrder, getSimTime, getTrains, isLongBattle,
-  getControlLines, toGrid, formatClock, issueOrder,
+  getControlLines, toGrid, formatClock, issueOrder, isCreative, getCreative, creativeAction,
 } from '../state.js';
+
+/**
+ * 演習統裁の操作。
+ * 命令ではないので無線には乗らない ─ 盤の外から手を入れる行為である。
+ * それでも命令パネルに並べるのは、同じ手順で扱えたほうが迷わないからである。
+ */
+const CREATIVE_VERBS = Object.freeze({
+  call_friend: { label: '増援要請', group: 'drill', needsTarget: true, creative: true,
+    note: '呼べば来る。0コスト・即時。' },
+  place_enemy: { label: '敵配置', group: 'drill', needsTarget: true, creative: true,
+    note: '敵を置く。状況を自分で組み立てられる。' },
+  replenish: { label: '全部隊補充', group: 'drill', needsTarget: false, creative: true,
+    note: '兵力・弾薬・士気・疲労を戻す。' },
+  clear_enemy: { label: '敵を除く', group: 'drill', needsTarget: false, creative: true,
+    note: '盤上の敵をすべて消す。' },
+  reveal: { label: '真実表示', group: 'drill', needsTarget: false, creative: true,
+    note: '本当の敵味方の位置を地図に出す。本編では決して見られない。' },
+});
+
+const ALL_VERBS = Object.freeze({ ...VERBS, ...CREATIVE_VERBS });
+const GROUP_LABEL = Object.freeze({ ...VERB_GROUPS, drill: '演習' });
 
 // 部隊ごとに出せる命令は違う。砲兵に「突撃せよ」とは言えない。
 const VERBS_BY_UNIT = {
+  CRE: ['call_friend', 'place_enemy', 'replenish', 'clear_enemy', 'reveal'],
   TH: [
     'fire_mission', 'smoke', 'illum', 'register', 'check_fire',
     'move', 'resupply', 'sitrep', 'ammo_check',
@@ -29,17 +51,21 @@ const VERBS_BY_UNIT = {
 };
 
 const MOD_ORDER = ['normal', 'rapid', 'cautious', 'stealth'];
-const GROUP_ORDER = ['maneuver', 'fires', 'roe', 'sustain', 'intel'];
+const GROUP_ORDER = ['maneuver', 'fires', 'roe', 'sustain', 'intel', 'drill'];
 const TRIGGER_ORDER = ['now', 'on_contact', 'on_pressure', 'on_line', 'at_time'];
 
 // 予令を渡せない命令。今すぐ聞きたいことを「後で」と言っても仕方がない。
-const NO_TRIGGER = new Set(['sitrep', 'ammo_check', 'roe_hold_fast', 'roe_standard', 'roe_elastic']);
+const NO_TRIGGER = new Set([
+  'sitrep', 'ammo_check', 'roe_hold_fast', 'roe_standard', 'roe_elastic',
+  ...Object.keys(CREATIVE_VERBS),
+]);
 
 // 態勢を選んでも意味がない命令
 const NO_MODS = new Set([
   'sitrep', 'ammo_check', 'smoke', 'illum', 'register', 'check_fire',
   'hold', 'hold_fire', 'free_fire', 'roe_hold_fast', 'roe_standard', 'roe_elastic',
   'rest', 'stand_to', 'resupply',
+  'replenish', 'clear_enemy', 'reveal',
 ]);
 
 /**
@@ -52,6 +78,13 @@ function modSetFor(panel) {
     return {
       key: 'fire',
       items: FIRE_MODE_ORDER.map((k) => ({ key: k, label: FIRE_MODES[k].label, title: FIRE_MODES[k].note })),
+    };
+  }
+  // 演習で部隊を呼ぶときは、同じ行で兵種を選ぶ。
+  if (panel.verb === 'call_friend' || panel.verb === 'place_enemy') {
+    return {
+      key: 'unittype',
+      items: REINFORCEMENTS.map((r) => ({ key: r.key, label: r.label, title: '' })),
     };
   }
   return {
@@ -70,21 +103,12 @@ export function createOrderPanel(dom, game, hooks) {
     verb: null,
     modifier: 'normal',
     fireMode: 'impact',
+    unitType: 'infantry', // 演習で呼ぶ部隊の兵種
     trigger: 'now',
     triggerAt: null,
     lineId: null,
     legs: [], // 経路点。最後の点が目標。
   };
-
-  // 部隊ボタン
-  for (const u of getRosterOrder(game)) {
-    const b = document.createElement('button');
-    b.className = 'tool';
-    b.dataset.unit = u.id;
-    b.textContent = u.callsign;
-    b.title = `${u.typeLabel} ─ ${u.role}`;
-    dom.units.appendChild(b);
-  }
 
   dom.units.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-unit]');
@@ -109,6 +133,7 @@ export function createOrderPanel(dom, game, hooks) {
     const b = e.target.closest('button[data-mod]');
     if (!b || b.disabled) return;
     if (dom.mods.dataset.set === 'fire') panel.fireMode = b.dataset.mod;
+    else if (dom.mods.dataset.set === 'unittype') panel.unitType = b.dataset.mod;
     else panel.modifier = b.dataset.mod;
     refresh(panel);
   });
@@ -158,8 +183,8 @@ export function selectUnit(panel, unitId) {
     // 砲兵を選んで「機動」に移動しか出ていない、という画面は役に立たない ─
     // その部隊が本来やることの分類へ寄せる。
     const allowed = allowedVerbs(panel, unitId);
-    if (allowed.filter((v) => VERBS[v].group === panel.group).length < 2) {
-      panel.group = VERBS[allowed[0]]?.group ?? 'maneuver';
+    if (allowed.filter((v) => ALL_VERBS[v].group === panel.group).length < 2) {
+      panel.group = ALL_VERBS[allowed[0]]?.group ?? 'maneuver';
     }
   }
   panel.unitId = unitId;
@@ -171,7 +196,7 @@ function allowedVerbs(panel, unitId) {
   const list = VERBS_BY_UNIT[unitId] ?? VERBS_BY_UNIT._default;
   // 兵站の命令は、段列が付いている戦闘にしか存在しない
   const long = isLongBattle(panel.game);
-  return list.filter((v) => long || !VERBS[v].longOnly);
+  return list.filter((v) => long || !ALL_VERBS[v].longOnly);
 }
 
 function selectVerb(panel, verb) {
@@ -200,13 +225,13 @@ function clearLegs(panel) {
 }
 
 function syncTargeting(panel) {
-  const spec = VERBS[panel.verb];
+  const spec = ALL_VERBS[panel.verb];
   panel.hooks.onTargetingChange(!!spec?.needsTarget && needsMorePoints(panel), panel.verb);
 }
 
 /** まだ点を打つ必要があるか（経路点つきの命令は打ち続けられる） */
 function needsMorePoints(panel) {
-  const spec = VERBS[panel.verb];
+  const spec = ALL_VERBS[panel.verb];
   if (!spec?.needsTarget) return false;
   if (!panel.legs.length) return true;
   if (panel.legsDone) return false;
@@ -222,7 +247,7 @@ export function finishTargeting(panel) {
 
 /** 地図がクリックされたときに呼ばれる */
 export function setTarget(panel, x, y) {
-  const spec = VERBS[panel.verb];
+  const spec = ALL_VERBS[panel.verb];
   if (!spec?.needsTarget) return false;
   if (spec.multi) {
     if (panel.legs.length >= 5) return false;
@@ -244,8 +269,29 @@ export function isTargeting(panel) {
 
 function send(panel) {
   if (!canSend(panel)) return;
-  const spec = VERBS[panel.verb];
+  const spec = ALL_VERBS[panel.verb];
   const last = panel.legs[panel.legs.length - 1];
+
+  // 演習統裁の操作。命令ではないので、無線を通らずその場で効く。
+  if (spec.creative) {
+    const res = creativeAction(panel.game, {
+      action: panel.verb,
+      unitType: panel.unitType,
+      x: last?.x,
+      y: last?.y,
+    });
+    if (res.ok) {
+      panel.hooks.onCreative?.(panel.verb, res);
+      const keep = panel.verb === 'call_friend' || panel.verb === 'place_enemy';
+      if (!keep) panel.verb = null;
+      clearLegs(panel);
+      panel.hooks.onTargetingChange(false);
+      if (keep) syncTargeting(panel);
+    }
+    refresh(panel, res.text);
+    return;
+  }
+
   const order = issueOrder(panel.game, {
     unitId: panel.unitId,
     verb: panel.verb,
@@ -277,7 +323,7 @@ function send(panel) {
 
 function canSend(panel) {
   if (!panel.unitId || !panel.verb) return false;
-  const spec = VERBS[panel.verb];
+  const spec = ALL_VERBS[panel.verb];
   if (spec.needsTarget && !panel.legs.length) return false;
   return true;
 }
@@ -285,6 +331,22 @@ function canSend(panel) {
 export function refresh(panel, status) {
   const { dom, game } = panel;
 
+  // --- 部隊ボタン ----------------------------------------------------
+  // 演習では増援が増えるので、顔ぶれが変わったら並べ直す。
+  const roster = getRosterOrder(game);
+  const rosterKey = roster.map((u) => u.id).join(',');
+  if (dom.units.dataset.for !== rosterKey) {
+    dom.units.dataset.for = rosterKey;
+    dom.units.innerHTML = '';
+    for (const u of roster) {
+      const b = document.createElement('button');
+      b.className = u.virtual ? 'tool tool--drill' : 'tool';
+      b.dataset.unit = u.id;
+      b.textContent = u.callsign;
+      b.title = `${u.typeLabel} ─ ${u.role}`;
+      dom.units.appendChild(b);
+    }
+  }
   for (const b of dom.units.querySelectorAll('button')) {
     b.classList.toggle('is-on', b.dataset.unit === panel.unitId);
   }
@@ -293,7 +355,7 @@ export function refresh(panel, status) {
 
   // --- 分類タブ ----------------------------------------------------
   if (dom.groups) {
-    const groups = GROUP_ORDER.filter((g) => allowed.some((v) => VERBS[v].group === g));
+    const groups = GROUP_ORDER.filter((g) => allowed.some((v) => ALL_VERBS[v].group === g));
     const key = `${panel.unitId}:${groups.join(',')}`;
     if (dom.groups.dataset.for !== key) {
       dom.groups.dataset.for = key;
@@ -302,7 +364,7 @@ export function refresh(panel, status) {
         const b = document.createElement('button');
         b.className = 'tool tool--group';
         b.dataset.group = g;
-        b.textContent = VERB_GROUPS[g];
+        b.textContent = GROUP_LABEL[g];
         dom.groups.appendChild(b);
       }
     }
@@ -313,7 +375,7 @@ export function refresh(panel, status) {
   }
 
   // --- 命令ボタン ---------------------------------------------------
-  const shown = allowed.filter((v) => !dom.groups || VERBS[v].group === panel.group);
+  const shown = allowed.filter((v) => !dom.groups || ALL_VERBS[v].group === panel.group);
   const wanted = shown.join(',');
   if (dom.verbs.dataset.for !== `${panel.unitId}:${wanted}`) {
     dom.verbs.dataset.for = `${panel.unitId}:${wanted}`;
@@ -322,14 +384,15 @@ export function refresh(panel, status) {
       const b = document.createElement('button');
       b.className = 'tool';
       b.dataset.verb = v;
-      b.textContent = VERBS[v].label;
-      if (VERBS[v].roe) b.title = ROE[VERBS[v].roe].note;
+      b.textContent = ALL_VERBS[v].label;
+      if (ALL_VERBS[v].roe) b.title = ROE[ALL_VERBS[v].roe].note;
+      else if (ALL_VERBS[v].note) b.title = ALL_VERBS[v].note;
       dom.verbs.appendChild(b);
     }
   }
   for (const b of dom.verbs.querySelectorAll('button')) {
     const v = b.dataset.verb;
-    const roe = VERBS[v].roe;
+    const roe = ALL_VERBS[v].roe;
     b.classList.toggle('is-on', v === panel.verb);
     // 今その部隊に効いている交戦規定は、選んでいなくても分かるようにする
     b.classList.toggle('is-standing', !!roe && panel.unitId && getRoeOf(game, panel.unitId) === roe);
@@ -351,7 +414,10 @@ export function refresh(panel, status) {
   }
   const isFireSet = modSet.key === 'fire';
   const modsUseful = !!panel.verb && (isFireSet || !NO_MODS.has(panel.verb));
-  const currentMod = isFireSet ? panel.fireMode : panel.modifier;
+  const currentMod =
+    modSet.key === 'fire' ? panel.fireMode
+      : modSet.key === 'unittype' ? panel.unitType
+        : panel.modifier;
   dom.mods.classList.toggle('is-dim', !modsUseful);
   for (const b of dom.mods.querySelectorAll('button')) {
     b.classList.toggle('is-on', b.dataset.mod === currentMod && modsUseful);
@@ -444,11 +510,25 @@ export function refresh(panel, status) {
     dom.status.textContent = status;
   } else if (!panel.unitId) {
     dom.status.textContent = '部隊を選べ。';
+  } else if (panel.unitId === 'CRE') {
+    const c = getCreative(game);
+    const spec = ALL_VERBS[panel.verb];
+    if (!spec) {
+      dom.status.textContent =
+        `演習統裁。増援${c?.called ?? 0}個・敵${c?.enemiesPlaced ?? 0}個を投入済み。` +
+        `真実の地図は${c?.reveal ? '開いている' : '伏せてある'}。`;
+    } else if (spec.needsTarget && !panel.legs.length) {
+      const label = REINFORCEMENTS.find((r) => r.key === panel.unitType)?.label ?? '';
+      dom.status.textContent = `${label}を置く地点を地図で叩け。`;
+      dom.status.classList.add('is-warn');
+    } else {
+      dom.status.textContent = spec.note ?? '送信できる。';
+    }
   } else if (!panel.verb) {
     const s = getSupport(game);
     const held = getHeldOrder(game, panel.unitId);
     const heldNote = held
-      ? ` 予令：${TRIGGERS[held.trigger].label}に${VERBS[held.verb].label}${held.grid ? ` ${held.grid}` : ''}。`
+      ? ` 予令：${TRIGGERS[held.trigger].label}に${ALL_VERBS[held.verb].label}${held.grid ? ` ${held.grid}` : ''}。`
       : '';
     const trains = getTrains(game);
     const trainsNote = trains
@@ -469,7 +549,7 @@ export function refresh(panel, status) {
           ? '段列。運ぶのが仕事である。補給は受け取る側の部隊に「補給要請」を出す。'
           : `${ROE[getRoeOf(game, panel.unitId)].label}下。命令を選べ。`) + heldNote + trainsNote;
   } else if (panel.trigger !== 'now' && !NO_TRIGGER.has(panel.verb) &&
-             !(VERBS[panel.verb].needsTarget && !panel.legs.length)) {
+             !(ALL_VERBS[panel.verb].needsTarget && !panel.legs.length)) {
     const t = TRIGGERS[panel.trigger];
     const when =
       panel.trigger === 'at_time'
@@ -478,12 +558,12 @@ export function refresh(panel, status) {
           ? `統制線${getControlLines(game).find((l) => l.id === panel.lineId)?.name ?? ''}を敵が越えた時`
           : t.label;
     dom.status.textContent = `予令として渡す ─ ${when}に発動する。`;
-  } else if (VERBS[panel.verb].needsTarget && !panel.legs.length) {
+  } else if (ALL_VERBS[panel.verb].needsTarget && !panel.legs.length) {
     dom.status.textContent = '地図を叩いて目標を指定せよ。';
     dom.status.classList.add('is-warn');
   } else if (panel.verb === 'fire_mission') {
     dom.status.textContent = `${FIRE_MODES[panel.fireMode].label} ─ ${FIRE_MODES[panel.fireMode].note}`;
-  } else if (VERBS[panel.verb].multi && panel.legs.length) {
+  } else if (ALL_VERBS[panel.verb].multi && panel.legs.length) {
     dom.status.textContent =
       panel.legs.length < 5
         ? '送信できる。続けて地図を叩けば経由地を足せる。'

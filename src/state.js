@@ -6,7 +6,8 @@
 // UI モジュールは belief と terrain しか受け取らない。地図は指揮官の手元にある
 // ものなので地形は見てよいが、その上に誰がいるかは一切見えない。
 
-import { createWorld, tick } from './sim/world.js';
+import { createWorld, tick, spawnReinforcement } from './sim/world.js';
+import { replenish, REINFORCEMENTS } from './sim/creative.js';
 import { issueOrder as simIssueOrder, VERBS } from './sim/orders.js';
 import { congestion } from './sim/comms.js';
 import { enemyIntentLog } from './sim/enemyCommand.js';
@@ -57,6 +58,7 @@ export function createGame(opts = {}) {
     missionId: opts.missionId,
     variable: !!opts.variable,
     planSeed: opts.variable ? Math.floor(Math.random() * 0x7fffffff) + 1 : 0,
+    creative: { enabled: !!opts.creative },
   });
   const long = world.mission.duration === 'long';
 
@@ -194,6 +196,105 @@ export function issueOrder(game, { unitId, verb, x, y, modifier, legs, trigger, 
     }
   }
   return order;
+}
+
+/* ------------------------------------------------------------------ */
+/* 演習モード                                                           */
+/* ------------------------------------------------------------------ */
+
+export function isCreative(game) {
+  return !!game?.world.creative;
+}
+
+/** 演習の設定（真実表示の入切など） */
+export function getCreative(game) {
+  const c = game?.world.creative;
+  if (!c) return null;
+  return {
+    reveal: c.reveal,
+    called: c.called,
+    enemiesPlaced: c.enemiesPlaced,
+    invulnerable: c.invulnerable,
+  };
+}
+
+/**
+ * 演習統裁の操作。
+ * これは無線ではない ─ 盤の外から手を入れる行為なので、遅れも届かないもない。
+ * @returns {{ok:boolean, text:string}}
+ */
+export function creativeAction(game, { action, unitType, x, y }) {
+  const world = game.world;
+  const cre = world.creative;
+  if (!cre) return { ok: false, text: '演習モードではない。' };
+
+  switch (action) {
+    case 'call_friend': {
+      const u = spawnReinforcement(world, { type: unitType, x, y, side: 'friend' });
+      if (!u) return { ok: false, text: 'その兵種は呼べない。' };
+      return { ok: true, text: `${u.callsign}（${u.tpl.label}）が到着した。` };
+    }
+    case 'place_enemy': {
+      const u = spawnReinforcement(world, { type: unitType, x, y, side: 'enemy' });
+      if (!u) return { ok: false, text: 'その兵種は置けない。' };
+      return { ok: true, text: `敵の${u.tpl.label}を ${toGrid(x, y)} に置いた。` };
+    }
+    case 'replenish': {
+      let n = 0;
+      for (const u of world.units) {
+        if (u.side !== 'friend') continue;
+        if (replenish(u)) n++;
+      }
+      return { ok: true, text: `${n}個部隊を充足させた。` };
+    }
+    case 'clear_enemy': {
+      let n = 0;
+      for (const u of world.units) {
+        if (u.side !== 'enemy' || !u.alive) continue;
+        u.alive = false;
+        u.strength = 0;
+        u.state = 'destroyed';
+        u.deathAt = world.now;
+        u.path = [];
+        u.dest = null;
+        n++;
+      }
+      return { ok: true, text: `敵${n}個部隊を盤から除いた。` };
+    }
+    case 'reveal': {
+      cre.reveal = !cre.reveal;
+      return { ok: true, text: cre.reveal ? '真実の地図を開いた。' : '真実の地図を伏せた。' };
+    }
+    default:
+      return { ok: false, text: '知らない操作である。' };
+  }
+}
+
+/**
+ * 真実の開示（演習モードのみ）。
+ *
+ * 本編でこれを返すことは絶対にない。ここが「見えない」ことでゲームが
+ * 成り立っているので、開けるのは演習の盤に限る。
+ */
+export function getRevealed(game) {
+  const cre = game?.world.creative;
+  if (!cre?.reveal) return null;
+  return game.world.units
+    .filter((u) => u.alive)
+    .map((u) => ({
+      id: u.id,
+      side: u.side,
+      callsign: u.callsign,
+      type: u.type,
+      typeLabel: u.tpl.label,
+      x: u.x,
+      y: u.y,
+      heading: u.heading,
+      strength: u.strength,
+      maxStrength: u.maxStrength,
+      state: u.state,
+      immobile: !!u._immobile,
+    }));
 }
 
 /** その部隊に渡してある予令（指揮所の控え） */
@@ -374,6 +475,16 @@ export function getTerrain(game) {
   return game.world.terrain;
 }
 
+/**
+ * 地図に刷ってある障害。
+ *
+ * 自軍の工兵が敷いたものは、指揮所の障害計画に載っているので当然知っている。
+ * 敵が敷いたものは載っていない ─ 誰かが引っかかって報告するまで、地図に無い。
+ */
+export function getKnownObstacles(game) {
+  return (game.world.terrain.obstacles ?? []).filter((o) => o.known);
+}
+
 export function getClock(game) {
   return formatClock(game.world.now);
 }
@@ -393,7 +504,8 @@ export function getCommandPost(game) {
 /** 部隊一覧。指揮官が「最後に聞いた」内容だけを返す。 */
 export function getRoster(game) {
   const out = [];
-  for (const def of game.world.mission.rosterOrder ?? DEFAULT_ROSTER_ORDER) {
+  for (const def of getRosterOrder(game)) {
+    if (def.virtual) continue;
     const heard = game.belief.roster.get(def.id);
     out.push({
       unitId: def.id,
@@ -425,8 +537,22 @@ const DEFAULT_ROSTER_ORDER = [
 ];
 
 export function getRosterOrder(game) {
-  return game?.world.mission.rosterOrder ?? DEFAULT_ROSTER_ORDER;
+  const base = game?.world.mission.rosterOrder ?? DEFAULT_ROSTER_ORDER;
+  const cre = game?.world.creative;
+  if (!cre) return base;
+  // 演習では「統裁」が命令パネルに並ぶ。部隊ではないので一覧には出さない。
+  return [...base, ...cre.roster, CREATIVE_ENTRY];
 }
+
+const CREATIVE_ENTRY = Object.freeze({
+  id: 'CRE',
+  callsign: '演習統裁',
+  typeLabel: '演習',
+  role: '増援の呼び出し・敵の配置・部隊の補充',
+  icon: null,
+  echelon: null,
+  virtual: true,
+});
 
 /**
  * 兵站の状況。指揮所の帳簿にあたる ─ ここは推測ではなく事実で分かる。
@@ -574,4 +700,5 @@ export function revealTruth(game) {
 export { toGrid, fromGrid, formatClock };
 export { VERBS, MODIFIERS, VERB_GROUPS, TRIGGERS } from './sim/orders.js';
 export { FIRE_MODES, FIRE_MODE_ORDER } from './sim/fires.js';
+export { REINFORCEMENTS };
 export { ROE } from './sim/friendlyAI.js';

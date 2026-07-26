@@ -5,6 +5,19 @@ import { clamp, toGrid, bearing, compassJa, dist, formatClock } from '../util.js
 import { enqueue, PRI } from './comms.js';
 import { moraleJa } from './units.js';
 import { localVisibilityJa } from './weather.js';
+import { landmarkAt } from './terrain.js';
+
+/**
+ * 位置の言い方。
+ *
+ * 前線の兵は方眼の数字だけで喋りはしない。地図に名前のある地形が近ければ、
+ * 必ずそちらを先に言う ─ 「第一高地の北斜面、C4」。
+ * 聞いた側が地図のどこを見ればよいか、その一言で決まるからである。
+ */
+function placePhrase(world, x, y, grid) {
+  const l = landmarkAt(world.terrain, x, y);
+  return l ? `${l.phrase}、${grid}` : grid;
+}
 
 const TYPE_JA = {
   infantry: '敵歩兵',
@@ -113,7 +126,7 @@ function contactText(u, c, world) {
     return {
       text:
         `イーグルより指揮所、敵情報告。規模 ${count}、行動 ${move}、` +
-        `位置 ${grid}、装備 ${equip}、時刻 ${time}。映像は良好。以上。`,
+        `位置 ${placePhrase(world, pos.x, pos.y, grid)}、装備 ${equip}、時刻 ${time}。映像は良好。以上。`,
       grid,
       pos,
     };
@@ -125,7 +138,7 @@ function contactText(u, c, world) {
 
   return {
     text:
-      `${head}規模 ${count}、行動 ${move}、位置 ${grid}、` +
+      `${head}規模 ${count}、行動 ${move}、位置 ${placePhrase(world, pos.x, pos.y, grid)}、` +
       `装備 ${equip}、時刻 ${time}。${tail}`,
     grid,
     pos,
@@ -367,7 +380,8 @@ export function composeSitrep(u, world) {
   }
 
   return (
-    `こちら${u.callsign}。現在地${grid}、兵力${Math.round(u.strength)}/${u.maxStrength}${u.tpl.unitJa}、` +
+    `こちら${u.callsign}。現在地${placePhrase(world, u.x, u.y, grid)}、` +
+    `兵力${Math.round(u.strength)}/${u.maxStrength}${u.tpl.unitJa}、` +
     `弾薬${ammoJa(u)}、隊員の状態は${moraleJa(u.morale)}。${enemyPart}。以上。`
   );
 }

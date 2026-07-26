@@ -1,21 +1,26 @@
 // シミュレーションの健全性テスト。ブラウザ無しで node から走らせる。
 //   node tests/sim-smoke.mjs
 
-import { createWorld, tick, addUnit } from '../src/sim/world.js';
+import { createWorld, tick, addUnit, spawnReinforcement } from '../src/sim/world.js';
+import { replenish } from '../src/sim/creative.js';
 import { issueOrder, crossedLine } from '../src/sim/orders.js';
 import { createFireMission, stepFireMissions } from '../src/sim/combat.js';
 import { supportGun, layingLeft, createFlare, stepFires } from '../src/sim/fires.js';
 import { aspectOf, penetrationRatio, canDefeat } from '../src/sim/armor.js';
-import { createUnit } from '../src/sim/units.js';
+import { createUnit, currentSpeed } from '../src/sim/units.js';
 import { evaluate, missionList } from '../src/sim/scenario.js';
 import { WORLD, toGrid, fromGrid, formatClock, parseClock } from '../src/util.js';
-import { generateTerrain, lineOfSight, terrainAt, isPassable, T, TERRAIN_NAME_JA } from '../src/sim/terrain.js';
+import {
+  generateTerrain, lineOfSight, terrainAt, isPassable, landmarkAt, obstacleAt,
+  T, TERRAIN_NAME_JA,
+} from '../src/sim/terrain.js';
 import { mapList } from '../src/sim/maps.js';
 import {
   mistDensity, mistAttenuation, lightLevel, lightSpotFactor, localSpotFactor,
 } from '../src/sim/weather.js';
 import { fatigueFactor, fatigueJa } from '../src/sim/logistics.js';
 import { applyDamage } from '../src/sim/units.js';
+import { composeSitrep } from '../src/sim/reports.js';
 import { findPath } from '../src/sim/pathfind.js';
 
 let failures = 0;
@@ -803,6 +808,159 @@ section('装甲戦闘');
   check('対戦車班は戦車を仕留められる', !tk.alive || tk.strength < tk.maxStrength,
     `${tk.strength}/${tk.maxStrength}`);
   check('射撃のたびに弾が減る', at.ammo < at.tpl.maxAmmo, `${at.ammo.toFixed(0)}`);
+}
+
+/* ------------------------------------------------------------------ */
+
+section('地名');
+{
+  const t = generateTerrain(20260726, 'volne_river');
+  const hill = landmarkAt(t, t.hills[0].x, t.hills[0].y);
+  check('高地の頂を言い当てる', hill?.phrase === `${t.hills[0].name}の頂`, hill?.phrase);
+
+  const slope = landmarkAt(t, t.hills[0].x, t.hills[0].y - t.hills[0].r * 0.6);
+  check('斜面の向きを言う', /北.*斜面/.test(slope?.phrase ?? ''), slope?.phrase);
+
+  const br = t.crossings[0];
+  check('橋の北詰・南詰を言い分ける',
+    landmarkAt(t, br.x, br.y - 200)?.phrase.includes('北詰') &&
+    landmarkAt(t, br.x, br.y + 200)?.phrase.includes('南詰'),
+    `${landmarkAt(t, br.x, br.y - 200)?.phrase} / ${landmarkAt(t, br.x, br.y + 200)?.phrase}`);
+
+  check('名の無い場所は名乗らない', landmarkAt(t, 900, 3850) === null,
+    landmarkAt(t, 900, 3850)?.phrase);
+
+  // 図に刷ってある名前しか使わない（無線で言われた名前は地図で探せねばならない）
+  const names = new Set([
+    ...t.hills.map((h) => h.name), ...t.towns.map((x) => x.name),
+    ...t.forests.filter((f) => f.name).map((f) => f.name),
+    ...t.crossings.map((c) => c.label),
+  ]);
+  let allOnMap = true;
+  for (let x = 200; x < WORLD.width; x += 380) {
+    for (let y = 200; y < WORLD.height; y += 380) {
+      const l = landmarkAt(t, x, y);
+      if (l && !names.has(l.name)) allOnMap = false;
+    }
+  }
+  check('地図に無い名前は出てこない', allOnMap);
+
+  // 報告にも地名が乗る
+  const w = createWorld();
+  const h1 = w.unitsById.get('H1');
+  const sit = composeSitrep(h1, w);
+  check('状況報告が地名で位置を言う', /の(頂|中|上|北詰|南詰|[東西南北]+(斜面|はずれ|縁))/.test(sit), sit);
+}
+
+section('障害');
+{
+  const t = generateTerrain(20260726, 'volne_river');
+  check('障害が敷いてある', (t.obstacles ?? []).length >= 1);
+  const wire = t.obstacles.find((o) => o.kind === 'wire');
+  check('鉄条網の位置が前縁から引かれている', wire && Math.abs(wire.y - t.front(wire.x) + 190) < 1,
+    `${wire?.y} vs ${t.front(wire?.x ?? 0)}`);
+  check('障害の中と外を判別する',
+    !!obstacleAt(t, wire.x, wire.y) && !obstacleAt(t, wire.x + 900, wire.y));
+
+  // 鉄条網の中では歩みが遅くなる
+  // 前縁からの位置関係を揃えて比べる（地形そのものの差を混ぜないため）
+  const outX = wire.x + 900;
+  const outside = createUnit({
+    id: 'A', side: 'friend', type: 'infantry', x: outX, y: t.front(outX) - 190,
+  });
+  const inside = createUnit({ id: 'B', side: 'friend', type: 'infantry', x: wire.x, y: wire.y });
+  check('鉄条網は歩みを鈍らせる', currentSpeed(inside, t) < currentSpeed(outside, t) * 0.8,
+    `${currentSpeed(inside, t).toFixed(2)} vs ${currentSpeed(outside, t).toFixed(2)}`);
+
+  // 地雷原は動いている部隊にだけ効く（市街の図幅に敵が敷いている）
+  const w = createWorld({ missionId: 'zaren_counter' });
+  const mines = w.terrain.obstacles.find((o) => o.kind === 'mines');
+  check('市街には地雷原がある', !!mines);
+  const mover = addUnit(w, {
+    id: 'MV', side: 'friend', callsign: '踏む者', type: 'infantry', x: mines.x, y: mines.y,
+  });
+  mover.path = [{ x: mines.x + 30, y: mines.y + 30 }];
+  let hit = false;
+  for (let i = 0; i < 600 && !hit; i++) {
+    mover.path = [{ x: mines.x + 30, y: mines.y + 30 }];
+    mover.x = mines.x;
+    mover.y = mines.y;
+    tick(w, 1);
+    if (mover.strength < mover.maxStrength) hit = true;
+  }
+  check('地雷原を踏み進めば当たる', hit, `${mover.strength}/${mover.maxStrength}`);
+
+  // 自軍が敷いた障害は既知、敵のものは伏せてある
+  const zaren = generateTerrain(990117, 'zaren_town');
+  check('敵の障害は地図に載っていない', zaren.obstacles.every((o) => !o.known));
+  check('自軍の障害は地図に載っている', t.obstacles.every((o) => o.known));
+}
+
+section('鉄道');
+{
+  const t = generateTerrain(20260726, 'volne_river');
+  check('鉄道が敷いてある', (t.rails ?? []).length > 0);
+  let railCells = 0;
+  for (let i = 0; i < t.type.length; i++) if (t.type[i] === T.RAIL) railCells++;
+  check('線路が盤に出ている', railCells > 20, `${railCells}`);
+  check('線路は通れる', isPassable(t, t.rails[0].points[1].x, t.rails[0].points[1].y));
+
+  const kolp = generateTerrain(71104, 'kolp_pass');
+  check('峠には鉄道がない', (kolp.rails ?? []).length === 0);
+}
+
+/* ------------------------------------------------------------------ */
+
+section('演習モード');
+{
+  // 本編の盤には演習の仕掛けが一切無いこと（ここが緩んだらゲームが壊れる）
+  const plain = createWorld();
+  check('本編に演習の仕掛けは無い', plain.creative === null);
+  check('本編の部隊は不死ではない',
+    plain.units.every((u) => !u.invulnerable));
+
+  const w = createWorld({ creative: { enabled: true } });
+  check('演習の盤が立つ', !!w.creative);
+  check('味方は倒れにくい',
+    w.units.filter((u) => u.side === 'friend').every((u) => u.invulnerable));
+
+  const h = w.unitsById.get('H1');
+  const before = h.strength;
+  applyDamage(h, 5, w.now, {});
+  check('損害は入るが桁が違う', h.strength > before - 1 && h.strength < before,
+    `${before} → ${h.strength.toFixed(2)}`);
+
+  // 増援。0コスト・即時。
+  const tank = spawnReinforcement(w, { type: 'tank', x: 2000, y: 3000, side: 'friend' });
+  check('増援が呼べる', !!tank && tank.side === 'friend' && tank.type === 'tank');
+  check('増援は指揮下に入る', w.unitsById.has(tank.id));
+  check('増援も倒れにくい', tank.invulnerable === true);
+  check('増援が編成表に載る', w.creative.roster.some((r) => r.id === tank.id));
+
+  const foe = spawnReinforcement(w, { type: 'mech', x: 2200, y: 1200, side: 'enemy' });
+  check('敵も置ける', !!foe && foe.side === 'enemy');
+  check('置いた敵は不死ではない', !foe.invulnerable);
+
+  // 弾は減らない
+  const rounds = w.support.artillery.rounds;
+  issueOrder(w, { unitId: 'TH', verb: 'fire_mission', x: 2200, y: 1700 });
+  for (let i = 0; i < 200; i++) tick(w, 1);
+  check('砲弾が減らない', w.support.artillery.rounds === rounds);
+  check('それでも弾は飛ぶ', w.fireMissions.length > 0);
+
+  // 部隊の補充
+  const g = w.unitsById.get('H2');
+  g.strength = 2;
+  g.morale = 10;
+  g.ammo = 3;
+  replenish(g);
+  check('補充で立て直る', g.strength === g.maxStrength && g.ammo === g.tpl.maxAmmo && g.morale > 80);
+
+  // 演習でも決着はつく
+  const w2 = createWorld({ missionId: 'kolp_delay', creative: { enabled: true } });
+  let guard = 0;
+  while (!w2.outcome && guard++ < 20000) tick(w2, 1);
+  check('演習の盤も決着する', !!w2.outcome, `${w2.outcome}`);
 }
 
 /* ------------------------------------------------------------------ */

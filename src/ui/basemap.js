@@ -62,6 +62,7 @@ export function createMapViewBase(terrain) {
   drawBuiltUp(g, terrain);
   drawMarsh(g, terrain);
   drawRock(g, terrain);
+  drawRails(g, terrain);
   drawWaterEdge(g, terrain);
   drawPaperGrain(g, terrain.seed);
 
@@ -343,6 +344,52 @@ function drawBuiltUp(g, terrain) {
         g.rotate(rng.next() < 0.75 ? 0 : (rng.next() - 0.5) * 0.5);
         g.fillRect(-w / 2, -h / 2, w, h);
         g.restore();
+      }
+    }
+  }
+  g.restore();
+}
+
+/**
+ * 鉄道。
+ * 地形図の作法どおり、黒の実線に等間隔の枕木記号を打つ。
+ * 一本引いてあるだけで、そこが「築堤の裏を横に動ける線」だと分かる。
+ */
+function drawRails(g, terrain) {
+  if (!terrain.rails?.length) return;
+  const S = SHEET_SCALE;
+  g.save();
+  for (const rail of terrain.rails) {
+    const pts = rail.points;
+    g.strokeStyle = 'rgba(38, 34, 30, 0.85)';
+    g.lineWidth = 1.5;
+    g.lineJoin = 'round';
+    g.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const x = pts[i].x * S;
+      const y = pts[i].y * S;
+      if (i === 0) g.moveTo(x, y);
+      else g.lineTo(x, y);
+    }
+    g.stroke();
+
+    // 枕木。線に直交する短い刻みを、一定距離ごとに打つ。
+    g.lineWidth = 1;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const b = pts[i + 1];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      const steps = Math.max(1, Math.round(len / 95));
+      const nx = -(b.y - a.y) / len;
+      const ny = (b.x - a.x) / len;
+      for (let k = 0; k < steps; k++) {
+        const t = (k + 0.5) / steps;
+        const x = (a.x + (b.x - a.x) * t) * S;
+        const y = (a.y + (b.y - a.y) * t) * S;
+        g.beginPath();
+        g.moveTo(x - nx * 2.6, y - ny * 2.6);
+        g.lineTo(x + nx * 2.6, y + ny * 2.6);
+        g.stroke();
       }
     }
   }

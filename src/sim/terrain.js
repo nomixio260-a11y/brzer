@@ -14,6 +14,7 @@ export const T = Object.freeze({
   FORD: 6, // 浅瀬
   MARSH: 7, // 湿地
   ROCK: 8, // 急斜面・岩稜（車輌はもちろん、徒歩でも越えられない）
+  RAIL: 9, // 鉄道。築堤が胸壁になる ─ 線路は歩兵にとって陣地である。
 });
 
 export const TERRAIN_NAME_JA = Object.freeze({
@@ -26,6 +27,7 @@ export const TERRAIN_NAME_JA = Object.freeze({
   [T.FORD]: '浅瀬',
   [T.MARSH]: '湿地',
   [T.ROCK]: '急斜面',
+  [T.RAIL]: '鉄道',
 });
 
 /** 遮蔽（射撃に対する防護）。0 = 遮蔽なし、1 = 完全遮蔽。 */
@@ -39,6 +41,8 @@ const COVER = {
   [T.FORD]: 0.0,
   [T.MARSH]: 0.15,
   [T.ROCK]: 0.55,
+  // 築堤の陰。線路そのものは何も遮らないが、盛土の裏には身を隠せる。
+  [T.RAIL]: 0.4,
 };
 
 /** 隠蔽（発見されにくさ）。視線が通っていても見つかりにくくなる。 */
@@ -52,6 +56,7 @@ const CONCEAL = {
   [T.FORD]: 0.0,
   [T.MARSH]: 0.25,
   [T.ROCK]: 0.2,
+  [T.RAIL]: 0.1,
 };
 
 /** 移動速度の倍率。0 は通行不能。 */
@@ -65,6 +70,8 @@ const MOBILITY = {
   [T.FORD]: 0.35,
   [T.MARSH]: 0.4,
   [T.ROCK]: 0.0,
+  // 枕木と砕石。歩くぶんには構わないが、車輌には向かない。
+  [T.RAIL]: 0.75,
 };
 
 /** これだけの厚みの植生を貫くと視線が完全に切れる（メートル） */
@@ -235,6 +242,20 @@ export function generateTerrain(seed, mapId = 'volne_river') {
   }));
   for (const road of roads) paintPolyline(type, elev, road.points, 34);
 
+  // --- 鉄道 ---------------------------------------------------------
+  // 築堤は身を隠せる線であり、車輌にとっては越えにくい線でもある。
+  // 市街の図幅では、これが一本あるだけで戦い方が変わる。
+  const rails = (map.rails ?? []).map((rail) => ({
+    label: rail.label ?? null,
+    points: rail.points.map((p) => ({ x: p.x, y: p.y === 'front' ? front(p.x) : p.y })),
+  }));
+  // 築堤として効かせるのは開豁地の区間だけ。森や市街にはもともと遮蔽があり、
+  // そこを線路で塗り替えると、かえって地色が抜けて地図が壊れる。
+  for (const rail of rails) {
+    // 方眼1つ分の帯。これより細いと、格子の目をすり抜けて盤に乗らない。
+    paintPolylineAs(type, rail.points, 26, T.RAIL, [T.FIELD, T.MARSH]);
+  }
+
   // --- 通過点 -------------------------------------------------------
   const crossings = map.crossings.map((cr) => ({
     ...cr,
@@ -268,13 +289,86 @@ export function generateTerrain(seed, mapId = 'volne_river') {
     ford: { x: secondary.x, y: secondary.y },
     hills: HILLS,
     towns: TOWNS,
+    forests: FORESTS,
+    // 障害。防者が敷いたもので、攻者はここで足を止める。
+    obstacles: (map.obstacles ?? []).map((o) => ({
+      ...o,
+      y: o.y === 'front' ? front(o.x) + (o.dy ?? 0) : o.y,
+    })),
     // 描画側がベクタとして道路と水線をなぞれるように残しておく。
     roads,
+    rails,
     riverHalfWidth: water ? water.halfWidth : 0,
     waterName: water ? water.name : null,
   };
 
   return terrain;
+}
+
+/* ------------------------------------------------------------------ */
+/* 地名                                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * その点を「地図に載っている名前」で言い直す。
+ *
+ * 前線の兵は方眼の数字だけで喋りはしない。「C4」ではなく
+ * 「第一高地の北斜面、C4」と言う ─ 聞いた側が地図のどこを見ればよいか、
+ * その一言で決まるからである。名前は図に刷ってあるものだけを使う。
+ */
+export function landmarkAt(terrain, x, y) {
+  let best = null;
+  const consider = (name, cx, cy, r, kind, bias) => {
+    if (!name) return;
+    const d = Math.hypot(x - cx, y - cy);
+    if (d > r) return;
+    const score = d / r - bias;
+    if (!best || score < best.score) best = { name, cx, cy, r, kind, d, score };
+  };
+
+  for (const cr of terrain.crossings) {
+    // 通過点は他の何より優先する。橋のたもとに居る部隊は、まず「橋」で言う ―
+    // 指揮官が真っ先に見るのもそこだからである。
+    consider(cr.label, cr.x, cr.y, (cr.radius ?? 110) * 2.6, 'crossing', 1.4);
+  }
+  for (const tw of terrain.towns) consider(tw.name, tw.x, tw.y, tw.r * 1.25, 'town', 0.3);
+  for (const h of terrain.hills) consider(h.name, h.x, h.y, h.r * 0.95, 'hill', 0);
+  for (const f of terrain.forests ?? []) consider(f.name, f.x, f.y, f.r, 'forest', 0.1);
+  if (!best) return null;
+
+  return { name: best.name, kind: best.kind, phrase: landmarkPhrase(best, x, y) };
+}
+
+const DIR8 = ['北', '北東', '東', '南東', '南', '南西', '西', '北西'];
+
+function dirOf(cx, cy, x, y) {
+  const deg = (Math.atan2(x - cx, cy - y) * 180) / Math.PI;
+  return DIR8[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
+}
+
+function landmarkPhrase(l, x, y) {
+  const dir = dirOf(l.cx, l.cy, x, y);
+  switch (l.kind) {
+    case 'crossing':
+      if (Math.abs(y - l.cy) < 90) return `${l.name}の上`;
+      return y < l.cy ? `${l.name}の北詰` : `${l.name}の南詰`;
+    case 'town':
+      return l.d < l.r * 0.42 ? `${l.name}の中` : `${l.name}の${dir}はずれ`;
+    case 'hill':
+      return l.d < l.r * 0.3 ? `${l.name}の頂` : `${l.name}の${dir}斜面`;
+    case 'forest':
+      return l.d < l.r * 0.5 ? `${l.name}の中` : `${l.name}の${dir}縁`;
+    default:
+      return l.name;
+  }
+}
+
+/** 障害の中にいるか（地雷原・鉄条網） */
+export function obstacleAt(terrain, x, y) {
+  for (const o of terrain.obstacles ?? []) {
+    if (Math.hypot(x - o.x, y - o.y) <= o.r) return o;
+  }
+  return null;
 }
 
 /** 通過点の種別 → 地形種別 */
@@ -287,6 +381,10 @@ const CROSSING_TYPE = {
 
 /** 折れ線に沿って道路を敷く（水上は橋にしない ― 橋は明示的に置く） */
 function paintPolyline(type, elev, pts, halfWidth) {
+  paintPolylineAs(type, pts, halfWidth, T.ROAD, [T.FIELD, T.FOREST, T.TOWN, T.MARSH]);
+}
+
+function paintPolylineAs(type, pts, halfWidth, value, over) {
   for (let s = 0; s < pts.length - 1; s++) {
     const a = pts[s];
     const b = pts[s + 1];
@@ -294,9 +392,7 @@ function paintPolyline(type, elev, pts, halfWidth) {
     const steps = Math.ceil(len / 12);
     for (let k = 0; k <= steps; k++) {
       const t = k / steps;
-      const x = lerp(a.x, b.x, t);
-      const y = lerp(a.y, b.y, t);
-      paintDisc(type, x, y, halfWidth, T.ROAD, [T.FIELD, T.FOREST, T.TOWN, T.MARSH]);
+      paintDisc(type, lerp(a.x, b.x, t), lerp(a.y, b.y, t), halfWidth, value, over);
     }
   }
 }

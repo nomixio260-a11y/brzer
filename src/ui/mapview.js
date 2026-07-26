@@ -23,8 +23,13 @@ import {
   getRegistrations,
   getMarkers,
   getSketches,
+  getRevealed,
+  getKnownObstacles,
   getVisibility as getVisibilityLabel,
 } from '../state.js';
+
+// 演習の真実表示で使う書体（本編では一度も使われない）
+const SANS = '"Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif';
 
 const INK = {
   road: '#c4622c',
@@ -205,11 +210,13 @@ export function draw(view) {
 
   // ---- 2枚目: アセテート ----
   drawAcetateSheen(ctx);
+  drawKnownObstacles(ctx, game, px);
   drawCommandPost(ctx, game, px);
   drawFireMissions(ctx, game, px);
   drawRegistrations(ctx, game, px);
   drawSketches(ctx, view, game, px);
   drawLiveStroke(ctx, view, px);
+  drawTruth(ctx, game, px);
   drawMarkers(ctx, view, game, px);
   drawOrderRoute(ctx, view, px);
   drawGridFlash(ctx, view, px);
@@ -446,6 +453,48 @@ function drawAcetateSheen(ctx) {
   ctx.restore();
 }
 
+/**
+ * 障害計画に載っている障害。
+ *
+ * 自軍の工兵が敷いたものだけが出る。敵が敷いたものは、誰かが引っかかって
+ * 報告するまで地図に無い ─ そのときは指揮官が自分で記号を置くことになる。
+ */
+function drawKnownObstacles(ctx, game, px) {
+  for (const o of getKnownObstacles(game)) {
+    const color = 'rgba(52, 44, 34, 0.8)';
+    ctx.save();
+    if (o.kind === 'mines') {
+      // 地雷原は鎖線の囲みに黒丸。地形図の作法どおり。
+      ctx.strokeStyle = color;
+      ctx.lineWidth = px(1.2);
+      ctx.setLineDash([px(6), px(4)]);
+      ctx.beginPath();
+      ctx.arc(o.x, o.y, o.r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = color;
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2 + 0.4;
+        ctx.beginPath();
+        ctx.arc(o.x + Math.cos(a) * o.r * 0.5, o.y + Math.sin(a) * o.r * 0.5, px(2.6), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      // 鉄条網は線に×印を連ねる
+      drawObstacle(ctx, o.x, o.y, o.r, color, px(1.4), 0.85);
+    }
+    ctx.font = `600 ${px(8.5)}px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = px(2.6);
+    ctx.strokeStyle = 'rgba(232, 233, 210, 0.8)';
+    ctx.strokeText(o.label, o.x, o.y - o.r - px(9));
+    ctx.fillStyle = color;
+    ctx.fillText(o.label, o.x, o.y - o.r - px(9));
+    ctx.restore();
+  }
+}
+
 function drawCommandPost(ctx, game, px) {
   const cp = getCommandPost(game);
   ctx.save();
@@ -615,6 +664,62 @@ function drawGridFlash(ctx, view, px) {
   ctx.lineWidth = px(3);
   ctx.strokeRect(f.col * WORLD.gridSize, f.row * WORLD.gridSize, WORLD.gridSize, WORLD.gridSize);
   ctx.restore();
+}
+
+/**
+ * 真実の地図（演習モードのみ）。
+ *
+ * 本編では getRevealed が常に null を返すので、ここは何も描かない。
+ * 描けてしまうなら、それはもうこのゲームではない。
+ */
+const TRUTH_ICON = {
+  infantry: 'infantry', recon: 'recon', at_team: 'antitank',
+  mech: 'mech', tank: 'armor', mortar: 'mortar',
+  drone: 'uav', convoy: 'civilian', supply: 'supply',
+};
+
+function drawTruth(ctx, game, px) {
+  const units = getRevealed(game);
+  if (!units) return;
+
+  for (const u of units) {
+    const affiliation =
+      u.side === 'friend' ? 'friend' : u.side === 'enemy' ? 'hostile' : 'neutral';
+    const r = px(11);
+    drawSymbol(ctx, {
+      x: u.x, y: u.y, r,
+      affiliation,
+      icon: TRUTH_ICON[u.type] ?? null,
+      color: u.side === 'friend' ? '#1a4f9c' : u.side === 'enemy' ? '#b4302a' : '#1d7a45',
+      lineWidth: px(1.7),
+      alpha: 0.9,
+      fillFrame: true,
+    });
+
+    // 向き ─ 装甲の面がどちらを向いているかは、演習では見えたほうがよい
+    if (u.type === 'tank' || u.type === 'mech') {
+      ctx.save();
+      ctx.strokeStyle = u.side === 'friend' ? '#1a4f9c' : '#b4302a';
+      ctx.lineWidth = px(1.6);
+      ctx.beginPath();
+      ctx.moveTo(u.x, u.y);
+      ctx.lineTo(u.x + Math.cos(u.heading ?? 0) * r * 2.1, u.y + Math.sin(u.heading ?? 0) * r * 2.1);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.font = `${px(9)}px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(24, 20, 16, 0.85)';
+    ctx.fillText(
+      `${u.callsign} ${Math.round(u.strength)}/${u.maxStrength}${u.immobile ? ' 不動' : ''}`,
+      u.x,
+      u.y + r * 1.5
+    );
+    ctx.restore();
+  }
 }
 
 function drawMarkers(ctx, view, game, px) {
