@@ -8,7 +8,7 @@
 // 指揮官が自分の手で書き込んだものだけである。
 
 import { WORLD, toGrid, gridLetter } from '../util.js';
-import { riverCenterY } from '../sim/terrain.js';
+
 import { createMapViewBase } from './basemap.js';
 import { drawSymbol, drawObstacle, drawObjective } from './milsymbol.js';
 import {
@@ -226,6 +226,7 @@ export function draw(view) {
 /* ------------------------------------------------------------------ */
 
 function drawHydrography(ctx, terrain, px) {
+  if (!terrain.hasWater) return; // 峠の図幅には水線がない
   // 河心線。水部の面は原図側で刷ってあるので、ここは輪郭を締めるだけ。
   ctx.save();
   ctx.strokeStyle = INK.water;
@@ -233,7 +234,7 @@ function drawHydrography(ctx, terrain, px) {
   ctx.lineCap = 'round';
   ctx.beginPath();
   for (let x = 0; x <= WORLD.width; x += 40) {
-    const y = riverCenterY(x);
+    const y = terrain.front(x);
     if (x === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
@@ -242,8 +243,8 @@ function drawHydrography(ctx, terrain, px) {
   // 流向の矢羽根
   ctx.fillStyle = INK.water;
   for (let x = 700; x < WORLD.width; x += 1300) {
-    const y = riverCenterY(x);
-    const y2 = riverCenterY(x + 60);
+    const y = terrain.front(x);
+    const y2 = terrain.front(x + 60);
     const a = Math.atan2(y2 - y, 60);
     ctx.save();
     ctx.translate(x, y);
@@ -286,44 +287,92 @@ function drawCrossings(ctx, terrain, px) {
   ctx.save();
   ctx.lineCap = 'butt';
 
-  // 橋 ― 両側の欄干を描く
-  const b = terrain.bridge;
-  ctx.strokeStyle = INK.sheetInk;
-  ctx.lineWidth = px(2.2);
-  ctx.beginPath();
-  ctx.moveTo(b.x - px(13), b.y - px(15));
-  ctx.lineTo(b.x - px(13), b.y + px(15));
-  ctx.moveTo(b.x + px(13), b.y - px(15));
-  ctx.lineTo(b.x + px(13), b.y + px(15));
-  ctx.stroke();
+  for (const cr of terrain.crossings) {
+    if (cr.kind === 'bridge') {
+      // 橋 ― 両側の欄干を描く
+      ctx.strokeStyle = INK.sheetInk;
+      ctx.lineWidth = px(2.2);
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(cr.x - px(13), cr.y - px(15));
+      ctx.lineTo(cr.x - px(13), cr.y + px(15));
+      ctx.moveTo(cr.x + px(13), cr.y - px(15));
+      ctx.lineTo(cr.x + px(13), cr.y + px(15));
+      ctx.stroke();
+    } else if (cr.kind === 'ford') {
+      // 浅瀬 ― 破線で徒渉可を示す
+      ctx.strokeStyle = INK.water;
+      ctx.lineWidth = px(1.8);
+      ctx.setLineDash([px(5), px(4)]);
+      ctx.beginPath();
+      ctx.moveTo(cr.x - px(17), cr.y - px(11));
+      ctx.lineTo(cr.x - px(17), cr.y + px(11));
+      ctx.moveTo(cr.x + px(17), cr.y - px(11));
+      ctx.lineTo(cr.x + px(17), cr.y + px(11));
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else {
+      // 隘路・間道 ― 両脇を山形で締める
+      ctx.strokeStyle = INK.sheetInk;
+      ctx.lineWidth = px(1.6);
+      ctx.setLineDash([]);
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(cr.x + side * px(20), cr.y - px(13));
+        ctx.lineTo(cr.x + side * px(11), cr.y);
+        ctx.lineTo(cr.x + side * px(20), cr.y + px(13));
+        ctx.stroke();
+      }
+    }
+  }
 
-  // 浅瀬 ― 破線で徒渉可を示す
-  const f = terrain.ford;
-  ctx.strokeStyle = INK.water;
-  ctx.lineWidth = px(1.8);
-  ctx.setLineDash([px(5), px(4)]);
-  ctx.beginPath();
-  ctx.moveTo(f.x - px(17), f.y - px(11));
-  ctx.lineTo(f.x - px(17), f.y + px(11));
-  ctx.moveTo(f.x + px(17), f.y - px(11));
-  ctx.lineTo(f.x + px(17), f.y + px(11));
-  ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();
 }
 
 /** 地名注記。地図には地名が要る。 */
 function drawPlaceNames(ctx, terrain, px) {
-  const names = [
-    { x: terrain.bridge.x, y: terrain.bridge.y - 150, text: 'ヴォルネ橋', size: 11, style: 'ink' },
-    { x: terrain.ford.x, y: terrain.ford.y - 140, text: '下ノ瀬（徒渉可）', size: 9.5, style: 'water' },
-    { x: 2200, y: 2420, text: 'ザーレン', size: 12, style: 'ink' },
-    { x: 2380, y: 1330, text: '北ザーレン', size: 9.5, style: 'ink' },
-    { x: 1150, y: 2400, text: '第一高地 82', size: 9.5, style: 'ink' },
-    { x: 3980, y: 560, text: 'コルプ稜線 92', size: 9.5, style: 'ink' },
-    { x: 2950, y: 2700, text: '南丘 54', size: 9, style: 'ink' },
-    { x: 3600, y: 1780, text: 'ヴォルネ川', size: 11, style: 'water', italic: true },
-  ];
+  const names = [];
+
+  // 通過点。指揮官が無線で呼ぶ名前でもあるので、必ず載せる。
+  for (const cr of terrain.crossings) {
+    names.push({
+      x: cr.x,
+      y: cr.y - 150,
+      text: cr.kind === 'ford' ? `${cr.label}（徒渉可）` : cr.label,
+      size: cr.kind === 'bridge' ? 11 : 9.5,
+      style: cr.kind === 'ford' ? 'water' : 'ink',
+    });
+  }
+
+  // 集落と高地。標高は図幅から拾う（手で書くと地形をいじった瞬間に嘘になる）。
+  for (const t of terrain.towns) {
+    if (!t.name) continue;
+    names.push({ x: t.x, y: t.y + t.r * 0.42, text: t.name, size: 11.5, style: 'ink' });
+  }
+  for (const h of terrain.hills) {
+    if (!h.name) continue;
+    names.push({
+      x: h.x,
+      y: h.y - h.r * 0.34,
+      text: `${h.name} ${Math.round(h.h + 18)}`,
+      size: 9.5,
+      style: 'ink',
+    });
+  }
+  if (terrain.waterName) {
+    // 通過点の注記とぶつからない x を選ぶ。地図の注記は重なった時点で読めない。
+    let wx = WORLD.width * 0.74;
+    let bestGap = -1;
+    for (let cand = WORLD.width * 0.12; cand < WORLD.width * 0.95; cand += WORLD.width * 0.06) {
+      const gap = Math.min(...terrain.crossings.map((c) => Math.abs(c.x - cand)));
+      if (gap > bestGap) {
+        bestGap = gap;
+        wx = cand;
+      }
+    }
+    names.push({ x: wx, y: terrain.front(wx) - 130, text: terrain.waterName, size: 11, style: 'water', italic: true });
+  }
 
   ctx.save();
   ctx.textAlign = 'center';

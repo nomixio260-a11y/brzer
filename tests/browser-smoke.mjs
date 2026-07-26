@@ -244,6 +244,61 @@ async function checkLongBattle() {
   await ctx.close();
 }
 
+/**
+ * 図幅ごとの通し確認。
+ * 4本のミッションが、それぞれの図幅で起動し、地図が刷れていること。
+ */
+async function checkMissions() {
+  const ctx = await browser.newContext({ viewport: { width: 1500, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message));
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+
+  await p.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+  await p.waitForFunction(() => document.querySelectorAll('#mission-pick button').length > 0,
+    null, { timeout: 10000 });
+  const ids = await p.$$eval('#mission-pick button', (bs) => bs.map((b) => b.dataset.mission));
+  check('ミッションが4本選べる', ids.length === 4, ids.join(','));
+
+  const seen = new Set();
+  for (const id of ids) {
+    await p.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+    await p.waitForFunction(() => document.querySelectorAll('#mission-pick button').length > 0,
+      null, { timeout: 10000 });
+    await p.click(`#mission-pick button[data-mission="${id}"]`);
+    await p.waitForTimeout(300);
+    const sub = await p.textContent('#brief-sub');
+    await p.click('#btn-start');
+    await p.waitForTimeout(1100);
+
+    const info = await p.evaluate(() => ({
+      map: window.__brzer.game.world.terrain.mapId,
+      units: window.__brzer.game.world.units.length,
+      clock: document.getElementById('clock').textContent.trim(),
+      objective: document.getElementById('objective-line').textContent,
+    }));
+    seen.add(info.map);
+    check(`${id}: 起動する`, info.units > 0 && info.clock.length === 4, JSON.stringify(info));
+    check(`${id}: 任務が表示される`, info.objective.length > 5, info.objective);
+    check(`${id}: 図幅名が出ている`, sub.length > 6, sub);
+
+    // 地図が紙として刷れているか（真っ黒でないこと）
+    const painted = await p.evaluate(() => {
+      const c = document.getElementById('map');
+      const g = c.getContext('2d');
+      const d = g.getImageData(Math.floor(c.width * 0.5), Math.floor(c.height * 0.45), 1, 1).data;
+      return d[0] > 60 && d[1] > 60;
+    });
+    check(`${id}: 地図が刷れている`, painted);
+  }
+  check('図幅が3面使われている', seen.size === 3, [...seen].join(','));
+  check('図幅の切り替えでエラーが出ない', errs.length === 0, errs.slice(0, 3).join(' | '));
+
+  await p.screenshot({ path: `${SHOTS}/06-mission.png` });
+  await ctx.close();
+}
+
 try {
   console.log('\n== 起動 ==');
   await page.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
@@ -601,6 +656,9 @@ try {
 
   section('長期戦');
   await checkLongBattle();
+
+  section('図幅とミッション');
+  await checkMissions();
 } finally {
   await browser.close();
 }

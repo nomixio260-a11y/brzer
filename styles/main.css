@@ -620,6 +620,19 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   background: linear-gradient(#241d12, #16110a);
 }
 .missionpick__opt b { display: block; font-size: 13.5px; color: var(--ink); letter-spacing: 0.06em; }
+.missionpick__tag {
+  display: inline-block;
+  font-style: normal;
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+  border: 1px solid #3b352c;
+  border-radius: 1px;
+  padding: 1px 6px;
+  margin-left: 8px;
+  vertical-align: 2px;
+}
+.missionpick__opt.is-on .missionpick__tag { color: #d8c08a; border-color: #6b5a34; }
 .missionpick__opt.is-on b { color: #ffe3ae; }
 .missionpick__opt em {
   display: block;

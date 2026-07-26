@@ -2,6 +2,7 @@
 // DOM非依存。シードが同じなら必ず同じ地図になる。
 
 import { WORLD, Rng, clamp, lerp } from '../util.js';
+import { getMap } from './maps.js';
 
 export const T = Object.freeze({
   FIELD: 0, // 開豁地
@@ -12,6 +13,7 @@ export const T = Object.freeze({
   BRIDGE: 5, // 橋
   FORD: 6, // 浅瀬
   MARSH: 7, // 湿地
+  ROCK: 8, // 急斜面・岩稜（車輌はもちろん、徒歩でも越えられない）
 });
 
 export const TERRAIN_NAME_JA = Object.freeze({
@@ -23,6 +25,7 @@ export const TERRAIN_NAME_JA = Object.freeze({
   [T.BRIDGE]: '橋梁',
   [T.FORD]: '浅瀬',
   [T.MARSH]: '湿地',
+  [T.ROCK]: '急斜面',
 });
 
 /** 遮蔽（射撃に対する防護）。0 = 遮蔽なし、1 = 完全遮蔽。 */
@@ -35,6 +38,7 @@ const COVER = {
   [T.BRIDGE]: 0.05,
   [T.FORD]: 0.0,
   [T.MARSH]: 0.15,
+  [T.ROCK]: 0.55,
 };
 
 /** 隠蔽（発見されにくさ）。視線が通っていても見つかりにくくなる。 */
@@ -47,6 +51,7 @@ const CONCEAL = {
   [T.BRIDGE]: 0.0,
   [T.FORD]: 0.0,
   [T.MARSH]: 0.25,
+  [T.ROCK]: 0.2,
 };
 
 /** 移動速度の倍率。0 は通行不能。 */
@@ -59,6 +64,7 @@ const MOBILITY = {
   [T.BRIDGE]: 1.3,
   [T.FORD]: 0.35,
   [T.MARSH]: 0.4,
+  [T.ROCK]: 0.0,
 };
 
 /** これだけの厚みの植生を貫くと視線が完全に切れる（メートル） */
@@ -104,44 +110,45 @@ function fbm(noise, x, y, octaves = 4) {
 /* 地形生成                                                            */
 /* ------------------------------------------------------------------ */
 
-// ミッション「橋梁死守」の地理: 川が西→東に流れ、北岸が敵、南岸が味方。
-const RIVER_BASE_Y = 1680;
-const RIVER_HALF_WIDTH = 55;
-const BRIDGE_X = 2200; // グリッド F
-const FORD_X = 4180; // グリッド K（東の浅瀬）
+/**
+ * 前縁 ── 攻者と防者を分ける線。
+ * 川であったり、峠の鞍部であったり、運河であったりする。
+ * 「北岸／南岸」を判定したい側は、この一本だけを見ればよい。
+ */
+export function frontLineY(terrain, x) {
+  return terrain.front(x);
+}
 
-/** x における河心の y 座標 */
+/** 後方互換。ヴォルネ川の図幅を既定として扱う。 */
 export function riverCenterY(x) {
-  return (
-    RIVER_BASE_Y +
-    260 * Math.sin((x / WORLD.width) * Math.PI * 1.7 - 0.6) +
-    90 * Math.sin((x / WORLD.width) * Math.PI * 4.3 + 1.2)
-  );
+  return getMap('volne_river').frontLine(x);
 }
 
 /**
  * 地形を生成する。
  * @param {number} seed
+ * @param {string} mapId 図幅（maps.js）
  * @returns {object} terrain
  */
-export function generateTerrain(seed = 20260726) {
-  const rng = new Rng(seed);
+export function generateTerrain(seed, mapId = 'volne_river') {
+  const map = getMap(mapId);
+  const s = seed ?? map.seed;
+  const rng = new Rng(s);
   const noise = makeValueNoise(rng);
-  const detail = makeValueNoise(new Rng(seed ^ 0x5bf03635));
+  const detail = makeValueNoise(new Rng(s ^ 0x5bf03635));
 
   const n = WORLD.cols * WORLD.rows;
   const type = new Uint8Array(n);
   const elev = new Float32Array(n);
 
+  const front = map.frontLine;
+  const HILLS = map.hills;
+  const FORESTS = map.forests;
+  const TOWNS = map.towns;
+  const water = map.water;
+
   // --- 標高 ---------------------------------------------------------
   // 起伏はノイズ由来だが、戦術上意味のある高地は明示的に盛る。
-  const HILLS = [
-    { x: 1150, y: 2560, r: 780, h: 62, name: '西の高地' }, // 味方が取れる高地
-    { x: 3980, y: 700, r: 900, h: 74, name: '北東の稜線' }, // 敵側の観測所
-    { x: 2950, y: 2820, r: 620, h: 34, name: '南の丘' },
-    { x: 620, y: 620, r: 700, h: 40, name: '北西の丘' },
-  ];
-
   for (let r = 0; r < WORLD.rows; r++) {
     for (let c = 0; c < WORLD.cols; c++) {
       const i = r * WORLD.cols + c;
@@ -162,11 +169,12 @@ export function generateTerrain(seed = 20260726) {
         }
       }
 
-      // 川に近づくほど低くなる（河谷）
-      const dRiver = Math.abs(y - riverCenterY(x));
-      if (dRiver < 420) {
-        const t = 1 - dRiver / 420;
-        h = lerp(h, 8, t * t);
+      // 前縁に近づくほど低くなる（河谷・鞍部）
+      const dFront = Math.abs(y - front(x));
+      const valley = map.valleyWidth ?? 420;
+      if (dFront < valley) {
+        const t = 1 - dFront / valley;
+        h = lerp(h, map.valleyFloor ?? 8, t * t);
       }
 
       elev[i] = h;
@@ -174,21 +182,6 @@ export function generateTerrain(seed = 20260726) {
   }
 
   // --- 地形種別 ------------------------------------------------------
-  const FORESTS = [
-    { x: 780, y: 980, r: 560 },
-    { x: 1700, y: 640, r: 520 },
-    { x: 3350, y: 460, r: 640 },
-    { x: 620, y: 2500, r: 520 },
-    { x: 1560, y: 3120, r: 600 },
-    { x: 3450, y: 2600, r: 700 },
-    { x: 4400, y: 1180, r: 480 },
-    { x: 2760, y: 900, r: 420 },
-  ];
-  const TOWNS = [
-    { x: 2200, y: 2280, r: 400 }, // 橋の南、味方が拠る集落
-    { x: 2380, y: 1180, r: 300 }, // 橋の北の小集落
-  ];
-
   for (let r = 0; r < WORLD.rows; r++) {
     for (let c = 0; c < WORLD.cols; c++) {
       const i = r * WORLD.cols + c;
@@ -196,7 +189,6 @@ export function generateTerrain(seed = 20260726) {
       const y = (r + 0.5) * WORLD.cell;
       let t = T.FIELD;
 
-      // 森
       for (const f of FORESTS) {
         const d = Math.hypot(x - f.x, y - f.y);
         const wob = f.r * (0.72 + 0.42 * fbm(detail, x / 260, y / 260, 3));
@@ -206,7 +198,6 @@ export function generateTerrain(seed = 20260726) {
         }
       }
 
-      // 市街
       for (const tw of TOWNS) {
         const d = Math.hypot(x - tw.x, y - tw.y);
         const wob = tw.r * (0.78 + 0.36 * fbm(detail, x / 200 + 40, y / 200, 3));
@@ -216,13 +207,20 @@ export function generateTerrain(seed = 20260726) {
         }
       }
 
-      // 河川（湿地の縁を伴う）
-      const dRiver = Math.abs(y - riverCenterY(x));
-      const wobble = 14 * fbm(detail, x / 180, y / 180, 2);
-      if (dRiver < RIVER_HALF_WIDTH + wobble) {
-        t = T.WATER;
-      } else if (dRiver < RIVER_HALF_WIDTH + 90 + wobble && t === T.FIELD) {
-        t = T.MARSH;
+      // 水線のある図幅だけ、前縁に水を流す
+      if (water) {
+        const dFront = Math.abs(y - front(x));
+        const wobble = 14 * fbm(detail, x / 180, y / 180, 2);
+        if (dFront < water.halfWidth + wobble) {
+          t = T.WATER;
+        } else if (water.marshWidth > 0 && dFront < water.halfWidth + water.marshWidth + wobble && t === T.FIELD) {
+          t = T.MARSH;
+        }
+      }
+
+      // 急峻な岩稜。ここが通れないから「隘路」が隘路になる。
+      if (map.rockAbove != null && elev[i] > map.rockAbove && t !== T.TOWN) {
+        t = T.ROCK;
       }
 
       type[i] = t;
@@ -230,61 +228,62 @@ export function generateTerrain(seed = 20260726) {
   }
 
   // --- 道路 ---------------------------------------------------------
-  // 主要道: 北から橋を通って南へ抜ける
-  const mainRoad = [
-    { x: 2320, y: 0 },
-    { x: 2260, y: 620 },
-    { x: 2380, y: 1180 },
-    { x: BRIDGE_X, y: riverCenterY(BRIDGE_X) },
-    { x: 2200, y: 2280 },
-    { x: 2120, y: 3000 },
-    { x: 2180, y: WORLD.height },
-  ];
-  // 南岸の横断道: 集落から東の浅瀬方向へ
-  const lateralRoad = [
-    { x: 200, y: 2620 },
-    { x: 1180, y: 2440 },
-    { x: 2200, y: 2280 },
-    { x: 3260, y: 2280 },
-    { x: 4180, y: 2020 },
-    { x: 4600, y: 1900 },
-  ];
-  // 北岸の道: 敵の進入路
-  const northRoad = [
-    { x: 4700, y: 520 },
-    { x: 3800, y: 760 },
-    { x: 2900, y: 900 },
-    { x: 2380, y: 1180 },
-  ];
+  // 図幅側は前縁の y を知らないので 'front' と書いておき、ここで解決する。
+  const roads = map.roads.map((road) => ({
+    cls: road.cls,
+    points: road.points.map((p) => ({ x: p.x, y: p.y === 'front' ? front(p.x) : p.y })),
+  }));
+  for (const road of roads) paintPolyline(type, elev, road.points, 34);
 
-  for (const path of [mainRoad, lateralRoad, northRoad]) {
-    paintPolyline(type, elev, path, 34);
+  // --- 通過点 -------------------------------------------------------
+  const crossings = map.crossings.map((cr) => ({
+    ...cr,
+    y: cr.y ?? front(cr.x),
+  }));
+  for (const cr of crossings) {
+    const kind = CROSSING_TYPE[cr.kind] ?? T.ROAD;
+    const over = cr.kind === 'bridge'
+      ? [T.WATER, T.MARSH, T.ROAD]
+      : cr.kind === 'ford'
+        ? [T.WATER, T.MARSH]
+        : [T.FIELD, T.FOREST, T.MARSH, T.TOWN, T.ROCK];
+    paintDisc(type, cr.x, cr.y, cr.radius ?? 110, kind, over);
   }
 
-  // --- 渡河点 -------------------------------------------------------
-  paintDisc(type, BRIDGE_X, riverCenterY(BRIDGE_X), 105, T.BRIDGE, [T.WATER, T.MARSH, T.ROAD]);
-  paintDisc(type, FORD_X, riverCenterY(FORD_X), 130, T.FORD, [T.WATER, T.MARSH]);
+  // 主・副の通過点。旧来の呼び名も残す（bridge / ford）。
+  const primary = crossings[0];
+  const secondary = crossings[1] ?? crossings[0];
 
   const terrain = {
-    seed,
+    seed: s,
+    mapId: map.id,
+    mapName: map.name,
+    mapNote: map.note,
     type,
     elev,
-    bridge: { x: BRIDGE_X, y: riverCenterY(BRIDGE_X) },
-    ford: { x: FORD_X, y: riverCenterY(FORD_X) },
+    front,
+    hasWater: !!water,
+    crossings,
+    bridge: { x: primary.x, y: primary.y },
+    ford: { x: secondary.x, y: secondary.y },
     hills: HILLS,
     towns: TOWNS,
-    // 描画側がベクタとして道路と河川をなぞれるように残しておく。
-    // cls は地図記号の等級（主要道／里道）。
-    roads: [
-      { cls: 'major', points: mainRoad },
-      { cls: 'minor', points: lateralRoad },
-      { cls: 'minor', points: northRoad },
-    ],
-    riverHalfWidth: RIVER_HALF_WIDTH,
+    // 描画側がベクタとして道路と水線をなぞれるように残しておく。
+    roads,
+    riverHalfWidth: water ? water.halfWidth : 0,
+    waterName: water ? water.name : null,
   };
 
   return terrain;
 }
+
+/** 通過点の種別 → 地形種別 */
+const CROSSING_TYPE = {
+  bridge: T.BRIDGE,
+  ford: T.FORD,
+  defile: T.ROAD,
+  track: T.FIELD,
+};
 
 /** 折れ線に沿って道路を敷く（水上は橋にしない ― 橋は明示的に置く） */
 function paintPolyline(type, elev, pts, halfWidth) {

@@ -1,7 +1,8 @@
 // ミッション定義「橋梁死守」。地理・戦闘序列・展開・勝敗条件をデータとして持つ。
 
-import { parseClock, toGrid, dist } from '../util.js';
+import { parseClock, toGrid, dist, formatClock } from '../util.js';
 import { riverCenterY } from './terrain.js';
+import { MISSION_PASS, MISSION_TOWN } from './missions.js';
 
 const T0 = parseClock('0700');
 const TEND = parseClock('0900');
@@ -14,7 +15,15 @@ export const FORD_GRID = toGrid(FORD_X, riverCenterY(FORD_X));
 
 export const MISSION = Object.freeze({
   id: 'bridge_hold',
+  mapId: 'volne_river',
+  victory: { kind: 'hold_point', label: 'ヴォルネ橋' },
+  phases: [
+    { at: '0700', label: '静穏' }, { at: '0712', label: '警戒' },
+    { at: '0738', label: '接敵' }, { at: '0800', label: '交戦中' },
+    { at: '0845', label: '最終局面' },
+  ],
   title: '橋梁死守',
+  blurb: '一度の攻撃を凌ぎ切れるか。まずはここから。',
   subtitle: 'ヴォルネ川 / 第3中隊戦闘団',
   duration: 'short',
   seed: 20260726,
@@ -81,7 +90,16 @@ const LEND = parseClock('1045');
  */
 export const MISSION_LONG = Object.freeze({
   id: 'bridge_hold_long',
+  mapId: 'volne_river',
+  victory: { kind: 'hold_point', label: 'ヴォルネ橋' },
+  phases: [
+    { at: '0430', label: '夜間・警戒' }, { at: '0505', label: '斥候接触' },
+    { at: '0540', label: '第一波' }, { at: '0645', label: '静穏 ─ 再編' },
+    { at: '0800', label: '第二波' }, { at: '0905', label: '静穏 ─ 再編' },
+    { at: '0950', label: '第三波' }, { at: '1020', label: '最終局面' },
+  ],
   title: '橋梁持久',
+  blurb: '三度の攻撃を、弾と体力を切らさずに凌ぐ。補給と休養の管理が要る。',
   subtitle: 'ヴォルネ川 / 第3中隊戦闘団 ─ 半日の防御',
   duration: 'long',
   seed: 20260726,
@@ -154,7 +172,14 @@ export const MISSION_LONG = Object.freeze({
 export const MISSIONS = Object.freeze({
   [MISSION.id]: MISSION,
   [MISSION_LONG.id]: MISSION_LONG,
+  [MISSION_PASS.id]: MISSION_PASS,
+  [MISSION_TOWN.id]: MISSION_TOWN,
 });
+
+/** 選択画面に出す順 */
+export function missionList() {
+  return [MISSION, MISSION_LONG, MISSION_PASS, MISSION_TOWN];
+}
 
 export function getMission(id) {
   return MISSIONS[id] ?? MISSION;
@@ -165,6 +190,9 @@ export function getMission(id) {
 /* ------------------------------------------------------------------ */
 
 export function friendlyOrderOfBattle(mission = MISSION) {
+  // ミッションが自前の編成を持っていればそれを使う
+  if (mission.orbat) return mission.orbat(mission);
+
   const long = mission.duration === 'long';
   // 半日守れという命令には、それに見合う編成が付く。
   // 一個中隊 ─ 小銃4個分隊に対戦車班、迫撃砲、無人機、そして段列。
@@ -239,7 +267,9 @@ export function friendlyOrderOfBattle(mission = MISSION) {
  * 「今日はどっちだ」を無線から読み直さねばならない。
  */
 export function timeline(rng, opts = {}) {
-  if ((opts.mission ?? MISSION).duration === 'long') return longTimeline(rng, opts);
+  const mission = opts.mission ?? MISSION;
+  if (mission.timeline) return mission.timeline(rng, opts);
+  if (mission.duration === 'long') return longTimeline(rng, opts);
   const riverAtFord = riverCenterY(4180);
 
   // 主攻は東の浅瀬か、橋の正面か。
@@ -547,12 +577,33 @@ const LOSS_GRACE_LONG = 480;
  * @returns {{status:string, reason?:string}}
  */
 export function evaluate(world) {
-  const bridge = world.terrain.bridge;
+  const kind = world.mission.victory?.kind ?? 'hold_point';
+  switch (kind) {
+    case 'delay_line': return evaluateDelay(world);
+    case 'seize_point': return evaluateSeize(world);
+    default: return evaluateHold(world);
+  }
+}
 
-  const friendlySquads = world.units.filter(
-    (u) => u.side === 'friend' && (u.type === 'infantry' || u.type === 'at_team')
+/** 戦闘可能な自軍分隊 */
+function effectiveSquads(world) {
+  return world.units.filter(
+    (u) =>
+      u.side === 'friend' &&
+      (u.type === 'infantry' || u.type === 'at_team') &&
+      u.alive &&
+      u.strength > u.maxStrength * 0.34 &&
+      u.morale > 25
   );
-  const effective = friendlySquads.filter((u) => u.alive && u.strength > u.maxStrength * 0.34 && u.morale > 25);
+}
+
+/* ------------------------------------------------------------------ */
+/* 型1: 一点を保持する（橋梁死守・橋梁持久）                              */
+/* ------------------------------------------------------------------ */
+
+function evaluateHold(world) {
+  const bridge = world.terrain.bridge;
+  const effective = effectiveSquads(world);
 
   const enemyAtBridge = world.units.filter(
     (u) => u.side === 'enemy' && u.alive && dist(u.x, u.y, bridge.x, bridge.y) < BRIDGE_RADIUS
@@ -587,8 +638,7 @@ export function evaluate(world) {
 
   if (world.now < world.mission.endTime) return { status: 'ongoing' };
 
-  // --- 0900 到達 ---
-  // 南岸に「橋頭堡」が残ったかどうか。半壊した部隊は橋頭堡とは呼べない。
+  // --- 時限到達 ---
   // 頭数ではなく戦闘力で測る。斥候が2つ居残っても橋頭堡とは呼ばない。
   const bridgehead = world.units
     .filter(
@@ -597,13 +647,13 @@ export function evaluate(world) {
         u.alive &&
         u.type !== 'recon' &&
         u.strength > u.maxStrength * 0.4 &&
-        u.y > riverCenterY(u.x) + 80
+        u.y > world.terrain.front(u.x) + 80
     )
     .reduce((s, u) => s + u.strength / u.maxStrength, 0);
 
-  // 橋の上に敵がいても、こちらがまだ橋を押さえているなら「奪われた」ではない。
+  const clock = formatClock(world.mission.endTime);
   if (enemyAtBridge.length > 0 && friendlyAtBridge.length === 0) {
-    return { status: 'defeat', reason: '0900時点で橋梁は敵の手にある。増援は展開できない。' };
+    return { status: 'defeat', reason: `${clock}時点で橋梁は敵の手にある。増援は展開できない。` };
   }
   if (enemyAtBridge.length > 0) {
     return {
@@ -621,6 +671,135 @@ export function evaluate(world) {
     return { status: 'narrow', reason: '橋は守り抜いた。だが中隊は事実上壊滅した。' };
   }
   return { status: 'victory', reason: '橋梁を確保したまま増援を迎えた。防御は成功である。' };
+}
+
+/* ------------------------------------------------------------------ */
+/* 型2: 線を越えさせない（遅滞行動）                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 遅滞。
+ * 守るのは陣地ではなく時間である ── どこまで下がってもよいが、
+ * 定めた線より南へ敵を出したら、そこで負けになる。
+ */
+function evaluateDelay(world) {
+  const v = world.mission.victory;
+  const effective = effectiveSquads(world);
+
+  // 線を越えた敵。斥候一両では「突破」とは言わない。
+  const past = world.units.filter(
+    (u) =>
+      u.side === 'enemy' &&
+      u.alive &&
+      u.type !== 'recon' &&
+      u.strength > u.maxStrength * 0.4 &&
+      u.y > v.lineY
+  );
+
+  if (past.length > 0) {
+    world.lineLostSince ??= world.now;
+  } else {
+    world.lineLostSince = null;
+  }
+  if (world.lineLostSince != null && world.now - world.lineLostSince > 180) {
+    return {
+      status: 'defeat',
+      reason: `敵が${v.label}を突破した。本隊の陣地構築は間に合わない。`,
+    };
+  }
+
+  if (effective.length === 0) {
+    return { status: 'defeat', reason: '遅滞部隊が失われた。もはや誰も敵を止められない。' };
+  }
+
+  if (world.now < world.mission.endTime) return { status: 'ongoing' };
+
+  // --- 時限到達 ---
+  const enemyLosses = world.units
+    .filter((u) => u.side === 'enemy')
+    .reduce((s, u) => s + u.losses, 0);
+  const nearest = world.units
+    .filter((u) => u.side === 'enemy' && u.alive && u.type !== 'recon')
+    .reduce((m, u) => Math.max(m, u.y), 0);
+
+  if (effective.length <= 1) {
+    return { status: 'narrow', reason: '時間は稼いだ。だが遅滞部隊は事実上壊滅した。' };
+  }
+  if (nearest > v.lineY - 500) {
+    return {
+      status: 'narrow',
+      reason: `${v.label}の直前で敵を止めたまま時限に達した。紙一重である。`,
+    };
+  }
+  if (enemyLosses >= 6) {
+    return {
+      status: 'victory',
+      reason: '所定の時間を稼ぎ、なお部隊を保ち、敵に痛撃を与えた。遅滞は成功である。',
+    };
+  }
+  return { status: 'victory', reason: '所定の時間を稼ぎ、部隊を保ったまま離脱できる。遅滞は成功である。' };
+}
+
+/* ------------------------------------------------------------------ */
+/* 型3: 一点を奪回する（逆襲）                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 奪回。
+ * 今度は貴官が攻める側である。目標を占め、一定時間保って初めて「確保した」と言える。
+ */
+function evaluateSeize(world) {
+  const v = world.mission.victory;
+  const p = v.point;
+  const effective = effectiveSquads(world);
+
+  const friendlyOn = world.units.filter(
+    (u) =>
+      u.side === 'friend' &&
+      u.alive &&
+      u.tpl.range > 0 &&
+      u.state !== 'broken' &&
+      u.strength > u.maxStrength * 0.3 &&
+      dist(u.x, u.y, p.x, p.y) < p.radius
+  );
+  const enemyOn = world.units.filter(
+    (u) =>
+      u.side === 'enemy' &&
+      u.alive &&
+      u.strength > u.maxStrength * 0.25 &&
+      dist(u.x, u.y, p.x, p.y) < p.radius
+  );
+
+  const holding = friendlyOn.length > 0 && enemyOn.length === 0;
+  if (holding) {
+    world.seizedSince ??= world.now;
+  } else {
+    world.seizedSince = null;
+  }
+  const held = world.seizedSince != null ? world.now - world.seizedSince : 0;
+  world.seizeHeldFor = held;
+
+  if (held >= (v.holdFor ?? 240)) {
+    if (effective.length <= 1) {
+      return { status: 'narrow', reason: `${v.label}は奪回した。だが中隊は事実上壊滅した。` };
+    }
+    return { status: 'victory', reason: `${v.label}を奪回し、確保した。逆襲は成功である。` };
+  }
+
+  if (effective.length === 0) {
+    return { status: 'defeat', reason: '突撃部隊が失われた。逆襲は頓挫した。' };
+  }
+
+  if (world.now < world.mission.endTime) return { status: 'ongoing' };
+
+  // --- 時限到達 ---
+  if (friendlyOn.length > 0) {
+    return {
+      status: 'narrow',
+      reason: `${v.label}に取り付いたが、確保しきる前に時限に達した。あと一歩だった。`,
+    };
+  }
+  return { status: 'defeat', reason: `${v.label}を奪回できなかった。連絡路は断たれたままである。` };
 }
 
 /** デブリーフ用の採点 */

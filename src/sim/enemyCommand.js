@@ -6,9 +6,10 @@
 // 火力を要請する。プレイヤーの配置が、そのまま敵の判断材料になる。
 
 import { clamp, dist, toGrid } from '../util.js';
-import { riverCenterY } from './terrain.js';
+
 import { createFireMission } from './combat.js';
 import { setDestination } from './units.js';
+import { enemyGoal } from './ai.js';
 
 const ASSESS_INTERVAL = 100; // 秒。指揮官はそう頻繁には決心を変えない。
 
@@ -33,9 +34,30 @@ export function createEnemyCommand(world) {
   };
 }
 
-/** どちらの軸に属する部隊か（担当を x 座標で分ける） */
-function axisOf(u) {
-  return u.x > 3400 || u.ai?.task === 'flank' ? 'ford' : 'bridge';
+/** どちらの軸に属する部隊か（主通過点と副通過点の中間で分ける） */
+function axisOf(world, u) {
+  if (u.ai?.task === 'flank') return 'ford';
+  const a = world.terrain.bridge.x;
+  const b = world.terrain.ford.x;
+  const mid = (a + b) / 2;
+  return b > a ? (u.x > mid ? 'ford' : 'bridge') : (u.x < mid ? 'ford' : 'bridge');
+}
+
+/** 軸に対応する通過点 */
+function crossingPoint(world, axis) {
+  const c = axis === 'ford' ? world.terrain.ford : world.terrain.bridge;
+  return { x: c.x, y: c.y };
+}
+
+/** 主攻の最終目標 */
+function mainObjective(world) {
+  return enemyGoal(world, null);
+}
+
+/** 迂回部隊の最終目標（主目標の側方から入る） */
+function flankObjective(world) {
+  const g = enemyGoal(world, null);
+  return { x: g.x + 380, y: g.y - 120 };
 }
 
 export function stepEnemyCommand(world, dt) {
@@ -96,7 +118,7 @@ function stepWaves(world, ec) {
 
     const strength = units.reduce((s, u) => s + u.strength / u.maxStrength, 0) / units.length;
     let best = -Infinity;
-    for (const u of units) best = Math.max(best, u.y - riverCenterY(u.x));
+    for (const u of units) best = Math.max(best, u.y - world.terrain.front(u.x));
     wave.stalledFor = best - wave.bestProgress < 60 ? wave.stalledFor + ASSESS_INTERVAL : 0;
     wave.bestProgress = Math.max(wave.bestProgress, best);
 
@@ -123,7 +145,7 @@ function stepWaves(world, ec) {
 
 /** 川の北へ退がって編成を立て直す */
 function retire(world, u) {
-  const rallyY = Math.max(80, riverCenterY(u.x) - 900);
+  const rallyY = Math.max(80, world.terrain.front(u.x) - 900);
   u.ai = { ...u.ai, task: 'retire', rally: { x: clamp(u.x + world.rng.range(-200, 200), 200, 4600), y: rallyY } };
   u._goalKey = null;
   u.state = 'withdrawing';
@@ -146,10 +168,8 @@ function rejoin(world, ec, newWave) {
     u.ai = {
       wave: newWave,
       task: east ? 'flank' : 'assault',
-      crossing: east
-        ? { x: 4180, y: riverCenterY(4180) }
-        : { x: world.terrain.bridge.x, y: riverCenterY(world.terrain.bridge.x) },
-      objective: east ? { x: 2600, y: 2250 } : { x: 2200, y: 2120 },
+      crossing: east ? crossingPoint(world, 'ford') : crossingPoint(world, 'bridge'),
+      objective: east ? flankObjective(world) : mainObjective(world),
     };
     u._goalKey = null;
     u.state = 'moving';
@@ -182,7 +202,7 @@ function assessAxes(world, ec) {
         u.alive &&
         !u.tpl.indirect &&
         u.ai?.task !== 'reserve' && // 待機中の予備は評価に混ぜない
-        axisOf(u) === key
+        axisOf(world, u) === key
     );
 
     // 「どちらが通っているか」は、目標にどれだけ近づけたかで測る。
@@ -192,7 +212,7 @@ function assessAxes(world, ec) {
     let nearest = Infinity;
     let losses = 0;
     for (const u of units) {
-      best = Math.max(best, u.y - riverCenterY(u.x));
+      best = Math.max(best, u.y - world.terrain.front(u.x));
       nearest = Math.min(nearest, dist(u.x, u.y, obj.x, obj.y));
       losses += u.losses;
     }
@@ -243,12 +263,8 @@ function commitReserve(world, ec) {
   ec.reserveCommitted = true;
   ec.committedAxis = target;
 
-  const crossing =
-    target === 'ford'
-      ? { x: 4180, y: riverCenterY(4180) }
-      : { x: 2200, y: riverCenterY(2200) };
-  const objective =
-    target === 'ford' ? { x: 2600, y: 2250 } : { x: 2200, y: 2120 };
+  const crossing = crossingPoint(world, target);
+  const objective = target === 'ford' ? flankObjective(world) : mainObjective(world);
 
   for (const u of reserve) {
     u.ai = { task: target === 'ford' ? 'flank' : 'assault', crossing, objective };
@@ -280,7 +296,7 @@ function redirectStragglers(world, ec) {
       u.side === 'enemy' &&
       u.alive &&
       !u.tpl.indirect &&
-      axisOf(u) === stalled &&
+      axisOf(world, u) === stalled &&
       u.ai?.task !== 'pressure' && // 陽動はその場に留めておく
       !u._redirected
   );
@@ -288,15 +304,14 @@ function redirectStragglers(world, ec) {
 
   // 半分だけ回す
   const shift = movable.slice(0, Math.max(1, Math.floor(movable.length / 2)));
-  const crossing =
-    other === 'ford' ? { x: 4180, y: riverCenterY(4180) } : { x: 2200, y: riverCenterY(2200) };
+  const crossing = crossingPoint(world, other);
 
   for (const u of shift) {
     u._redirected = true;
     u.ai = {
       task: other === 'ford' ? 'flank' : 'assault',
       crossing,
-      objective: other === 'ford' ? { x: 2600, y: 2250 } : { x: 2200, y: 2120 },
+      objective: other === 'ford' ? flankObjective(world) : mainObjective(world),
     };
     u._goalKey = null;
   }
@@ -325,7 +340,7 @@ function requestEnemySmoke(world, ec) {
       u.side === 'enemy' &&
       u.alive &&
       u.suppression > 55 &&
-      Math.abs(u.y - riverCenterY(u.x)) < 260
+      Math.abs(u.y - world.terrain.front(u.x)) < 260
   );
   if (!crossing) {
     ec.nextSmokeAt = world.now + 60;

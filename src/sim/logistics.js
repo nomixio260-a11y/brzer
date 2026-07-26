@@ -10,7 +10,7 @@
 
 import { clamp, dist, toGrid } from '../util.js';
 import { setDestination } from './units.js';
-import { riverCenterY } from './terrain.js';
+
 import { enqueue, PRI } from './comms.js';
 
 /** 補給を渡せる距離（m）。手渡しなので、ほぼ同じ場所にいる必要がある。 */
@@ -131,7 +131,7 @@ export function orderResupply(world, targetId) {
  * 前線に近づいたら身を低くする。運び屋が撃たれれば、弾は届かない。
  */
 function carrierPace(world, carrier) {
-  const nearFront = carrier.y < riverCenterY(carrier.x) + 900;
+  const nearFront = carrier.y < world.terrain.front(carrier.x) + 900;
   return nearFront ? 'cautious' : 'normal';
 }
 

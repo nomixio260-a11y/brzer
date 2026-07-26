@@ -223,6 +223,8 @@ function applyBlast(world, fm, x, y, units) {
 
     const dealt = applyDamage(t, loss, now, { friendly: t.side === fm.side });
     applySuppression(t, 65 * falloff);
+    // 「砲撃を受けた」ことは直射で撃たれたのとは意味が違う。AIが散開の判断に使う。
+    if (falloff > 0.25) t._shelledAt = now;
     t.lastHitAt = now;
 
     if (dealt > 0) {

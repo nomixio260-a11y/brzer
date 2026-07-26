@@ -158,11 +158,24 @@ export function findPath(terrain, ax, ay, bx, by) {
   }
   nodes.reverse();
 
-  const raw = nodes.map((i) => ({
-    x: ((i % NAV_COLS) + 0.5) * NAV_CELL,
-    y: (Math.floor(i / NAV_COLS) + 0.5) * NAV_CELL,
-  }));
-  raw.push({ x: bx, y: by });
+  // 先頭は「ノードの中心」ではなく部隊の実位置にする。
+  // ここをノード中心にしていたせいで、実位置から第1経由点までの一脚だけが
+  // 誰にも検査されず、川べりの角を横切って水に入り込むことがあった。
+  const raw = [{ x: ax, y: ay }];
+  for (const i of nodes) {
+    raw.push({
+      x: ((i % NAV_COLS) + 0.5) * NAV_CELL,
+      y: (Math.floor(i / NAV_COLS) + 0.5) * NAV_CELL,
+    });
+  }
+  // 終点をそのまま足すと、目的地が水上や岩稜のときにそこへ歩き込んでしまう。
+  // 通れる場所であることを確かめてから足す ─
+  // 「そこへ行け」と言われても、行けない所には行けない。
+  if (mobilityAt(terrain, bx, by) > 0) {
+    raw.push({ x: bx, y: by });
+  } else if (raw.length <= 1) {
+    return [];
+  }
 
   return simplify(terrain, raw);
 }

@@ -3,9 +3,10 @@
 
 import { createWorld, tick } from '../src/sim/world.js';
 import { issueOrder } from '../src/sim/orders.js';
-import { evaluate } from '../src/sim/scenario.js';
+import { evaluate, missionList } from '../src/sim/scenario.js';
 import { WORLD, toGrid, fromGrid, formatClock, parseClock } from '../src/util.js';
-import { generateTerrain, lineOfSight, terrainAt, T } from '../src/sim/terrain.js';
+import { generateTerrain, lineOfSight, terrainAt, isPassable, T, TERRAIN_NAME_JA } from '../src/sim/terrain.js';
+import { mapList } from '../src/sim/maps.js';
 import { mistDensity, mistAttenuation, lightLevel, lightSpotFactor } from '../src/sim/weather.js';
 import { fatigueFactor, fatigueJa } from '../src/sim/logistics.js';
 import { applyDamage } from '../src/sim/units.js';
@@ -463,6 +464,125 @@ for (const seed of [1, 7, 4242]) {
     err = e.stack ?? String(e);
   }
   check(`長期戦 seed=${seed} が完走する`, ok && w.outcome != null, `${w.outcome ?? ''} ${err}`);
+}
+
+/* ------------------------------------------------------------------ */
+
+section('図幅');
+{
+  const maps = mapList();
+  check('図幅が3面ある', maps.length === 3, `${maps.length}面`);
+
+  const river = generateTerrain(undefined, 'volne_river');
+  const pass = generateTerrain(undefined, 'kolp_pass');
+  const town = generateTerrain(undefined, 'zaren_town');
+
+  check('河川の図幅には水がある', river.hasWater === true);
+  check('峠の図幅に水はない', pass.hasWater === false);
+  check('市街の図幅には運河がある', town.hasWater === true);
+
+  const count = (t, kind) => t.type.reduce((n, v) => n + (v === kind ? 1 : 0), 0);
+  check('峠には岩稜がある', count(pass, T.ROCK) > 500, `${count(pass, T.ROCK)}セル`);
+  check('河川の図幅に岩稜はない', count(river, T.ROCK) === 0);
+  check('市街は建物が多い', count(town, T.TOWN) > count(river, T.TOWN) * 3,
+    `市街${count(town, T.TOWN)} / 河川${count(river, T.TOWN)}`);
+
+  // 隘路が隘路として機能しているか
+  check('峠の谷筋は通れる', isPassable(pass, 2420, 1400));
+  check('峠の西稜は通れない', !isPassable(pass, 500, 1000));
+  check('峠の東稜は通れない', !isPassable(pass, 4350, 900));
+
+  // 図幅ごとに通過点が違う
+  check('河川の通過点は橋と浅瀬', river.crossings.map((c) => c.kind).join(',') === 'bridge,ford');
+  check('市街の橋は3本', town.crossings.length === 3, `${town.crossings.length}本`);
+  check('前縁が図幅ごとに違う',
+    Math.abs(river.front(2400) - pass.front(2400)) > 100);
+}
+
+section('ミッション');
+{
+  const list = missionList();
+  check('ミッションが4本ある', list.length === 4, `${list.length}本`);
+  check('勝敗の型が3種類ある',
+    new Set(list.map((m) => m.victory?.kind ?? 'hold_point')).size === 3);
+
+  for (const m of list) {
+    const w = createWorld({ missionId: m.id });
+    check(`${m.title}: 正しい図幅で始まる`, w.terrain.mapId === m.mapId,
+      `${w.terrain.mapId} != ${m.mapId}`);
+    check(`${m.title}: 部隊が通行可能地形にいる`,
+      w.units.every((u) => u.tpl.flying || isPassable(w.terrain, u.x, u.y)));
+    check(`${m.title}: 開始時刻が合っている`, w.now === m.startTime);
+  }
+}
+
+section('遅滞戦');
+{
+  const w = createWorld({ missionId: 'kolp_delay' });
+  check('遅滞の勝敗判定である', w.mission.victory.kind === 'delay_line');
+  for (let i = 0; i < 20000 && !w.outcome; i++) tick(w, 1);
+  check('決着する', w.outcome != null, String(w.outcome));
+
+  // 線を越えられたら負けになる
+  const w2 = createWorld({ missionId: 'kolp_delay' });
+  // 第一梯団が出てくるまで進める
+  for (let i = 0; i < 3000 && !w2.units.some((u) => u.side === 'enemy' && u.type !== 'recon'); i++) {
+    tick(w2, 1);
+  }
+  const foe = w2.units.find((u) => u.side === 'enemy' && u.alive && u.type !== 'recon');
+  if (foe) {
+    foe.y = w2.mission.victory.lineY + 200;
+    for (let i = 0; i < 260 && !w2.outcome; i++) {
+      foe.y = w2.mission.victory.lineY + 200;
+      tick(w2, 1);
+    }
+    check('南口を越えられたら敗北', w2.outcome === 'defeat', String(w2.outcome));
+  } else {
+    check('南口を越えられたら敗北', false, '敵がいない');
+  }
+}
+
+section('逆襲');
+{
+  const w = createWorld({ missionId: 'zaren_counter' });
+  check('奪回の勝敗判定である', w.mission.victory.kind === 'seize_point');
+  for (let i = 0; i < 200; i++) tick(w, 1);
+  check('守勢の敵が市街にいる',
+    w.units.some((u) => u.side === 'enemy' && u.ai?.task === 'hold_ground'));
+
+  // 目標を占めれば勝てる
+  const p = w.mission.victory.point;
+  for (const u of w.units) {
+    if (u.side === 'enemy') { u.alive = false; u.strength = 0; }
+  }
+  const h1 = w.unitsById.get('H1');
+  for (let i = 0; i < 400 && !w.outcome; i++) {
+    h1.x = p.x;
+    h1.y = p.y;
+    tick(w, 1);
+  }
+  check('目標を保持し続ければ勝てる', w.outcome === 'victory', String(w.outcome));
+}
+
+section('通行不能地形');
+{
+  // 経路がどう引かれても、部隊は水上・岩稜に立たない
+  let bad = null;
+  for (const id of ['bridge_hold_long', 'kolp_delay', 'zaren_counter']) {
+    const w = createWorld({ seed: 1, missionId: id });
+    for (let i = 0; i < 20000 && !w.outcome && !bad; i++) {
+      tick(w, 1);
+      for (const u of w.units) {
+        if (!u.alive || u.tpl.flying) continue;
+        const t = terrainAt(w.terrain, u.x, u.y);
+        if (t === T.WATER || t === T.ROCK) {
+          bad = `${id}: ${u.id} が${TERRAIN_NAME_JA[t]}にいる`;
+          break;
+        }
+      }
+    }
+  }
+  check('誰も水上・岩稜に立たない', bad === null, bad ?? '');
 }
 
 /* ------------------------------------------------------------------ */

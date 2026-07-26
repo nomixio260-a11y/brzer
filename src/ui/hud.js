@@ -6,26 +6,17 @@ import {
 import { parseClock } from '../util.js';
 
 // 時間帯ごとの一言。指揮官の「今どういう局面か」の感覚を補う。
-const PHASES = {
-  bridge_hold: [
-    { at: '0700', label: '静穏' },
-    { at: '0712', label: '警戒' },
-    { at: '0738', label: '接敵' },
-    { at: '0800', label: '交戦中' },
-    { at: '0845', label: '最終局面' },
-  ],
-  // 長期戦は「波」で数える。静穏は次の攻撃の準備時間である。
-  bridge_hold_long: [
-    { at: '0430', label: '夜間・警戒' },
-    { at: '0505', label: '斥候接触' },
-    { at: '0540', label: '第一波' },
-    { at: '0645', label: '静穏 ─ 再編' },
-    { at: '0800', label: '第二波' },
-    { at: '0905', label: '静穏 ─ 再編' },
-    { at: '0950', label: '第三波' },
-    { at: '1020', label: '最終局面' },
-  ],
-};
+// 局面の名は各ミッションが持つ。持っていなければ時間で機械的に割る。
+function phasesOf(mission) {
+  if (mission.phases) return mission.phases;
+  const span = mission.endTime - mission.startTime;
+  return [
+    { at: mission.startTime, label: '静穏' },
+    { at: mission.startTime + span * 0.15, label: '警戒' },
+    { at: mission.startTime + span * 0.4, label: '交戦中' },
+    { at: mission.startTime + span * 0.85, label: '最終局面' },
+  ];
+}
 
 export function createHud(dom, game, hooks) {
   const hud = { dom, game, hooks, _sig: '' };
@@ -47,9 +38,12 @@ export function renderHud(hud) {
 
   dom.clock.textContent = getClock(game);
 
-  const phases = PHASES[getMission(game).id] ?? PHASES.bridge_hold;
+  const phases = phasesOf(getMission(game));
   let phase = phases[0].label;
-  for (const p of phases) if (now >= parseClock(p.at)) phase = p.label;
+  for (const p of phases) {
+    const at = typeof p.at === 'string' ? parseClock(p.at) : p.at;
+    if (now >= at) phase = p.label;
+  }
   dom.phase.textContent = phase;
 
   // 速度ボタン

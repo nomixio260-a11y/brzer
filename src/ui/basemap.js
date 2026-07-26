@@ -6,7 +6,7 @@
 // 指揮官が書き込む記号は、この上に重ねたアセテートに載る。
 
 import { WORLD, Rng } from '../util.js';
-import { T, elevationAt, elevationRange, riverCenterY } from '../sim/terrain.js';
+import { T, elevationAt, elevationRange } from '../sim/terrain.js';
 
 /* 標高段彩。低地は淡い緑、高地に向かって黄土色へ抜ける。 */
 const HYPSO = [
@@ -28,6 +28,9 @@ const COLOR = {
   contourIndex: 'rgba(132, 92, 52, 0.8)',
   contourLabel: 'rgba(120, 82, 44, 0.95)',
   tree: 'rgba(66, 106, 60, 0.65)',
+  // 岩稜。地形図では茶灰の岩崖記号で表す。
+  rock: [168, 156, 138],
+  rockLine: 'rgba(104, 88, 68, 0.75)',
 };
 
 const CONTOUR_INTERVAL = 10; // m
@@ -58,6 +61,7 @@ export function createMapViewBase(terrain) {
   drawVegetation(g, terrain);
   drawBuiltUp(g, terrain);
   drawMarsh(g, terrain);
+  drawRock(g, terrain);
   drawWaterEdge(g, terrain);
   drawPaperGrain(g, terrain.seed);
 
@@ -145,15 +149,18 @@ function blendCover(terrain, x, y, rgb) {
   let wWater = 0;
   let wForest = 0;
   let wTown = 0;
+  let wRock = 0;
   for (let i = 0; i < 4; i++) {
     const t = terrain.type[idx[i]];
     if (t === T.WATER || t === T.FORD) wWater += w[i];
     else if (t === T.FOREST) wForest += w[i];
     else if (t === T.TOWN) wTown += w[i];
+    else if (t === T.ROCK) wRock += w[i];
   }
 
   mix(rgb, COLOR.forest, wForest);
   mix(rgb, COLOR.town, wTown);
+  mix(rgb, COLOR.rock, wRock);
   // 水際は「にじませない」。中間色で広がると川幅が実際の倍に見える。
   if (wWater > 0.45) mix(rgb, COLOR.water, 1);
   else if (wWater > 0) mix(rgb, COLOR.water, wWater * 0.5);
@@ -370,7 +377,37 @@ function drawMarsh(g, terrain) {
  * 岸線。セルの辺をなぞると階段になるので、河心線から一定幅だけ
  * 離した2本の曲線として引く。
  */
+/**
+ * 岩崖記号。
+ * 地形図では、通れない急斜面を短い羽根の連なりで表す。
+ * 「ここは越えられない」が一目で分かることが、隘路の図幅では何より重要になる。
+ */
+function drawRock(g, terrain) {
+  const rng = new Rng((terrain.seed ^ 0x51a7) >>> 0);
+  g.save();
+  g.strokeStyle = COLOR.rockLine;
+  g.lineWidth = 0.85;
+  g.lineCap = 'butt';
+  g.beginPath();
+  for (let r = 0; r < WORLD.rows; r++) {
+    for (let c = 0; c < WORLD.cols; c++) {
+      if (terrain.type[r * WORLD.cols + c] !== T.ROCK) continue;
+      if (rng.next() > 0.72) continue;
+      const x = (c + rng.next()) * WORLD.cell * SHEET_SCALE;
+      const y = (r + rng.next()) * WORLD.cell * SHEET_SCALE;
+      // 斜面の下り方向へ短い羽根を落とす
+      const a = -1.15 + rng.next() * 2.3;
+      const len = 3 + rng.next() * 3.5;
+      g.moveTo(x, y);
+      g.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len);
+    }
+  }
+  g.stroke();
+  g.restore();
+}
+
 function drawWaterEdge(g, terrain) {
+  if (!terrain.hasWater) return;
   const half = terrain.riverHalfWidth ?? 55;
   g.save();
   g.strokeStyle = COLOR.waterLine;
@@ -379,7 +416,7 @@ function drawWaterEdge(g, terrain) {
   for (const side of [-1, 1]) {
     g.beginPath();
     for (let x = 0; x <= WORLD.width; x += 25) {
-      const y = riverCenterY(x) + side * half;
+      const y = terrain.front(x) + side * half;
       const bx = x * SHEET_SCALE;
       const by = y * SHEET_SCALE;
       if (x === 0) g.moveTo(bx, by);

@@ -13,6 +13,8 @@ import {
   undo,
   canUndo,
   getMission,
+  getMissionList,
+  getMapInfo,
   getRosterOrder,
   getMarkers,
   isLongBattle,
@@ -90,6 +92,48 @@ function coverZoom(view) {
 let previewGame = null;
 let pickedMission = 'bridge_hold';
 
+const KIND_JA = {
+  hold_point: '防御 ─ 一点を保持する',
+  delay_line: '遅滞 ─ 時間を稼ぐ',
+  seize_point: '攻撃 ─ 奪回する',
+};
+
+/** 任務の一覧。図幅・時間帯・戦闘の型が一目で分かるようにする。 */
+function buildMissionPicker() {
+  const wrap = $('mission-pick');
+  const list = getMissionList();
+  const sig = list.map((m) => m.id).join(',') + ':' + pickedMission;
+  if (wrap.dataset.sig === sig) return;
+  wrap.dataset.sig = sig;
+  wrap.innerHTML = '';
+
+  for (const m of list) {
+    const b = document.createElement('button');
+    b.className = 'missionpick__opt';
+    b.dataset.mission = m.id;
+    b.classList.toggle('is-on', m.id === pickedMission);
+
+    const title = document.createElement('b');
+    title.textContent = m.title;
+    const tag = document.createElement('i');
+    tag.className = 'missionpick__tag';
+    tag.textContent = KIND_JA[m.kind] ?? '';
+    title.appendChild(tag);
+
+    const line = document.createElement('em');
+    const hours = Math.round(((m.endTime - m.startTime) / 3600) * 10) / 10;
+    line.textContent =
+      `${m.subtitle.split('/')[0].trim()} ／ ${formatClock(m.startTime)}〜${formatClock(m.endTime)}` +
+      `（${hours}時間）`;
+
+    const note = document.createElement('span');
+    note.textContent = m.blurb ?? '';
+
+    b.append(title, line, note);
+    wrap.appendChild(b);
+  }
+}
+
 function preview() {
   if (!previewGame || previewGame.world.mission.id !== pickedMission) {
     previewGame = createGame({ missionId: pickedMission });
@@ -100,11 +144,10 @@ function preview() {
 function fillBriefing() {
   const mission = getMission(preview());
   $('brief-title').textContent = mission.title;
+  const map = getMapInfo(preview());
   $('brief-sub').textContent =
-    `ヴォルネ川 ／ ${formatClock(mission.startTime)} ─ ${formatClock(mission.endTime)}`;
-  for (const b of $('mission-pick').querySelectorAll('button')) {
-    b.classList.toggle('is-on', b.dataset.mission === pickedMission);
-  }
+    `${map.name} ／ ${formatClock(mission.startTime)} ─ ${formatClock(mission.endTime)}`;
+  buildMissionPicker();
   $('brief-situation').textContent = mission.briefing.situation;
   $('brief-mission').textContent = mission.briefing.mission;
   $('brief-execution').textContent = mission.briefing.execution;

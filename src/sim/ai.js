@@ -1,7 +1,7 @@
 // 敵の行動。プレイヤーには見えないので、派手さより「筋の通った圧力」を優先する。
 
 import { clamp, dist } from '../util.js';
-import { riverCenterY } from './terrain.js';
+
 import { setDestination, clearDestination } from './units.js';
 import { createFireMission } from './combat.js';
 import { visibleEnemies } from './perception.js';
@@ -57,6 +57,20 @@ function runEnemy(world, u) {
     return;
   }
 
+  // --- 砲撃を受けたら散る ----------------------------------------
+  // 弾着の下で固まっているのは、いちばんやってはいけないことである。
+  // 実際の部隊は、まず散開して弾着圏から出ようとする。
+  if (world.now - (u._shelledAt ?? -Infinity) < 40) {
+    if (!u.path.length) {
+      const a = world.rng.range(0, Math.PI * 2);
+      const d = 220 + world.rng.range(0, 160);
+      setDestination(u, world.terrain, u.x + Math.cos(a) * d, u.y + Math.sin(a) * d);
+    }
+    u.posture = 'rapid';
+    u.state = 'moving';
+    return;
+  }
+
   // --- 制圧されていたら伏せる ------------------------------------
   if (u.suppression > 82) {
     u.posture = 'cautious';
@@ -74,6 +88,13 @@ function runEnemy(world, u) {
     u.posture = 'cautious';
     u.state = 'holding';
     clearDestination(u);
+    return;
+  }
+
+  // 陣地に籠って一点を守る敵（逆襲ミッションの守備側）。
+  // 追撃はしない ─ 持ち場を離れた瞬間、その陣地は無価値になるからである。
+  if (ai.task === 'hold_ground') {
+    holdGround(world, u, ai);
     return;
   }
 
@@ -138,20 +159,47 @@ function runEnemy(world, u) {
       clearDestination(u);
       return;
     }
-    // 主攻は目標に着いたら橋へ圧力をかけ続ける
-    ai.objective = { x: world.terrain.bridge.x, y: world.terrain.bridge.y + 420 };
+    // 目標に着いたら、その先の最終目標へ圧力をかけ続ける。
+    // 「橋の南 420m」を決め打ちにしていたせいで、峠の図幅では
+    // 全部隊が隘路の出口一点に積み上がって止まっていた。
+    ai.objective = enemyGoal(world, u);
     return;
   }
 
   // 接敵していない間は普通に歩く。慎重な態勢のまま3km歩かせると永遠に着かない。
   // 迂回部隊は渡河を終えるまで急ぐ（浅瀬の徒渉が遅いぶんを取り返す）。
-  const hurrying = ai.task === 'flank' && !(u.y > riverCenterY(u.x) + 70);
+  const hurrying = ai.task === 'flank' && !(u.y > world.terrain.front(u.x) + 70);
   u.posture = ai.task === 'probe' ? 'stealth' : hurrying ? 'rapid' : 'normal';
   u.state = 'moving';
   if (!u.path.length || u._goalKey !== goalKey(goal)) {
     u._goalKey = goalKey(goal);
     setDestination(u, world.terrain, goal.x, goal.y);
   }
+}
+
+/**
+ * 陣地を守る。
+ *
+ * 目の前に敵が出れば撃つが、追いかけはしない。押し出されたら持ち場へ戻る。
+ * 守る側の強みは陣地そのものなので、そこを離れた時点で強みが消える。
+ */
+function holdGround(world, u, ai) {
+  const anchor = ai.anchor ?? { x: u.x, y: u.y };
+  const away = dist(u.x, u.y, anchor.x, anchor.y);
+
+  // 押し出されたら戻る
+  if (away > 220) {
+    u.state = 'moving';
+    u.posture = 'cautious';
+    if (!u.path.length) setDestination(u, world.terrain, anchor.x, anchor.y);
+    return;
+  }
+
+  clearDestination(u);
+  const seen = visibleEnemies(u, world.unitsById, world.now, 20).filter((t) => !t.tpl.civilian);
+  u.state = seen.length ? 'attacking' : 'defending';
+  // 掘ってあるものは掘り直さない
+  if (u.posture !== 'dug_in' && u.posture !== 'fortified') u.posture = 'dug_in';
 }
 
 /**
@@ -168,19 +216,38 @@ function engageRange(u, ai) {
   return Math.min(max, u.tpl.armor > 0.4 ? 900 : 620);
 }
 
+/**
+ * 敵の最終目標。
+ * ミッションが指定していればそれ、なければ主通過点の南。
+ * 同じ点に全部隊が重なると縦隊が一点に潰れるので、部隊ごとに散らす。
+ */
+export function enemyGoal(world, u) {
+  const base = world.mission.enemyGoal ?? {
+    x: world.terrain.bridge.x,
+    y: world.terrain.bridge.y + 420,
+  };
+  if (!u) return base;
+  // 呼出符号から決まる固定の散らし方（毎回同じ盤面になるように）
+  let h = 0;
+  for (let i = 0; i < u.id.length; i++) h = (h * 31 + u.id.charCodeAt(i)) | 0;
+  const a = ((Math.abs(h) % 360) / 180) * Math.PI;
+  const r = 120 + (Math.abs(h >> 3) % 220);
+  return { x: base.x + Math.cos(a) * r, y: base.y + Math.sin(a) * r * 0.6 };
+}
+
 function goalKey(g) {
   return `${Math.round(g.x / 50)}:${Math.round(g.y / 50)}`;
 }
 
 /** 渡河が済んでいなければまず渡河点、済んでいれば最終目標 */
 function resolveGoal(world, u, ai) {
-  const onSouthBank = u.y > riverCenterY(u.x) + 70;
+  const onSouthBank = u.y > world.terrain.front(u.x) + 70;
 
   if (ai.crossing && !onSouthBank) {
     const dCross = dist(u.x, u.y, ai.crossing.x, ai.crossing.y);
     if (dCross > 90) return ai.crossing;
     // 渡河点の上。対岸へ押し出す。
-    return { x: ai.crossing.x, y: riverCenterY(ai.crossing.x) + 220 };
+    return { x: ai.crossing.x, y: world.terrain.front(ai.crossing.x) + 220 };
   }
   return ai.objective ?? null;
 }

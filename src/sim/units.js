@@ -152,7 +152,10 @@ export function isDestroyed(u) {
 export function currentSpeed(u, terrain) {
   const posture = POSTURES[u.posture] ?? POSTURES.normal;
   const mob = u.tpl.flying ? 1 : mobilityAt(terrain, u.x, u.y);
-  if (mob <= 0) return 0;
+  // 経路の脚と脚の間で、通行不能な角をかすめてしまうことがある。
+  // そこで速度を 0 にすると二度と動けなくなるので、這い出すぶんだけは残す。
+  // 実際、川縁に踏み込んだ分隊は止まりはしても、戻ってくる。
+  if (mob <= 0) return u.tpl.speed * 0.18;
   const suppressionFactor = 1 - clamp(u.suppression / 130, 0, 0.85);
   const fatigueFactor = 1 - clamp(u.fatigue / 260, 0, 0.35);
   return u.tpl.speed * mob * posture.speed * suppressionFactor * fatigueFactor;
@@ -188,6 +191,9 @@ export function stepMovement(u, terrain, dt) {
   const speed = currentSpeed(u, terrain);
   if (speed <= 0) return;
 
+  const fromX = u.x;
+  const fromY = u.y;
+
   let budget = speed * dt;
   let guard = 0;
   while (budget > 0 && u.path.length && guard++ < 64) {
@@ -205,6 +211,18 @@ export function stepMovement(u, terrain, dt) {
       u.y += (wp.y - u.y) * t;
       budget = 0;
     }
+  }
+
+  // 最後の砦。経路がどう引かれていようと、部隊は水の上や岩の上には立たない。
+  // 踏み込みかけたらその一歩を戻し、経路を捨てて引き直させる ―
+  // ここを見ていなかったので、川に入り込んで動けなくなる部隊が出ていた。
+  if (!u.tpl.flying && mobilityAt(terrain, u.x, u.y) <= 0) {
+    u.x = fromX;
+    u.y = fromY;
+    u.path = [];
+    u.dest = null;
+    u._blockedAt = u._blockedAt ?? 0;
+    u._blockedAt++;
   }
 
   // 徒歩の消耗。急げばこたえるが、30分の前進で使い物にならなくなるほどではない。

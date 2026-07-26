@@ -19,7 +19,7 @@ import { getMission, friendlyOrderOfBattle, timeline, evaluate } from './scenari
 export function createWorld(opts = {}) {
   const mission = getMission(opts.missionId);
   const seed = opts.seed ?? mission.seed;
-  const terrain = generateTerrain(seed);
+  const terrain = generateTerrain(seed, mission.mapId);
   const rng = new Rng(seed ^ 0x2f6e2b1);
   // 敵の企図を振る場合だけ、盤ごとに違う目を使う（地形は常に同じ）
   const planRng = opts.variable ? new Rng((Math.floor(opts.planSeed ?? 0) || 1) >>> 0) : null;

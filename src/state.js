@@ -11,7 +11,7 @@ import { issueOrder as simIssueOrder, VERBS } from './sim/orders.js';
 import { congestion } from './sim/comms.js';
 import { enemyIntentLog } from './sim/enemyCommand.js';
 import { visibilityJa } from './sim/weather.js';
-import { scoreMission } from './sim/scenario.js';
+import { scoreMission, missionList } from './sim/scenario.js';
 import { toGrid, fromGrid, formatClock } from './util.js';
 
 let markerSeq = 1;
@@ -416,6 +416,27 @@ export function getTrains(game) {
     busyWith: target?.callsign ?? null,
     phase: t.task?.phase ?? null,
   };
+}
+
+/** 遊べるミッションの一覧（ブリーフィングの選択肢） */
+export function getMissionList() {
+  return missionList().map((m) => ({
+    id: m.id,
+    title: m.title,
+    subtitle: m.subtitle,
+    mapId: m.mapId,
+    duration: m.duration,
+    startTime: m.startTime,
+    endTime: m.endTime,
+    kind: m.victory?.kind ?? 'hold_point',
+    blurb: m.blurb ?? null,
+  }));
+}
+
+/** その戦闘の図幅 */
+export function getMapInfo(game) {
+  const t = game.world.terrain;
+  return { id: t.mapId, name: t.mapName, note: t.mapNote };
 }
 
 /** 長期戦かどうか（UI が段列や速度の上限を出し分けるのに使う） */
