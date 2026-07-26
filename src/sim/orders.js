@@ -13,6 +13,10 @@ export const VERBS = Object.freeze({
   attack: { label: '攻撃', needsTarget: true, phrase: (g) => `${g}の敵を攻撃せよ` },
   defend: { label: '防御', needsTarget: true, phrase: (g) => `${g}を確保し、陣地を築いて防御せよ` },
   hold: { label: '待機', needsTarget: false, phrase: () => `現在地を保持し、待機せよ` },
+  observe: { label: '監視', needsTarget: true, phrase: (g) => `${g}方向を監視せよ。姿を晒すな` },
+  rally: { label: '集結', needsTarget: true, phrase: (g) => `${g}へ集結し、部隊を立て直せ` },
+  hold_fire: { label: '射撃統制', needsTarget: false, phrase: () => `射撃を統制せよ。撃たれるまで撃つな` },
+  free_fire: { label: '射撃自由', needsTarget: false, phrase: () => `射撃自由。目標を発見しだい交戦せよ` },
   recon: { label: '偵察', needsTarget: true, phrase: (g) => `${g}方向を隠密に偵察せよ` },
   withdraw: { label: '後退', needsTarget: true, phrase: (g) => `${g}まで後退せよ` },
   sitrep: { label: '状況報告要求', needsTarget: false, phrase: () => `状況を報告せよ` },
@@ -225,6 +229,10 @@ function ackText(u, order, rng) {
     attack: `${order.grid}を攻撃する`,
     defend: `${order.grid}で防御につく`,
     hold: '現在地を保持する',
+    observe: `${order.grid}方向を監視する`,
+    rally: `${order.grid}へ集結する`,
+    hold_fire: '射撃を統制する',
+    free_fire: '射撃自由で交戦する',
     recon: `${order.grid}を偵察する`,
     withdraw: `${order.grid}へ下がる`,
     fire_mission: `${order.grid}、射撃用意`,
@@ -240,6 +248,10 @@ function ackText(u, order, rng) {
 
 function beginExecution(world, u, order) {
   const posture = order.modifier ?? 'normal';
+
+  // 新しい任務を与えられたら、前の射撃統制は解ける。
+  // 「撃つな」と言われたまま突撃させられる部隊はいない。
+  if (['advance', 'attack', 'defend'].includes(order.verb)) u.weaponsHold = false;
 
   switch (order.verb) {
     case 'move':
@@ -266,6 +278,31 @@ function beginExecution(world, u, order) {
       u.state = 'holding';
       u.posture = posture;
       clearDestination(u);
+      break;
+
+    case 'observe':
+      // 監視は「見るために撃たない」。撃てば見つかるので、姿を消したまま張り付く。
+      u.state = 'holding';
+      u.posture = posture === 'normal' ? 'stealth' : posture;
+      u.weaponsHold = true;
+      u.watchX = order.x;
+      u.watchY = order.y;
+      clearDestination(u);
+      break;
+
+    case 'rally':
+      u.state = 'withdrawing';
+      u.posture = posture === 'normal' ? 'rapid' : posture;
+      u.rallying = true;
+      setDestination(u, world.terrain, order.x, order.y);
+      break;
+
+    case 'hold_fire':
+      u.weaponsHold = true;
+      break;
+
+    case 'free_fire':
+      u.weaponsHold = false;
       break;
     case 'recon':
       u.state = 'recon';
@@ -351,6 +388,17 @@ function advanceExecution(world, u, order, dt) {
       if (!u.path.length) completeOrder(world, u, order);
       break;
 
+    case 'rally':
+      if (!u.path.length) {
+        u.rallying = false;
+        u.posture = 'dug_in';
+        completeOrder(world, u, order);
+      }
+      break;
+
+    case 'observe':
+    case 'hold_fire':
+    case 'free_fire':
     case 'fire_mission':
     case 'smoke':
       completeOrder(world, u, order, true);

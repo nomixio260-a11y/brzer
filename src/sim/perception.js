@@ -27,7 +27,9 @@ export function stepPerception(u, others, terrain, now, dt, rng, smokes) {
   if (!u.alive) return;
 
   const posture = POSTURES[u.posture] ?? POSTURES.normal;
-  const spotRange = u.tpl.spot * posture.spot * (1 - clamp(u.suppression / 200, 0, 0.5));
+  // 撃たずに見ることに徹している部隊は、遠くまでよく見える
+  const watching = u.weaponsHold ? 1.15 : 1;
+  const spotRange = u.tpl.spot * posture.spot * watching * (1 - clamp(u.suppression / 200, 0, 0.5));
 
   for (const t of others) {
     if (t === u || !t.alive) continue;

@@ -17,6 +17,8 @@ export function createWorld(opts = {}) {
   const seed = opts.seed ?? MISSION.seed;
   const terrain = generateTerrain(seed);
   const rng = new Rng(seed ^ 0x2f6e2b1);
+  // 敵の企図を振る場合だけ、盤ごとに違う目を使う（地形は常に同じ）
+  const planRng = opts.variable ? new Rng((Math.floor(opts.planSeed ?? 0) || 1) >>> 0) : null;
 
   const world = {
     mission: MISSION,
@@ -44,7 +46,8 @@ export function createWorld(opts = {}) {
     commandPost: MISSION.commandPost,
 
     // 時刻順に並べ直す（シナリオ側の記述順に依存しないように）
-    events: timeline().sort((a, b) => a.at - b.at),
+    events: timeline(planRng, { variable: !!opts.variable }).sort((a, b) => a.at - b.at),
+    variable: !!opts.variable,
     eventIndex: 0,
 
     outcome: null,

@@ -94,9 +94,37 @@ export function friendlyOrderOfBattle() {
 /**
  * 展開イベント。時刻順に発火する。
  * kind: 'spawn' | 'jamming' | 'message'
+ *
+ * opts.variable が真なら、敵の企図そのものを振る ―
+ * どちらの軸が主攻か、時刻はいつか。二度目以降は地図を覚えていても
+ * 「今日はどっちだ」を無線から読み直さねばならない。
  */
-export function timeline() {
+export function timeline(rng, opts = {}) {
   const riverAtFord = riverCenterY(4180);
+
+  // 主攻は東の浅瀬か、橋の正面か。
+  const eastIsMain = opts.variable && rng ? rng.chance(0.5) : true;
+  const jitter = (base, spread) =>
+    opts.variable && rng ? base + Math.round(rng.range(-spread, spread) / 60) * 60 : base;
+
+  // 主攻側に1個分隊多く、助攻側は1個減らす
+  const eastSquads = eastIsMain ? 2 : 1;
+  const bridgeExtra = eastIsMain ? 0 : 1;
+
+  const eastUnits = [
+    { id: 'E-F1', side: 'enemy', callsign: '敵歩兵2', type: 'infantry', x: 4430, y: 760,
+      ai: { task: 'flank', crossing: { x: 4180, y: riverAtFord }, objective: { x: 2500, y: 2280 } } },
+    { id: 'E-F2', side: 'enemy', callsign: '敵歩兵3', type: 'infantry', x: 4560, y: 880,
+      ai: { task: 'flank', crossing: { x: 4180, y: riverAtFord }, objective: { x: 2600, y: 2180 } } },
+  ].slice(0, eastSquads).concat([
+    { id: 'E-F4', side: 'enemy', callsign: '敵対戦車班', type: 'at_team', x: 4520, y: 1040,
+      ai: { task: 'flank', crossing: { x: 4180, y: riverAtFord }, objective: { x: 3000, y: 2200 } } },
+  ]);
+
+  const bridgeExtraUnits = bridgeExtra
+    ? [{ id: 'E-I2', side: 'enemy', callsign: '敵歩兵5', type: 'infantry', x: 2460, y: 100,
+         ai: { task: 'assault', objective: { x: 2200, y: 2100 }, crossing: { x: 2200, y: riverCenterY(2200) } } }]
+    : [];
 
   return [
     {
@@ -111,7 +139,7 @@ export function timeline() {
       ],
     },
     {
-      at: parseClock('0738'),
+      at: jitter(parseClock('0738'), 300),
       kind: 'spawn',
       label: '北岸への圧力（陽動）',
       units: [
@@ -126,23 +154,16 @@ export function timeline() {
       ],
     },
     {
-      at: parseClock('0757'),
+      at: jitter(parseClock('0757'), 300),
       kind: 'jamming',
       value: 0.32,
       label: '電子妨害開始',
     },
     {
-      at: parseClock('0754'),
+      at: jitter(parseClock('0754'), 420),
       kind: 'spawn',
-      label: '東の浅瀬への迂回（主攻）',
-      units: [
-        { id: 'E-F1', side: 'enemy', callsign: '敵歩兵2', type: 'infantry', x: 4430, y: 760,
-          ai: { task: 'flank', crossing: { x: 4180, y: riverAtFord }, objective: { x: 2500, y: 2280 } } },
-        { id: 'E-F2', side: 'enemy', callsign: '敵歩兵3', type: 'infantry', x: 4560, y: 880,
-          ai: { task: 'flank', crossing: { x: 4180, y: riverAtFord }, objective: { x: 2600, y: 2180 } } },
-        { id: 'E-F4', side: 'enemy', callsign: '敵対戦車班', type: 'at_team', x: 4520, y: 1040,
-          ai: { task: 'flank', crossing: { x: 4180, y: riverAtFord }, objective: { x: 3000, y: 2200 } } },
-      ],
+      label: eastIsMain ? '東の浅瀬への迂回（主攻）' : '東の浅瀬への迂回（助攻）',
+      units: eastUnits,
     },
     {
       at: parseClock('0814'),
@@ -154,7 +175,7 @@ export function timeline() {
       ],
     },
     {
-      at: parseClock('0826'),
+      at: jitter(parseClock('0826'), 420),
       kind: 'spawn',
       label: '装甲部隊の突進',
       units: [
@@ -162,6 +183,7 @@ export function timeline() {
           ai: { task: 'assault', objective: { x: 2200, y: 2150 }, crossing: { x: 2200, y: riverCenterY(2200) } } },
         { id: 'E-M3', side: 'enemy', callsign: '敵機械化3', type: 'mech', x: 2180, y: 40,
           ai: { task: 'assault', objective: { x: 2150, y: 2050 }, crossing: { x: 2200, y: riverCenterY(2200) } } },
+        ...bridgeExtraUnits,
       ],
     },
     {

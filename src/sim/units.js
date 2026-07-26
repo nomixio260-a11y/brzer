@@ -105,6 +105,10 @@ export function createUnit(def) {
     commsLostSince: null,
     silentSince: null,
 
+    // 射撃統制。true の間は撃たれるまで撃たない。
+    weaponsHold: false,
+    rallying: false,
+
     // 統計
     inflicted: 0,
     losses: 0,
@@ -245,7 +249,8 @@ export function stepMorale(u, now, dt) {
   if (u.suppression > 60) {
     u.morale = clamp(u.morale - dt * 0.055, 0, 100);
   } else if (!underFire && u.suppression < 20) {
-    u.morale = clamp(u.morale + dt * 0.13, 0, 100);
+    // 集結を命じられて後方へ下がっている間は立ち直りが早い
+    u.morale = clamp(u.morale + dt * (u.rallying ? 0.34 : 0.13), 0, 100);
   }
 
   if (u.state !== 'broken' && u.morale < 22) {

@@ -84,6 +84,60 @@ try {
   await page.waitForTimeout(150);
   check('記号を消せる', (await page.evaluate(() => window.__brzer.game.belief.markers.length)) === 0);
 
+  console.log('\n== 作図 ==');
+  const drag = async (pts) => {
+    await page.mouse.move(box.x + box.width * pts[0][0], box.y + box.height * pts[0][1]);
+    await page.mouse.down();
+    for (const [fx, fy] of pts.slice(1)) {
+      await page.mouse.move(box.x + box.width * fx, box.y + box.height * fy, { steps: 6 });
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(80);
+  };
+
+  await page.click('#sketch-tools button[data-sketch="arrow_enemy"]');
+  await drag([[0.30, 0.28], [0.32, 0.36], [0.34, 0.44]]);
+  check('矢印が引ける', (await page.evaluate(() => window.__brzer.game.belief.sketches.length)) === 1);
+
+  // 記号の上から線を引いても、記号が動いてしまわないこと
+  await page.click('#marker-tools button[data-marker="enemy_inf"]');
+  await page.mouse.click(box.x + box.width * 0.55, box.y + box.height * 0.3);
+  await page.keyboard.press('Escape');
+  const before = await page.evaluate(() => {
+    const m = window.__brzer.game.belief.markers[0];
+    return { x: Math.round(m.x), y: Math.round(m.y) };
+  });
+  await page.click('#sketch-tools button[data-sketch="line_control"]');
+  await drag([[0.55, 0.3], [0.68, 0.34]]);
+  const after = await page.evaluate(() => {
+    const m = window.__brzer.game.belief.markers[0];
+    return { x: Math.round(m.x), y: Math.round(m.y) };
+  });
+  check('作図中に記号が動かない', before.x === after.x && before.y === after.y,
+    `${JSON.stringify(before)} → ${JSON.stringify(after)}`);
+  check('統制線が引ける', (await page.evaluate(() => window.__brzer.game.belief.sketches.length)) === 2);
+
+  // 取り消し
+  await page.keyboard.press('Control+z');
+  await page.waitForTimeout(100);
+  check('Ctrl+Z で作図を取り消せる',
+    (await page.evaluate(() => window.__brzer.game.belief.sketches.length)) === 1);
+
+  await page.click('#btn-clear-markers');
+  check('全消去で書き込みが消える', await page.evaluate(() =>
+    window.__brzer.game.belief.markers.length === 0 && window.__brzer.game.belief.sketches.length === 0));
+  await page.click('#marker-tools button[data-marker="enemy_inf"]');
+
+  console.log('\n== 縮尺 ==');
+  const z0 = await page.evaluate(() => window.__brzer.mapView.zoom);
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await page.mouse.wheel(0, -600);
+  await page.waitForTimeout(80);
+  const z1 = await page.evaluate(() => window.__brzer.mapView.zoom);
+  check('車輪で拡大できる', z1 > z0, `${z0} → ${z1}`);
+  await page.keyboard.press('0');
+  check('0キーで全体表示', (await page.evaluate(() => window.__brzer.mapView.zoom)) === 1);
+
   console.log('\n== 命令 ==');
   await page.click('#order-units button[data-unit="H3"]');
   await page.click('#order-verbs button[data-verb="withdraw"]');
@@ -107,6 +161,24 @@ try {
   check('数字キーで速度が変わる', spd.r === true && spd.s === 4, JSON.stringify(spd));
 
   await page.screenshot({ path: `${SHOTS}/02-game.png` });
+
+  console.log('\n== 無線から地図へ ==');
+  // 接敵報告が出るまで進めてから、その一行を叩く
+  await page.evaluate(() => {
+    window.__brzer.game.speed = 30;
+    window.__brzer.game.running = true;
+  });
+  await page.waitForSelector('#radiolog li[data-grid] [data-act="mark"]', { timeout: 120000 });
+  await page.evaluate(() => { window.__brzer.game.running = false; });
+  const marksBefore = await page.evaluate(() => window.__brzer.game.belief.markers.length);
+  await page.click('#radiolog li[data-grid] [data-act="mark"]');
+  await page.waitForTimeout(200);
+  check('報告から記号を置ける',
+    (await page.evaluate(() => window.__brzer.game.belief.markers.length)) === marksBefore + 1);
+  check('置かれた記号に発信元が記される', await page.evaluate(() => {
+    const m = window.__brzer.game.belief.markers.at(-1);
+    return typeof m.label === 'string' && m.label.endsWith('報');
+  }));
 
   console.log('\n== 決着まで ==');
   await page.evaluate(() => {
@@ -134,6 +206,74 @@ try {
 
   console.log('\n== コンソール ==');
   check('エラーが1件も出ていない', problems.length === 0, problems.join(' | '));
+
+  /* ---------------- 携帯 ---------------- */
+
+  console.log('\n== 携帯（縦持ち・指で操作） ==');
+  const phone = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 3,
+    isMobile: true,
+    hasTouch: true,
+    userAgent:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  });
+  const mp = await phone.newPage();
+  const mobileProblems = [];
+  mp.on('pageerror', (e) => mobileProblems.push(`PAGEERROR ${e.message}`));
+  mp.on('console', (m) => {
+    if (m.type() === 'error') mobileProblems.push(`CONSOLE ${m.text()}`);
+  });
+
+  await mp.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+  await mp.click('#btn-start');
+  await mp.waitForTimeout(900);
+
+  check('下部タブが出る', await mp.isVisible('#tabbar'));
+  check('横に溢れていない', await mp.evaluate(() =>
+    document.documentElement.scrollWidth <= window.innerWidth + 1));
+
+  const mapBox = await (await mp.$('#map')).boundingBox();
+  check('地図が画面の大半を占める', mapBox.height > 400, JSON.stringify(mapBox));
+
+  // 指で叩いて記号を置く
+  await mp.touchscreen.tap(mapBox.x + mapBox.width * 0.5, mapBox.y + mapBox.height * 0.42);
+  await mp.waitForTimeout(250);
+  check('指で叩くと記号が置ける',
+    (await mp.evaluate(() => window.__brzer.game.belief.markers.length)) === 1);
+
+  // 指で払って図面をずらす
+  const beforeCenter = await mp.evaluate(() => window.__brzer.mapView.centerX);
+  await mp.touchscreen.tap(mapBox.x + 20, mapBox.y + 20); // 端を叩いて選択解除
+  await mp.evaluate(() => window.__brzer.mapView.zoom);
+  await mp.click('#zoom-in');
+  const zoomed = await mp.evaluate(() => window.__brzer.mapView.zoom);
+  check('拡大ボタンが効く', zoomed > 1, `zoom=${zoomed}`);
+  await mp.click('#zoom-fit');
+  check('全体表示に戻る', (await mp.evaluate(() => window.__brzer.mapView.zoom)) === 1);
+  check('中心が図面内に収まっている',
+    Math.abs((await mp.evaluate(() => window.__brzer.mapView.centerX)) - beforeCenter) < 4000);
+
+  // タブでパネルを呼び出す
+  await mp.click('.tabbar__btn[data-tab="log"]');
+  await mp.waitForTimeout(300);
+  check('無線タブでシートが開く', await mp.$eval('#side', (e) => e.classList.contains('is-open')));
+  check('無線パネルが選ばれている',
+    await mp.$eval('.panel--log', (e) => e.classList.contains('is-active')));
+
+  await mp.click('.tabbar__btn[data-tab="order"]');
+  await mp.waitForTimeout(250);
+  check('命令タブに切り替わる',
+    await mp.$eval('.panel--order', (e) => e.classList.contains('is-active')));
+
+  await mp.click('.tabbar__btn[data-tab="map"]');
+  await mp.waitForTimeout(300);
+  check('地図タブでシートが閉じる', !(await mp.$eval('#side', (e) => e.classList.contains('is-open'))));
+
+  await mp.screenshot({ path: `${SHOTS}/04-phone.png` });
+  check('携帯でもエラーが出ていない', mobileProblems.length === 0, mobileProblems.join(' | '));
+
+  await phone.close();
 } finally {
   await browser.close();
 }

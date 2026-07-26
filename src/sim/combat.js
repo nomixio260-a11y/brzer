@@ -26,6 +26,8 @@ export function stepDirectFire(world, dt) {
     if (u.tpl.range <= 0) continue; // 迫撃砲・ドローンは直射しない
     if (u.state === 'broken') continue; // 統制を失った部隊は撃たない
     if (u.ammo <= 0) continue;
+    // 射撃統制中は、自分が撃たれるまで撃たない（撃てば位置が割れる）
+    if (u.weaponsHold && now - u.lastHitAt > 20) continue;
     if (u.suppression > 88 && rng.chance(0.25)) continue; // 頭を上げられない
 
     const candidates = visibleEnemies(u, unitsById, now);

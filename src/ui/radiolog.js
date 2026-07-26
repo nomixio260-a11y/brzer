@@ -15,8 +15,30 @@ const KIND_CLASS = {
 // 電報の緊急度区分。通常便にいちいち印を押さないのは実務と同じ。
 const PRECEDENCE = [null, { label: '優先', cls: 'is-priority' }, { label: '至急', cls: 'is-flash' }];
 
-export function createRadioLog(el) {
-  return { el, pinned: true };
+/**
+ * @param {HTMLElement} el
+ * @param {object} hooks {onCite(entry), onMark(entry)}
+ */
+export function createRadioLog(el, hooks = {}) {
+  const view = { el, pinned: true, hooks, entries: new Map() };
+
+  // 行を叩けば、その報告が指している方眼へ跳ぶ
+  el.addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-entry]');
+    if (!li) return;
+    const entry = view.entries.get(li.dataset.entry);
+    if (!entry) return;
+
+    if (e.target.closest('[data-act="mark"]')) {
+      hooks.onMark?.(entry);
+      return;
+    }
+    for (const other of el.querySelectorAll('li.is-cited')) other.classList.remove('is-cited');
+    li.classList.add('is-cited');
+    hooks.onCite?.(entry);
+  });
+
+  return view;
 }
 
 /** 新しく届いた分だけ追記する */
@@ -24,16 +46,26 @@ export function appendEntries(view, entries) {
   if (!entries.length) return;
 
   const nearBottom = view.el.scrollHeight - view.el.scrollTop - view.el.clientHeight < 70;
-  for (const entry of entries) view.el.appendChild(renderEntry(entry));
+  for (const entry of entries) {
+    view.entries.set(entry.id, entry);
+    view.el.appendChild(renderEntry(entry));
+  }
 
   // 長時間プレイでも DOM が膨らまないように古いものは捨てる
-  while (view.el.childElementCount > 260) view.el.removeChild(view.el.firstChild);
+  while (view.el.childElementCount > 260) {
+    const gone = view.el.firstChild;
+    view.entries.delete(gone.dataset?.entry);
+    view.el.removeChild(gone);
+  }
 
   if (nearBottom || view.pinned) view.el.scrollTop = view.el.scrollHeight;
 }
 
 function renderEntry(entry) {
   const li = document.createElement('li');
+  li.dataset.entry = entry.id;
+  // 方眼を含む報告は、叩けば地図が応える
+  if (entry.meta?.grid && !entry.lost) li.dataset.grid = entry.meta.grid;
 
   const cls = KIND_CLASS[entry.kind];
   if (cls) li.classList.add(cls);
@@ -78,6 +110,20 @@ function renderEntry(entry) {
   body.textContent = entry.text;
 
   li.append(meta, body);
+
+  // 敵を報せてきた報告には「聞いたとおりに置く」を用意する。
+  // 置かれるのは報告された位置であって、実際の位置ではない。
+  if (entry.meta?.reportedX != null && !entry.lost) {
+    const acts = document.createElement('div');
+    acts.className = 'msg__acts';
+    const mark = document.createElement('button');
+    mark.className = 'msg__act';
+    mark.dataset.act = 'mark';
+    mark.textContent = `▣ ${entry.meta.grid} に記号`;
+    acts.appendChild(mark);
+    li.appendChild(acts);
+  }
+
   return li;
 }
 

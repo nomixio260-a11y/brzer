@@ -5,6 +5,7 @@ let ctx = null;
 let master = null;
 let enabled = true;
 let voiceEnabled = true;
+let voiceWanted = true;
 let jaVoice = null;
 
 export function initAudio() {
@@ -44,6 +45,12 @@ export function setEnabled(v) {
 
 export function isEnabled() {
   return enabled;
+}
+
+/** 読み上げだけを切る（効果音は残す） */
+export function setVoiceEnabled(v) {
+  voiceWanted = v;
+  if (!v && window.speechSynthesis) window.speechSynthesis.cancel();
 }
 
 export function resume() {
@@ -144,7 +151,7 @@ export function click() {
  * 無線の声。読み上げ待ちが溜まると邪魔なので、重要なものだけに絞る。
  */
 export function speak(text, { priority = 0 } = {}) {
-  if (!enabled || !voiceEnabled || !window.speechSynthesis) return;
+  if (!enabled || !voiceWanted || !voiceEnabled || !window.speechSynthesis) return;
   if (priority < 2 && window.speechSynthesis.pending) return;
   if (window.speechSynthesis.speaking && priority >= 2) window.speechSynthesis.cancel();
 

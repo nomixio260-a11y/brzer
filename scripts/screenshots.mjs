@@ -49,6 +49,21 @@ await put(0.63, 0.42, 'unknown', 'unconfirmed', '浅瀬に何か');
 await put(0.36, 0.53, 'objective', 'confirmed', '');
 await put(0.30, 0.60, 'friendly', 'confirmed', 'ハンマー2');
 
+// 敵の企図を矢印で書き込む ─ 記号だけでは書けないもの
+const stroke = async (toolKey, pts) => {
+  await page.click(`#sketch-tools button[data-sketch="${toolKey}"]`);
+  await page.mouse.move(box.x + box.width * pts[0][0], box.y + box.height * pts[0][1]);
+  await page.mouse.down();
+  for (const [fx, fy] of pts.slice(1)) {
+    await page.mouse.move(box.x + box.width * fx, box.y + box.height * fy, { steps: 6 });
+  }
+  await page.mouse.up();
+};
+await stroke('arrow_enemy', [[0.355, 0.345], [0.358, 0.42], [0.362, 0.49]]);
+await stroke('arrow_enemy', [[0.66, 0.455], [0.60, 0.53], [0.50, 0.575], [0.43, 0.585]]);
+await stroke('line_control', [[0.16, 0.655], [0.74, 0.635]]);
+await page.click('#marker-tools button[data-marker="enemy_inf"]'); // 記号置きに戻す
+
 await page.evaluate(() => {
   window.__brzer.game.running = true;
   window.__brzer.game.speed = 1;

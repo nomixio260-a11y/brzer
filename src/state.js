@@ -37,8 +37,23 @@ export const CONFIDENCE = Object.freeze({
   unconfirmed: { label: '未確認', short: '未確認', dash: [2, 3.5] },
 });
 
-export function createGame() {
-  const world = createWorld();
+// 記号だけでは書けないもの ― 敵の進出方向、部隊の境界、火力を集中させる範囲。
+// 指揮官は点ではなく線と面でも考えるので、その道具を用意する。
+export const SKETCH_TOOLS = Object.freeze({
+  arrow_enemy: { label: '敵の進路', kind: 'arrow', color: HOSTILE },
+  arrow_friend: { label: '味方の機動', kind: 'arrow', color: FRIEND },
+  line_control: { label: '統制線', kind: 'line', color: '#2f2a22', dash: [9, 6] },
+  area_enemy: { label: '要注意区域', kind: 'area', color: HOSTILE },
+  free: { label: '自由線', kind: 'free', color: '#2f2a22' },
+});
+
+export function createGame(opts = {}) {
+  // 「敵の企図を変える」を選んだときだけ、盤ごとに違う目を配る。
+  // 地形と自軍の配置は変えない ― 変わるのは敵が何を考えているかだけ。
+  const world = createWorld({
+    variable: !!opts.variable,
+    planSeed: opts.variable ? Math.floor(Math.random() * 0x7fffffff) + 1 : 0,
+  });
 
   return {
     world,
@@ -46,10 +61,14 @@ export function createGame() {
     // 指揮官の認識
     belief: {
       markers: [],
+      sketches: [],
       roster: new Map(), // unitId -> 最後に「聞いた」内容
       log: [],
       unread: 0,
     },
+
+    // アセテートの取り消し履歴（書き込みは小さいので丸ごと控える）
+    history: [],
 
     // 進行制御
     running: false,
@@ -141,7 +160,36 @@ export function issueOrder(game, { unitId, verb, x, y, modifier }) {
 /* マーカー                                                            */
 /* ------------------------------------------------------------------ */
 
+/* --- 取り消し ------------------------------------------------------ */
+
+const HISTORY_LIMIT = 60;
+
+/** 書き込みを変える前に、今の状態を控えておく */
+export function snapshot(game) {
+  game.history.push({
+    markers: game.belief.markers.map((m) => ({ ...m })),
+    sketches: game.belief.sketches.map((s) => ({ ...s, points: s.points.map((p) => ({ ...p })) })),
+  });
+  if (game.history.length > HISTORY_LIMIT) game.history.shift();
+}
+
+/** 直前の書き込みを取り消す */
+export function undo(game) {
+  const prev = game.history.pop();
+  if (!prev) return false;
+  game.belief.markers = prev.markers;
+  game.belief.sketches = prev.sketches;
+  return true;
+}
+
+export function canUndo(game) {
+  return game.history.length > 0;
+}
+
+/* --- 記号 ---------------------------------------------------------- */
+
 export function addMarker(game, { x, y, type = 'enemy_inf', confidence = 'estimated', label = '' }) {
+  snapshot(game);
   const marker = {
     id: `M${markerSeq++}`,
     x,
@@ -156,9 +204,10 @@ export function addMarker(game, { x, y, type = 'enemy_inf', confidence = 'estima
   return marker;
 }
 
-export function moveMarker(game, id, x, y) {
+export function moveMarker(game, id, x, y, { record = false } = {}) {
   const m = game.belief.markers.find((m) => m.id === id);
   if (!m) return;
+  if (record) snapshot(game);
   m.x = x;
   m.y = y;
   m.updatedAt = game.world.now;
@@ -172,7 +221,55 @@ export function updateMarker(game, id, patch) {
 }
 
 export function removeMarker(game, id) {
+  if (!game.belief.markers.some((m) => m.id === id)) return;
+  snapshot(game);
   game.belief.markers = game.belief.markers.filter((m) => m.id !== id);
+}
+
+/** 全部消す */
+export function clearMarkings(game) {
+  if (!game.belief.markers.length && !game.belief.sketches.length) return;
+  snapshot(game);
+  game.belief.markers = [];
+  game.belief.sketches = [];
+}
+
+/* --- 作図 ---------------------------------------------------------- */
+
+let sketchSeq = 1;
+
+export function addSketch(game, { tool, points }) {
+  const spec = SKETCH_TOOLS[tool];
+  if (!spec || points.length < 2) return null;
+  snapshot(game);
+  const sketch = {
+    id: `S${sketchSeq++}`,
+    tool,
+    kind: spec.kind,
+    color: spec.color,
+    dash: spec.dash ?? null,
+    points: points.map((p) => ({ x: p.x, y: p.y })),
+    createdAt: game.world.now,
+    updatedAt: game.world.now,
+  };
+  game.belief.sketches.push(sketch);
+  return sketch;
+}
+
+export function removeSketch(game, id) {
+  if (!game.belief.sketches.some((s) => s.id === id)) return;
+  snapshot(game);
+  game.belief.sketches = game.belief.sketches.filter((s) => s.id !== id);
+}
+
+export function getSketches(game) {
+  return game.belief.sketches;
+}
+
+/** 作図の鮮度。記号ほど急には古びない（企図の見立ては長く効く）。 */
+export function sketchFreshness(game, sketch) {
+  const age = game.world.now - sketch.updatedAt;
+  return Math.max(0.45, 1 - age / 2400);
 }
 
 /** マーカーの鮮度 0..1（1 = たった今、0 = 完全に古い） */

@@ -6,8 +6,11 @@ import { VERBS, MODIFIERS, getRosterOrder, getSupport, toGrid, issueOrder } from
 // 部隊ごとに出せる命令は違う。砲兵に「突撃せよ」とは言えない。
 const VERBS_BY_UNIT = {
   TH: ['fire_mission', 'smoke', 'sitrep'],
-  EG: ['recon', 'move', 'sitrep'],
-  _default: ['move', 'advance', 'attack', 'defend', 'hold', 'recon', 'withdraw', 'sitrep'],
+  EG: ['recon', 'move', 'observe', 'sitrep'],
+  _default: [
+    'move', 'advance', 'attack', 'defend', 'hold', 'observe',
+    'recon', 'withdraw', 'rally', 'hold_fire', 'free_fire', 'sitrep',
+  ],
 };
 
 const MOD_ORDER = ['normal', 'rapid', 'cautious', 'stealth'];
@@ -164,7 +167,9 @@ export function refresh(panel, status) {
       dom.mods.appendChild(b);
     }
   }
-  const modsUseful = panel.verb && !['sitrep', 'fire_mission', 'smoke', 'hold'].includes(panel.verb);
+  const modsUseful =
+    panel.verb &&
+    !['sitrep', 'fire_mission', 'smoke', 'hold', 'hold_fire', 'free_fire'].includes(panel.verb);
   dom.mods.style.opacity = modsUseful ? '1' : '0.35';
   for (const b of dom.mods.querySelectorAll('button')) {
     const on = b.dataset.mod === panel.modifier;

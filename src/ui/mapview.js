@@ -15,11 +15,13 @@ import {
   MARKER_TYPES,
   CONFIDENCE,
   markerFreshness,
+  sketchFreshness,
   getTerrain,
   getSimTime,
   getCommandPost,
   getOwnFireMissions,
   getMarkers,
+  getSketches,
 } from '../state.js';
 
 const INK = {
@@ -31,21 +33,30 @@ const INK = {
   sheetInk: 'rgba(36, 30, 22, 0.9)',
 };
 
+export const ZOOM_MIN = 1;
+export const ZOOM_MAX = 5;
+
 export function createMapView(canvas, game) {
   const ctx = canvas.getContext('2d');
   const view = {
     canvas,
     ctx,
     game,
+    // 表示範囲。zoom=1 で図面全体が収まる。
+    zoom: 1,
+    centerX: WORLD.width / 2,
+    centerY: WORLD.height / 2,
+    fitScale: 1,
     scale: 1,
     offsetX: 0,
     offsetY: 0,
     dpr: 1,
     base: null,
-    hoverMarkerId: null,
-    selectedMarkerId: null,
+    hoverMarkId: null,
+    selectedMarkId: null,
     targeting: false,
     cursor: null,
+    flash: null, // 無線報告から呼び出された方眼の点滅
   };
 
   view.base = createMapViewBase(getTerrain(game));
@@ -62,13 +73,67 @@ export function resize(view) {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   view.canvas.width = Math.max(1, Math.round(rect.width * dpr));
   view.canvas.height = Math.max(1, Math.round(rect.height * dpr));
-
-  const sx = view.canvas.width / WORLD.width;
-  const sy = view.canvas.height / WORLD.height;
-  view.scale = Math.min(sx, sy);
-  view.offsetX = (view.canvas.width - WORLD.width * view.scale) / 2;
-  view.offsetY = (view.canvas.height - WORLD.height * view.scale) / 2;
   view.dpr = dpr;
+
+  view.fitScale = Math.min(view.canvas.width / WORLD.width, view.canvas.height / WORLD.height);
+  applyView(view);
+}
+
+/** zoom と中心から実際の変換を組み立て、図面の外へ流れないよう抑える */
+function applyView(view) {
+  view.zoom = clamp(view.zoom, ZOOM_MIN, ZOOM_MAX);
+  view.scale = view.fitScale * view.zoom;
+
+  const halfW = view.canvas.width / 2 / view.scale;
+  const halfH = view.canvas.height / 2 / view.scale;
+
+  view.centerX = WORLD.width <= halfW * 2 ? WORLD.width / 2 : clamp(view.centerX, halfW, WORLD.width - halfW);
+  view.centerY = WORLD.height <= halfH * 2 ? WORLD.height / 2 : clamp(view.centerY, halfH, WORLD.height - halfH);
+
+  view.offsetX = view.canvas.width / 2 - view.centerX * view.scale;
+  view.offsetY = view.canvas.height / 2 - view.centerY * view.scale;
+}
+
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+/** 画面上の一点を掴んだまま拡大する */
+export function zoomAt(view, factor, clientX, clientY) {
+  const before = clientX == null ? null : toWorld(view, clientX, clientY);
+  view.zoom = clamp(view.zoom * factor, ZOOM_MIN, ZOOM_MAX);
+  applyView(view);
+  if (before) {
+    const after = toWorld(view, clientX, clientY);
+    view.centerX += before.x - after.x;
+    view.centerY += before.y - after.y;
+    applyView(view);
+  }
+}
+
+export function setZoom(view, zoom) {
+  view.zoom = zoom;
+  applyView(view);
+}
+
+/** 画面上の移動量ぶん図面をずらす（CSSピクセル） */
+export function panByScreen(view, dxCss, dyCss) {
+  view.centerX -= (dxCss * view.dpr) / view.scale;
+  view.centerY -= (dyCss * view.dpr) / view.scale;
+  applyView(view);
+}
+
+/** 指定した世界座標を画面の中央に置く */
+export function centerOn(view, x, y, zoom) {
+  if (zoom != null) view.zoom = zoom;
+  view.centerX = x;
+  view.centerY = y;
+  applyView(view);
+}
+
+/** その方眼が今どれくらい見えているか（自動で寄るかの判断に使う） */
+export function isWellVisible(view, x, y) {
+  const s = toScreen(view, x, y);
+  const m = 60 * view.dpr;
+  return s.x > m && s.y > m && s.x < view.canvas.width - m && s.y < view.canvas.height - m;
 }
 
 export function toScreen(view, x, y) {
@@ -137,7 +202,10 @@ export function draw(view) {
   drawAcetateSheen(ctx);
   drawCommandPost(ctx, game, px);
   drawFireMissions(ctx, game, px);
+  drawSketches(ctx, view, game, px);
+  drawLiveStroke(ctx, view, px);
   drawMarkers(ctx, view, game, px);
+  drawGridFlash(ctx, view, px);
   drawTargetingCursor(ctx, view, px);
 
   ctx.restore();
@@ -385,6 +453,106 @@ function drawFireMissions(ctx, game, px) {
   ctx.restore();
 }
 
+/* --- 作図 --------------------------------------------------------- */
+
+function drawSketches(ctx, view, game, px) {
+  for (const sk of getSketches(game)) {
+    const alpha = sketchFreshness(game, sk) * (view.selectedMarkId === sk.id ? 1 : 0.92);
+    strokeSketch(ctx, sk, px, alpha, view.selectedMarkId === sk.id || view.hoverMarkId === sk.id);
+  }
+}
+
+/** 引いている最中の線 */
+function drawLiveStroke(ctx, view, px) {
+  const live = view.liveStroke;
+  if (!live || live.points.length < 2) return;
+  strokeSketch(ctx, { ...live, id: '__live' }, px, 0.75, false);
+}
+
+function strokeSketch(ctx, sk, px, alpha, emphasised) {
+  const pts = sk.points;
+  if (!pts || pts.length < 2) return;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = sk.color;
+  ctx.fillStyle = sk.color;
+  ctx.lineWidth = px(emphasised ? 3 : 2.2);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  // チャイナグラフの厚み
+  ctx.shadowColor = 'rgba(20, 16, 10, 0.3)';
+  ctx.shadowBlur = px(1.4);
+  ctx.shadowOffsetY = px(0.5);
+  if (sk.dash) ctx.setLineDash(sk.dash.map((n) => px(n)));
+
+  if (sk.kind === 'line') {
+    // 統制線は引き始めと引き終わりを結ぶ直線
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  if (sk.kind === 'area') {
+    ctx.closePath();
+    ctx.save();
+    ctx.globalAlpha = alpha * 0.13;
+    ctx.shadowColor = 'transparent';
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  if (sk.kind === 'arrow') {
+    // 矢頭は最後の向きに合わせる
+    const b = pts[pts.length - 1];
+    let a = pts[pts.length - 2];
+    for (let i = pts.length - 2; i >= 0; i--) {
+      if (Math.hypot(b.x - pts[i].x, b.y - pts[i].y) > px(14)) {
+        a = pts[i];
+        break;
+      }
+    }
+    const ang = Math.atan2(b.y - a.y, b.x - a.x);
+    const len = px(13);
+    ctx.beginPath();
+    ctx.moveTo(b.x, b.y);
+    ctx.lineTo(b.x - Math.cos(ang - 0.42) * len, b.y - Math.sin(ang - 0.42) * len);
+    ctx.moveTo(b.x, b.y);
+    ctx.lineTo(b.x - Math.cos(ang + 0.42) * len, b.y - Math.sin(ang + 0.42) * len);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+/** 無線報告から呼び出された方眼を点滅させる */
+function drawGridFlash(ctx, view, px) {
+  const f = view.flash;
+  if (!f) return;
+  const t = (performance.now() - f.at) / 2600;
+  if (t >= 1) {
+    view.flash = null;
+    return;
+  }
+  const pulse = 0.35 + 0.65 * Math.abs(Math.sin(t * Math.PI * 4));
+  ctx.save();
+  ctx.globalAlpha = (1 - t) * pulse;
+  ctx.strokeStyle = '#c8541c';
+  ctx.lineWidth = px(3);
+  ctx.strokeRect(f.col * WORLD.gridSize, f.row * WORLD.gridSize, WORLD.gridSize, WORLD.gridSize);
+  ctx.restore();
+}
+
 function drawMarkers(ctx, view, game, px) {
   const now = getSimTime(game);
   ctx.save();
@@ -394,8 +562,8 @@ function drawMarkers(ctx, view, game, px) {
     const fresh = markerFreshness(game, m);
     // 古い書き込みは薄れる ─ 「これはもう当てにならない」を目で分からせる
     const alpha = 0.34 + fresh * 0.66;
-    const selected = view.selectedMarkerId === m.id;
-    const hovered = view.hoverMarkerId === m.id;
+    const selected = view.selectedMarkId === m.id;
+    const hovered = view.hoverMarkId === m.id;
     const r = px(13);
     const seed = numericSeed(m.id);
 
@@ -610,7 +778,7 @@ function drawLamp(ctx, view) {
   ctx.restore();
 }
 
-/** 指定した世界座標にあるマーカーを探す（当たり判定） */
+/** 指定した世界座標にある書き込みを探す（記号が優先、次に作図） */
 export function markerAt(game, x, y, view) {
   const hit = view ? (24 * view.dpr) / view.scale : 80;
   const list = getMarkers(game);
@@ -619,4 +787,40 @@ export function markerAt(game, x, y, view) {
     if (Math.hypot(m.x - x, m.y - y) <= hit) return m;
   }
   return null;
+}
+
+/** 線の上を掴んだか */
+export function sketchAt(game, x, y, view) {
+  const hit = view ? (14 * view.dpr) / view.scale : 60;
+  const list = getSketches(game);
+  for (let i = list.length - 1; i >= 0; i--) {
+    const sk = list[i];
+    const pts = sk.kind === 'line' ? [sk.points[0], sk.points[sk.points.length - 1]] : sk.points;
+    for (let k = 0; k < pts.length - 1; k++) {
+      if (distToSegment(x, y, pts[k], pts[k + 1]) <= hit) return sk;
+    }
+    if (sk.kind === 'area' && pts.length > 2) {
+      if (distToSegment(x, y, pts[pts.length - 1], pts[0]) <= hit) return sk;
+    }
+  }
+  return null;
+}
+
+function distToSegment(px_, py_, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-6) return Math.hypot(px_ - a.x, py_ - a.y);
+  let t = ((px_ - a.x) * dx + (py_ - a.y) * dy) / len2;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return Math.hypot(px_ - (a.x + dx * t), py_ - (a.y + dy * t));
+}
+
+/** 無線報告の方眼を点滅させる */
+export function flashGrid(view, x, y) {
+  view.flash = {
+    col: Math.floor(x / WORLD.gridSize),
+    row: Math.floor(y / WORLD.gridSize),
+    at: performance.now(),
+  };
 }

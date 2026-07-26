@@ -2,7 +2,12 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a0908">
+<meta name="description" content="地図と無線だけで戦闘を指揮する。ブラウザで遊べる無線指揮官ゲーム。">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>BRZER ─ 橋梁死守</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230d0f10'/%3E%3Cpath d='M4 20h24M10 12v16M22 12v16' stroke='%23e0a33c' stroke-width='2.5' fill='none'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="styles/main.css">
@@ -35,6 +40,7 @@
         <h2>留意事項</h2>
         <ul id="brief-notes"></ul>
       </section>
+
       <section class="brief-block">
         <h2>指揮下の部隊</h2>
         <ul id="brief-oob" class="oob"></ul>
@@ -49,14 +55,39 @@
         </p>
         <ul id="brief-legend" class="symlegend"></ul>
       </section>
+
       <section class="brief-block brief-block--howto">
         <h2>操作</h2>
         <ul>
-          <li><b>地図をクリック</b> ─ 選択中の記号を書き込む（敵の位置は、聞いて、自分で置く）</li>
-          <li><b>ドラッグ</b> ─ 記号を動かす ／ <b>右クリック</b> ─ 消す</li>
-          <li><b>命令</b> ─ 右下で 部隊 → 命令 → 目標（地図をクリック）→ 送信</li>
-          <li><kbd>Space</kbd> 一時停止 ／ <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 速度 ／ <kbd>M</kbd> 記号の切替 ／ <kbd>Esc</kbd> 選択解除</li>
+          <li><b>地図を叩く</b> ─ 選択中の記号を書き込む（敵の位置は、聞いて、自分で置く）</li>
+          <li><b>地図を掴んで動かす</b> ─ 図面をずらす ／ <b>二本指・車輪</b> ─ 拡大縮小</li>
+          <li><b>記号を掴んで動かす</b> ─ 位置を直す ／ <b>長押し・右クリック</b> ─ 消す</li>
+          <li><b>無線の一行を叩く</b> ─ その方眼へ跳ぶ。<b>「記号」</b>を押せば聞いた位置に一発で置ける</li>
+          <li><b>命令</b> ─ 部隊 → 命令 → 目標（地図を叩く）→ 送信</li>
+          <li class="only-desktop"><kbd>Space</kbd> 一時停止 ／ <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 速度 ／
+            <kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd> 図式 ／ <kbd>Ctrl</kbd>+<kbd>Z</kbd> 取り消し ／
+            <kbd>+</kbd><kbd>-</kbd> 拡大縮小 ／ <kbd>Esc</kbd> 解除</li>
         </ul>
+      </section>
+
+      <section class="brief-block">
+        <h2>設定</h2>
+        <div class="setup">
+          <label class="setup__row">
+            <input type="checkbox" id="opt-variable">
+            <span>
+              <b>敵の企図を変える</b>
+              <em>主攻がどちらの軸に来るか、時刻も含めて毎回変わる。二度目以降はこちらを推奨。</em>
+            </span>
+          </label>
+          <label class="setup__row">
+            <input type="checkbox" id="opt-voice" checked>
+            <span>
+              <b>無線を読み上げる</b>
+              <em>日本語音声がある環境でのみ有効。</em>
+            </span>
+          </label>
+        </div>
       </section>
     </div>
 
@@ -76,10 +107,10 @@
     </div>
 
     <div class="speed" role="group" aria-label="時間の速さ">
-      <button class="speed__btn" data-speed="0" title="一時停止 (Space)">❚❚</button>
-      <button class="speed__btn is-on" data-speed="1" title="標準 (1)">▶</button>
-      <button class="speed__btn" data-speed="2" title="2倍 (2)">▶▶</button>
-      <button class="speed__btn" data-speed="4" title="4倍 (3)">▶▶▶</button>
+      <button class="speed__btn" data-speed="0" title="一時停止 (Space)" aria-label="一時停止">❚❚</button>
+      <button class="speed__btn is-on" data-speed="1" title="標準 (1)" aria-label="標準">▶</button>
+      <button class="speed__btn" data-speed="2" title="2倍 (2)" aria-label="2倍">▶▶</button>
+      <button class="speed__btn" data-speed="4" title="4倍 (3)" aria-label="4倍">▶▶▶</button>
     </div>
 
     <div class="radiostate">
@@ -96,47 +127,68 @@
 
     <div class="objective" id="objective-line"></div>
 
-    <button id="btn-sound" class="iconbtn" title="音">♪</button>
+    <button id="btn-sound" class="iconbtn is-on" title="音の入切" aria-label="音の入切">♪</button>
   </header>
 
   <main class="layout">
     <div class="mapwrap">
       <canvas id="map" class="map"></canvas>
 
-      <div class="maptools">
-        <div class="maptools__group" id="marker-tools"></div>
-        <div class="maptools__group" id="confidence-tools"></div>
-        <button id="btn-clear-markers" class="tool tool--wide" title="全マーカーを消す">全消去</button>
+      <!-- 図式の道具箱 -->
+      <div class="maptools" id="maptools">
+        <button id="tools-toggle" class="maptools__toggle" aria-expanded="true">図式 ▾</button>
+        <div class="maptools__body" id="tools-body">
+          <div class="maptools__label">部隊記号</div>
+          <div class="maptools__group" id="marker-tools"></div>
+          <div class="maptools__label">確度</div>
+          <div class="maptools__group" id="confidence-tools"></div>
+          <div class="maptools__label">作図</div>
+          <div class="maptools__group" id="sketch-tools"></div>
+          <div class="maptools__row">
+            <button id="btn-undo" class="tool tool--half" title="取り消し (Ctrl+Z)">↶ 取消</button>
+            <button id="btn-clear-markers" class="tool tool--half" title="全部消す">全消去</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 縮尺の操作（携帯では指、PC では車輪でも動く） -->
+      <div class="mapzoom">
+        <button id="zoom-in" class="zoombtn" aria-label="拡大">＋</button>
+        <button id="zoom-out" class="zoombtn" aria-label="縮小">－</button>
+        <button id="zoom-fit" class="zoombtn zoombtn--fit" aria-label="全体表示">全</button>
       </div>
 
       <div id="map-hint" class="maphint" hidden></div>
+      <div id="toast" class="toast" hidden></div>
+
       <div id="marker-editor" class="markeredit" hidden>
-        <input id="marker-label" type="text" maxlength="18" placeholder="ラベル">
+        <input id="marker-label" type="text" maxlength="18" placeholder="ラベル" autocomplete="off">
         <button id="marker-delete" class="tool" title="削除">削除</button>
       </div>
     </div>
 
-    <aside class="side">
-      <section class="panel panel--roster">
+    <aside class="side" id="side">
+      <section class="panel panel--roster" data-panel="roster">
         <h2 class="panel__title">部隊 <span class="panel__hint">最後に聞いた内容</span></h2>
         <ul id="roster" class="roster"></ul>
       </section>
 
-      <section class="panel panel--log">
-        <h2 class="panel__title">無線 <span class="panel__hint" id="log-filter-hint">全て</span></h2>
+      <section class="panel panel--log" data-panel="log">
+        <h2 class="panel__title">
+          無線
+          <span class="panel__hint">一行を叩くとその方眼へ</span>
+        </h2>
         <ul id="radiolog" class="radiolog"></ul>
       </section>
 
-      <section class="panel panel--order">
+      <section class="panel panel--order" data-panel="order">
         <h2 class="panel__title">命令</h2>
         <div class="order">
           <div class="order__row" id="order-units"></div>
           <div class="order__row" id="order-verbs"></div>
           <div class="order__row order__row--tail">
             <div class="order__mods" id="order-mods"></div>
-            <div class="order__target">
-              目標 <b id="order-grid">──</b>
-            </div>
+            <div class="order__target">目標 <b id="order-grid">──</b></div>
             <button id="order-send" class="btn btn--send" disabled>送信</button>
           </div>
           <p id="order-status" class="order__status">部隊を選べ。</p>
@@ -144,6 +196,14 @@
       </section>
     </aside>
   </main>
+
+  <!-- 携帯用の下部タブ -->
+  <nav class="tabbar" id="tabbar">
+    <button class="tabbar__btn is-on" data-tab="map">地図</button>
+    <button class="tabbar__btn" data-tab="roster">部隊</button>
+    <button class="tabbar__btn" data-tab="log">無線<span class="tabbar__badge" id="tab-unread" hidden>0</span></button>
+    <button class="tabbar__btn" data-tab="order">命令</button>
+  </nav>
 </section>
 
 <!-- ================================ 講評 ================================ -->
@@ -159,7 +219,7 @@
         <h2>貴官が見ていた戦場と、実際の戦場</h2>
         <canvas id="truthmap" class="truthmap"></canvas>
         <div class="legend">
-          <span><i class="legend__swatch legend__swatch--marker"></i>貴官のマーカー</span>
+          <span><i class="legend__swatch legend__swatch--marker"></i>貴官の書き込み</span>
           <span><i class="legend__swatch legend__swatch--enemy"></i>実際の敵</span>
           <span><i class="legend__swatch legend__swatch--friend"></i>実際の友軍</span>
           <span><i class="legend__swatch legend__swatch--dead"></i>戦闘不能</span>
