@@ -22,6 +22,7 @@ import {
   getOwnFireMissions,
   getMarkers,
   getSketches,
+  getVisibility as getVisibilityLabel,
 } from '../state.js';
 
 const INK = {
@@ -56,6 +57,7 @@ export function createMapView(canvas, game) {
     selectedMarkId: null,
     targeting: false,
     cursor: null,
+    userZoomed: false, // 自分で倍率を変えたか（変えていれば勝手に戻さない）
     flash: null, // 無線報告から呼び出された方眼の点滅
   };
 
@@ -98,6 +100,7 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 /** 画面上の一点を掴んだまま拡大する */
 export function zoomAt(view, factor, clientX, clientY) {
+  view.userZoomed = true;
   const before = clientX == null ? null : toWorld(view, clientX, clientY);
   view.zoom = clamp(view.zoom * factor, ZOOM_MIN, ZOOM_MAX);
   applyView(view);
@@ -109,7 +112,8 @@ export function zoomAt(view, factor, clientX, clientY) {
   }
 }
 
-export function setZoom(view, zoom) {
+export function setZoom(view, zoom, { byUser = false } = {}) {
+  if (byUser) view.userZoomed = true;
   view.zoom = zoom;
   applyView(view);
 }
@@ -210,7 +214,7 @@ export function draw(view) {
 
   ctx.restore();
 
-  drawMarginalia(ctx, view);
+  drawMarginalia(ctx, view, game);
   drawLamp(ctx, view);
 }
 
@@ -679,16 +683,23 @@ function numericSeed(id) {
 /* 図郭外表記（縮尺・方位・図歴）                                         */
 /* ------------------------------------------------------------------ */
 
-function drawMarginalia(ctx, view) {
+function drawMarginalia(ctx, view, game) {
   const d = view.dpr;
-  const x0 = view.offsetX + 14 * d;
-  const y0 = view.offsetY + WORLD.height * view.scale - 14 * d;
+  // 縦長の画面では、右下は拡大ボタンに取られている。方位標を左に寄せる。
+  const portrait = view.canvas.height > view.canvas.width;
+  // 図郭ではなく画面の隅に固定する。図郭に貼ると、拡大した途端に
+  // 縮尺も方位も画面の外へ出てしまい、一番要るときに読めない。
+  const x0 = 14 * d;
+  const y0 = view.canvas.height - 14 * d;
 
   ctx.save();
   ctx.textBaseline = 'alphabetic';
 
   // --- 棒縮尺 ---
-  const barMeters = 1000;
+  // 倍率に応じて「きりのよい距離」を選ぶ。1000m 固定だと拡大時に画面から溢れる。
+  const maxBar = Math.min(220 * d, view.canvas.width * 0.34);
+  const NICE = [2000, 1000, 500, 200, 100, 50];
+  const barMeters = NICE.find((m) => m * view.scale <= maxBar) ?? 50;
   const barPx = barMeters * view.scale;
   const bx = x0;
   const by = y0 - 10 * d;
@@ -712,15 +723,33 @@ function drawMarginalia(ctx, view) {
   ctx.font = `600 ${9 * d}px ui-monospace, monospace`;
   ctx.textAlign = 'center';
   ctx.fillText('0', bx, by - 10 * d);
-  ctx.fillText('500', bx + seg * 2, by - 10 * d);
-  ctx.fillText('1000 m', bx + barPx, by - 10 * d);
+  ctx.fillText(String(barMeters / 2), bx + seg * 2, by - 10 * d);
+  ctx.fillText(`${barMeters} m`, bx + barPx, by - 10 * d);
   ctx.textAlign = 'left';
   ctx.font = `500 ${8.5 * d}px "Hiragino Kaku Gothic ProN", sans-serif`;
   ctx.fillText('縮尺 1:50,000 ／ 等高線間隔 10m ／ 方眼 400m', bx, by + 11 * d);
 
+  // --- 視程 ---
+  // 霧はこの戦闘の主役なので、地図の欄外に常に出しておく。
+  if (game) {
+    const vis = getVisibilityLabel(game);
+    const label = `視程 ${vis.label}${vis.note ? ` ─ ${vis.note}` : ''}`;
+    ctx.font = `600 ${9.5 * d}px "Hiragino Kaku Gothic ProN", sans-serif`;
+    const w = ctx.measureText(label).width;
+    const vy = by - 34 * d;
+    ctx.fillStyle = 'rgba(238, 238, 220, 0.86)';
+    ctx.fillRect(bx - 6 * d, vy - 12 * d, w + 12 * d, 18 * d);
+    ctx.strokeStyle = 'rgba(40, 34, 26, 0.45)';
+    ctx.lineWidth = 1 * d;
+    ctx.strokeRect(bx - 6 * d, vy - 12 * d, w + 12 * d, 18 * d);
+    ctx.fillStyle = ['#8a1f18', '#8a5a10', '#2a4a2a', '#24401f'][vis.level] ?? '#2a241c';
+    ctx.textAlign = 'left';
+    ctx.fillText(label, bx, vy + 1 * d);
+  }
+
   // --- 方位標 ---
-  const nx = view.offsetX + WORLD.width * view.scale - 40 * d;
-  const ny = view.offsetY + WORLD.height * view.scale - 46 * d;
+  const nx = portrait ? x0 + 26 * d : view.canvas.width - 40 * d;
+  const ny = portrait ? y0 - 96 * d : view.canvas.height - 46 * d;
   ctx.fillStyle = 'rgba(238, 238, 220, 0.86)';
   ctx.beginPath();
   ctx.arc(nx, ny, 26 * d, 0, Math.PI * 2);

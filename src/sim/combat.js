@@ -5,6 +5,7 @@ import { lineOfSight } from './terrain.js';
 import { applyDamage, applySuppression, effectiveCover, POSTURES } from './units.js';
 import { visibleEnemies } from './perception.js';
 import { smokeAttenuation, createSmoke } from './smoke.js';
+import { mistAttenuation } from './weather.js';
 
 const LETHALITY = 0.0012; // 1秒あたりの基礎損耗率
 // 目安: 掩体の1個分隊を撃破するのに、戦車2両がかりで約5分。
@@ -39,10 +40,12 @@ export function stepDirectFire(world, dt) {
 
     const los = lineOfSight(terrain, u.x, u.y, target.x, target.y);
     const smokeCut = smokeAttenuation(smokes, now, u.x, u.y, target.x, target.y);
+    const mistCut = mistAttenuation(world, u.x, u.y, target.x, target.y);
+    const obscured = 1 - (1 - smokeCut) * (1 - mistCut);
     // 見えてさえいれば撃てる。視程は命中率をいくらか鈍らせるだけで、
     // ここで植生をもう一度罰すると（遮蔽と二重計上になり）撃ち合いが永遠に終わらない。
-    const visibility = (0.4 + 0.6 * los.quality) * (1 - smokeCut * 0.85);
-    if (los.quality * (1 - smokeCut) < 0.08) continue;
+    const visibility = (0.4 + 0.6 * los.quality) * (1 - obscured * 0.85);
+    if (los.quality * (1 - obscured) < 0.08) continue;
 
     const strengthFrac = u.strength / u.maxStrength;
     const moraleFactor = clamp(u.morale / 80, 0.3, 1.1);

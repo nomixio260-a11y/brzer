@@ -9,6 +9,7 @@
 import { createWorld, tick } from './sim/world.js';
 import { issueOrder as simIssueOrder } from './sim/orders.js';
 import { congestion } from './sim/comms.js';
+import { visibilityJa } from './sim/weather.js';
 import { scoreMission } from './sim/scenario.js';
 import { toGrid, fromGrid, formatClock } from './util.js';
 
@@ -374,6 +375,11 @@ export function getOwnFireMissions(game) {
       completedAt: fm.completedAt,
       roundsLeft: fm.roundsLeft,
     }));
+}
+
+/** 視程。指揮所の窓からでも、霧が谷を埋めていることは分かる。 */
+export function getVisibility(game) {
+  return visibilityJa(game.world);
 }
 
 /** 無線の状態（混雑・妨害）。指揮官には「今誰かが喋っている」ことは分かる。 */

@@ -270,6 +270,47 @@ try {
   await mp.waitForTimeout(300);
   check('地図タブでシートが閉じる', !(await mp.$eval('#side', (e) => e.classList.contains('is-open'))));
 
+  // 部隊の方眼を叩くと、その位置へ跳ぶ
+  await mp.click('.tabbar__btn[data-tab="roster"]');
+  await mp.waitForTimeout(300);
+  // 部隊一覧は毎フレーム描き直されるので、要素を掴まずセレクタで押す
+  const hasGrid = (await mp.$$('#roster button.roster__grid')).length > 0;
+  if (hasGrid) {
+    const beforeZoom = await mp.evaluate(() => window.__brzer.mapView.zoom);
+    await mp.click('#roster button.roster__grid', { timeout: 5000 });
+    await mp.waitForTimeout(300);
+    check('部隊の方眼を叩くとその位置へ跳ぶ',
+      !(await mp.$eval('#side', (e) => e.classList.contains('is-open'))) &&
+      (await mp.evaluate(() => window.__brzer.mapView.zoom)) >= beforeZoom);
+  } else {
+    check('部隊の方眼を叩くとその位置へ跳ぶ', false, '方眼の札が出ていない');
+  }
+
+  // つまみを下へ払うとシートが閉じる
+  await mp.click('.tabbar__btn[data-tab="log"]');
+  await mp.waitForSelector('#side.is-open', { timeout: 5000 });
+  await mp.waitForTimeout(450); // 上がりきるまで待つ
+  const handle = await mp.$eval('#sheet-handle', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  });
+  await mp.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await mp.mouse.down();
+  await mp.mouse.move(handle.x + handle.width / 2, handle.y + 260, { steps: 10 });
+  await mp.mouse.up();
+  await mp.waitForTimeout(350);
+  check('つまみを下へ払うと閉じる', !(await mp.$eval('#side', (e) => e.classList.contains('is-open'))));
+
+  check('視程が表示されている', (await mp.textContent('#visibility')).length > 0);
+  // 砲弾と発煙は残弾管理の要。携帯でも必ず見えていること。
+  check('砲弾の残数が見えている', await mp.isVisible('#ammo-he'));
+  check('発煙の残数が見えている', await mp.isVisible('#ammo-smoke'));
+  const topbarFits = await mp.evaluate(() => {
+    const bar = document.querySelector('.topbar');
+    return [...bar.children].every((c) => c.getBoundingClientRect().right <= bar.getBoundingClientRect().right + 1);
+  });
+  check('上部帯が見切れていない', topbarFits);
+
   await mp.screenshot({ path: `${SHOTS}/04-phone.png` });
   check('携帯でもエラーが出ていない', mobileProblems.length === 0, mobileProblems.join(' | '));
 

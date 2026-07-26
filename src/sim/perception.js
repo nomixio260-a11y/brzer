@@ -5,6 +5,7 @@ import { clamp, dist } from '../util.js';
 import { lineOfSight, concealAt } from './terrain.js';
 import { POSTURES } from './units.js';
 import { smokeAttenuation } from './smoke.js';
+import { mistAttenuation } from './weather.js';
 
 /** 相手の兵種をどう見誤るか（近い見た目のものと取り違える） */
 const CONFUSION = {
@@ -23,7 +24,7 @@ const CONFUSION = {
  * @param {object} u 観測側
  * @param {Array} others 全ユニット
  */
-export function stepPerception(u, others, terrain, now, dt, rng, smokes) {
+export function stepPerception(u, others, terrain, now, dt, rng, smokes, world) {
   if (!u.alive) return;
 
   const posture = POSTURES[u.posture] ?? POSTURES.normal;
@@ -48,9 +49,11 @@ export function stepPerception(u, others, terrain, now, dt, rng, smokes) {
       continue;
     }
 
-    // 発煙は上空からの観測にはあまり効かない
-    const smokeCut = smokeAttenuation(smokes, now, u.x, u.y, t.x, t.y) * (u.tpl.flying ? 0.35 : 1);
-    los.quality *= 1 - smokeCut;
+    // 発煙も川霧も、上空からの観測にはあまり効かない
+    const air = u.tpl.flying ? 0.35 : 1;
+    const smokeCut = smokeAttenuation(smokes, now, u.x, u.y, t.x, t.y) * air;
+    const mistCut = world ? mistAttenuation(world, u.x, u.y, t.x, t.y) * air : 0;
+    los.quality *= (1 - smokeCut) * (1 - mistCut);
     if (los.quality < 0.06) {
       decayContact(u, t, now);
       continue;

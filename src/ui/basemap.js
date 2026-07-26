@@ -51,9 +51,10 @@ export function createMapViewBase(terrain) {
   const g = sheet.getContext('2d');
 
   g.imageSmoothingEnabled = true;
-  g.drawImage(paintGround(terrain), 0, 0, SHEET_W, SHEET_H);
+  const ground = paintGround(terrain);
+  g.drawImage(ground, 0, 0, SHEET_W, SHEET_H);
 
-  drawContours(g, terrain);
+  drawContours(g, terrain, ground);
   drawVegetation(g, terrain);
   drawBuiltUp(g, terrain);
   drawMarsh(g, terrain);
@@ -170,7 +171,7 @@ const clamp01 = (v) => (v < 0.55 ? 0.55 : v > 1.4 ? 1.4 : v);
 /* 等高線（マーチングスクエア）                                          */
 /* ------------------------------------------------------------------ */
 
-function drawContours(g, terrain) {
+function drawContours(g, terrain, ground) {
   const { lo, hi } = elevationRange(terrain);
   const first = Math.ceil(lo / CONTOUR_INTERVAL) * CONTOUR_INTERVAL;
 
@@ -193,13 +194,13 @@ function drawContours(g, terrain) {
     }
     g.stroke();
 
-    if (isIndex) labelContour(g, segments, level);
+    if (isIndex) labelContour(g, segments, level, ground);
   }
   g.restore();
 }
 
 /** 主曲線に標高を書き入れる（線に沿って傾ける） */
-function labelContour(g, segments, level) {
+function labelContour(g, segments, level, ground) {
   g.save();
   g.fillStyle = COLOR.contourLabel;
   g.font = '600 8px ui-monospace, monospace';
@@ -218,11 +219,16 @@ function labelContour(g, segments, level) {
     g.save();
     g.translate(x, y);
     g.rotate(a);
-    // 線を切って数字を置く（紙の地図と同じ作法）
-    g.globalCompositeOperation = 'destination-out';
-    g.fillStyle = '#000';
-    g.fillRect(-9, -4.5, 18, 9);
-    g.globalCompositeOperation = 'source-over';
+    // 線を切って数字を置く（紙の地図と同じ作法）。
+    // 消しゴムで抜くと紙に穴が開いてしまうので、地色を刷り直して線だけ消す。
+    g.save();
+    g.beginPath();
+    g.rect(-9, -4.5, 18, 9);
+    g.clip();
+    g.rotate(-a);
+    g.translate(-x, -y);
+    g.drawImage(ground, 0, 0, SHEET_W, SHEET_H);
+    g.restore();
     g.fillStyle = COLOR.contourLabel;
     g.fillText(String(Math.round(level)), 0, 0.5);
     g.restore();

@@ -1,6 +1,6 @@
 // 上部のステータス帯。時計・速度・無線の混み具合・支援弾数。
 
-import { getClock, getSimTime, getRadioStatus, getSupport, getMission } from '../state.js';
+import { getClock, getSimTime, getRadioStatus, getSupport, getMission, getVisibility } from '../state.js';
 import { parseClock } from '../util.js';
 
 // 時間帯ごとの一言。指揮官の「今どういう局面か」の感覚を補う。
@@ -50,6 +50,15 @@ export function renderHud(hud) {
 
   dom.he.textContent = support.artillery;
   dom.smoke.textContent = support.smoke;
+
+  // 視程。霧が晴れるまでは、見えていないことを前提に考えねばならない。
+  const vis = getVisibility(game);
+  if (dom.vis && hud._visLevel !== vis.level) {
+    hud._visLevel = vis.level;
+    dom.vis.textContent = vis.label;
+    dom.vis.className = `vis vis--${vis.level}`;
+    dom.vis.title = vis.note || `視程 ${vis.label}`;
+  }
 
   if (!dom.objective.textContent) {
     dom.objective.textContent = getMission(game).objectives.find((o) => o.primary).text;

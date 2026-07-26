@@ -104,7 +104,7 @@ export function tick(world, dt = 1) {
 
   world.smokes = pruneSmoke(world.smokes, world.now);
   for (const u of world.units) {
-    stepPerception(u, world.units, world.terrain, world.now, dt, world.rng, world.smokes);
+    stepPerception(u, world.units, world.terrain, world.now, dt, world.rng, world.smokes, world);
   }
 
   const beforeDeaths = new Set(world.units.filter((u) => !u.alive).map((u) => u.id));
@@ -118,7 +118,9 @@ export function tick(world, dt = 1) {
   handleBrokenFriendlies(world);
   reportFriendlyFire(world, beforeFF);
   reportDeaths(world, beforeDeaths);
+  reportFireControl(world);
   reportFireMissions(world);
+  reportAmmoState(world);
 
   const commsEvents = stepCommsStatus(world, dt);
   reportCommsRestored(world, commsEvents);
@@ -247,6 +249,67 @@ function reportDeaths(world, beforeDeaths) {
   }
 }
 
+/**
+ * 射撃指揮の通話。
+ * 実際の火力要請は「撃った」「弾着5秒前」が返ってきて初めて成立する。
+ * これが無いと、指揮官は自分の砲弾がいつ落ちるのか分からない。
+ */
+function reportFireControl(world) {
+  for (const fm of world.fireMissions) {
+    if (fm.side !== 'friend' || fm.done) continue;
+    const gun = world.support[fm.kind === 'smoke' ? 'smoke' : 'artillery'].name;
+
+    if (!fm._shotCalled && world.now >= fm.firstImpactAt - 22) {
+      fm._shotCalled = true;
+      const eta = Math.max(1, Math.round(fm.firstImpactAt - world.now));
+      enqueue(world, {
+        from: gun,
+        fromId: null,
+        kind: 'firecontrol',
+        text: `こちら${gun}、撃った。${toGrid(fm.x, fm.y)}、弾着まで約${eta}秒。どうぞ`,
+        priority: PRI.PRIORITY,
+        meta: { grid: toGrid(fm.x, fm.y), missionId: fm.id, observedAt: world.now },
+        composedAt: world.now,
+        duration: 4,
+      });
+    }
+
+    if (!fm._splashCalled && world.now >= fm.firstImpactAt - 5) {
+      fm._splashCalled = true;
+      enqueue(world, {
+        from: gun,
+        fromId: null,
+        kind: 'firecontrol',
+        text: `${gun}、弾着5秒前。`,
+        priority: PRI.FLASH,
+        meta: { grid: toGrid(fm.x, fm.y), missionId: fm.id, observedAt: world.now },
+        composedAt: world.now,
+        duration: 2.2,
+      });
+    }
+  }
+}
+
+/** 弾薬が心細くなったら一度だけ言ってくる */
+function reportAmmoState(world) {
+  for (const u of world.units) {
+    if (u.side !== 'friend' || !u.alive || !u.commsOk) continue;
+    if (u.tpl.maxAmmo <= 0) continue;
+    const ratio = u.ammo / u.tpl.maxAmmo;
+    if (ratio > 0.3 || u._ammoWarned) continue;
+    u._ammoWarned = true;
+    enqueue(world, {
+      from: u.callsign,
+      fromId: u.id,
+      kind: 'logistics',
+      text: `こちら${u.callsign}、弾薬が心配だ。${toGrid(u.x, u.y)}、あと保って半刻。補給を頼みたい。`,
+      priority: PRI.PRIORITY,
+      meta: { unitId: u.id, grid: toGrid(u.x, u.y), observedAt: world.now },
+      composedAt: world.now,
+    });
+  }
+}
+
 function reportFireMissions(world) {
   for (const fm of world.fireMissions) {
     if (!fm.done || fm._reported) continue;
@@ -267,13 +330,26 @@ function reportFireMissions(world) {
     );
     if (!observer) continue;
 
+    const spot = composeSpotReport(observer, fm, world);
     enqueue(world, {
       from: observer.callsign,
       fromId: observer.id,
       kind: 'spot',
-      text: composeSpotReport(observer, fm, world),
+      text: spot.text,
       priority: fm.friendlyCasualties > 0 ? PRI.FLASH : PRI.PRIORITY,
-      meta: { unitId: observer.id, grid: toGrid(fm.x, fm.y), observedAt: world.now },
+      meta: {
+        unitId: observer.id,
+        grid: toGrid(fm.x, fm.y),
+        observedAt: world.now,
+        // 修正が返ってきたら、指揮官は一手で修正射を命じられる
+        ...(spot.correction && fm.kind === 'he'
+          ? {
+              correctionX: spot.correction.x,
+              correctionY: spot.correction.y,
+              correctionGrid: spot.correction.grid,
+            }
+          : {}),
+      },
       composedAt: world.now,
     });
   }

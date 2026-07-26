@@ -87,14 +87,21 @@ export function stepComms(world, dt) {
 
   // 優先度が高く、古いものから
   radio.queue.sort((a, b) => b.priority - a.priority || a.composedAt - b.composedAt);
-  const tx = radio.queue.shift();
 
-  // 送信元が既に全滅していれば送信そのものが起きない
-  const sender = tx.fromId ? world.unitsById.get(tx.fromId) : null;
-  if (sender && !sender.alive && !tx.outbound) {
-    radio.droppedCount++;
-    return stepComms(world, 0);
+  // 送信元が既に全滅していれば送信そのものが起きない。
+  // 死んだ局が続いていても再帰せずに読み飛ばす。
+  let tx = null;
+  while (radio.queue.length) {
+    const candidate = radio.queue.shift();
+    const sender = candidate.fromId ? world.unitsById.get(candidate.fromId) : null;
+    if (sender && !sender.alive && !candidate.outbound) {
+      radio.droppedCount++;
+      continue;
+    }
+    tx = candidate;
+    break;
   }
+  if (!tx) return delivered;
 
   radio.speaking = tx;
   tx.startedAt = now;

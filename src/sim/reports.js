@@ -1,9 +1,10 @@
 // 無線報告の生成。観測の「質」に応じて位置をずらし、言い回しを濁す。
 // 指揮官が受け取る情報は全てこのファイルを通って歪む。
 
-import { clamp, toGrid, bearing, compassJa, dist } from '../util.js';
+import { clamp, toGrid, bearing, compassJa, dist, formatClock } from '../util.js';
 import { enqueue, PRI } from './comms.js';
 import { moraleJa } from './units.js';
+import { localVisibilityJa } from './weather.js';
 
 const TYPE_JA = {
   infantry: '敵歩兵',
@@ -25,6 +26,17 @@ const UNIT_JA = {
   mortar: '名',
   drone: '機',
   convoy: '両',
+};
+
+const EQUIPMENT_JA = {
+  infantry: '小火器',
+  recon: '小火器、車輌なし',
+  at_team: '対戦車火器',
+  mech: '装甲車輌',
+  tank: '戦車',
+  mortar: '迫撃砲',
+  drone: '無人機',
+  convoy: '非武装車輌',
 };
 
 /* ------------------------------------------------------------------ */
@@ -79,6 +91,12 @@ function ammoJa(u) {
 /* 報告の合成                                                           */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 敵情報告。
+ *
+ * 前線が本当に送るのは感想ではなく様式である ―
+ * 規模・行動・位置・装備・時刻。初報はこの形で上げ、続報は簡略にする。
+ */
 function contactText(u, c, world) {
   const rng = world.rng;
   const pos = reportedPosition(c, rng, u.skill);
@@ -86,21 +104,51 @@ function contactText(u, c, world) {
   const type = TYPE_JA[c.classified] ?? '正体不明';
   const count = countPhrase(c, rng);
   const conf = confidencePhrase(c.quality, rng);
+  const move = movementPhrase(c, rng) ?? '行動不明';
+  const equip = EQUIPMENT_JA[c.classified] ?? '装備不明';
+  const time = formatClock(c.lastSeenAt);
+  const poorVis = localVisibilityJa(world, u);
+
+  if (u.type === 'drone') {
+    return {
+      text:
+        `イーグルより指揮所、敵情報告。規模 ${count}、行動 ${move}、` +
+        `位置 ${grid}、装備 ${equip}、時刻 ${time}。映像は良好。以上。`,
+      grid,
+      pos,
+    };
+  }
+
+  // 初報は様式どおり。ただし確度が低ければそれも添える。
+  const head = poorVis ? `こちら${u.callsign}、${poorVis}が敵情報告。` : `こちら${u.callsign}、敵情報告。`;
+  const tail = c.quality > 0.72 ? '以上、どうぞ' : `${conf}。以上、どうぞ`;
+
+  return {
+    text:
+      `${head}規模 ${count}、行動 ${move}、位置 ${grid}、` +
+      `装備 ${equip}、時刻 ${time}。${tail}`,
+    grid,
+    pos,
+  };
+}
+
+/** 続報。様式を繰り返すと無線が埋まるので、変わった所だけ言う。 */
+function contactUpdateText(u, c, world) {
+  const rng = world.rng;
+  const pos = reportedPosition(c, rng, u.skill);
+  const grid = toGrid(pos.x, pos.y);
+  const type = TYPE_JA[c.classified] ?? '正体不明';
   const move = movementPhrase(c, rng);
 
-  const variants = [
-    `こちら${u.callsign}。${grid}、${type}${count}、${conf}。${move ? move + '。' : ''}どうぞ`,
-    `${u.callsign}より指揮所。接敵。${grid}に${type}、${count}。${conf}。`,
-    `こちら${u.callsign}、${grid}方向。${type}${count}を確認、${conf}。${move ? move + '。' : ''}`,
-  ];
-
-  const drone = [
-    `イーグルより。${grid}、${type}${count}。${move ?? '静止'}。映像は良好。`,
-    `イーグル。目標エリア上空。${grid}に${type}、${count}を確認。`,
-  ];
-
-  const text = u.type === 'drone' ? rng.pick(drone) : rng.pick(variants);
-  return { text, grid, pos };
+  return {
+    text: rng.pick([
+      `こちら${u.callsign}、続報。先の${type}、現在 ${grid}。${move ?? ''}。どうぞ`,
+      `${u.callsign}より。${type}、${grid}へ移動。${move ?? ''}。`,
+      `こちら${u.callsign}、${grid}。${type}は依然として動いている。`,
+    ]),
+    grid,
+    pos,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -188,7 +236,7 @@ export function stepReporting(world, dt) {
         if (!moved || !stale) continue;
       }
 
-      const { text, grid, pos } = contactText(u, c, world);
+      const { text, grid, pos } = isFirst ? contactText(u, c, world) : contactUpdateText(u, c, world);
       c.reportedAt = now;
       c.reportedX = c.x;
       c.reportedY = c.y;
@@ -259,7 +307,9 @@ function idleChatter(u, world) {
     ]);
   }
 
-  return rng.pick([
+  // 分布は一様でも、たまたま同じ文面が続くと嘘くさく聞こえる。
+  // 直前と同じものだけは引き直す。
+  return pickFresh(world, rng, [
     `こちら${u.callsign}、${grid}。異常なし。`,
     `${u.callsign}より指揮所。現在地に異常なし。監視を継続する。`,
     `こちら${u.callsign}。${grid}、視界良好。動くものは見えない。`,
@@ -269,6 +319,16 @@ function idleChatter(u, world) {
     `こちら${u.callsign}。陣地の構築を続けている。${grid}、異常なし。`,
     `${u.callsign}。${grid}、静穏。……少し静かすぎる気もするが。`,
   ]);
+}
+
+/** 直前に使った言い回しを避けて引く */
+function pickFresh(world, rng, variants) {
+  let i = Math.floor(rng.next() * variants.length);
+  if (i === world._lastChatter && variants.length > 1) {
+    i = (i + 1 + Math.floor(rng.next() * (variants.length - 1))) % variants.length;
+  }
+  world._lastChatter = i;
+  return variants[i];
 }
 
 /** 状況報告要求への回答を作る */
@@ -290,32 +350,93 @@ export function composeSitrep(u, world) {
   );
 }
 
-/** 弾着観測 */
+/**
+ * 弾着観測。
+ *
+ * 実際の火力要請は一発で終わらない。観測者が「どちらへどれだけ」を返し、
+ * 指揮官がそれを容れて修正射を撃つ ― そこまでが手順である。
+ * @returns {{text:string, correction?:{x:number,y:number,grid:string,phrase:string}}}
+ */
 export function composeSpotReport(u, mission, world) {
   const rng = world.rng;
   const grid = toGrid(mission.x, mission.y);
+
   if (mission.friendlyCasualties > 0) {
-    return rng.pick([
-      `射撃中止！射撃中止！${grid}、味方に当たっている！繰り返す、こちらに落ちている！`,
-      `やめてくれ！${grid}は味方の位置だ！こちらに弾着している！`,
-    ]);
+    return {
+      text: rng.pick([
+        `射撃中止！射撃中止！${grid}、味方に当たっている！繰り返す、こちらに落ちている！`,
+        `やめてくれ！${grid}は味方の位置だ！こちらに弾着している！`,
+      ]),
+    };
   }
   if (mission.civilianCasualties > 0) {
-    return `こちら${u.callsign}……${grid}、弾着確認。民間車両が巻き込まれた。……確認した。`;
+    return {
+      text: `こちら${u.callsign}……${grid}、弾着確認。民間車両が巻き込まれた。……確認した。`,
+    };
   }
   if (mission.casualtiesInflicted > 1.2) {
-    return rng.pick([
-      `こちら${u.callsign}、${grid}に弾着。効果大、敵が散っている。`,
-      `${u.callsign}より。${grid}、命中。敵の動きが止まった。`,
-    ]);
+    return {
+      text: rng.pick([
+        `こちら${u.callsign}、${grid}に効力射。効果大、敵が散っている。射撃終わり。`,
+        `${u.callsign}より。${grid}、命中。敵の動きが止まった。射撃終わり。`,
+      ]),
+    };
   }
+
+  // 外れたら「どちらへどれだけ」を返す。観測者が見ている敵を基準にする。
+  const correction = findCorrection(u, mission, world);
   if (mission.casualtiesInflicted > 0.2) {
-    return `こちら${u.callsign}、${grid}に弾着確認。多少の効果あり。`;
+    return {
+      text:
+        `こちら${u.callsign}、${grid}に弾着。多少の効果あり。` +
+        (correction ? `修正 ${correction.phrase}、効力射を要請する。` : ''),
+      correction,
+    };
   }
-  return rng.pick([
-    `こちら${u.callsign}、${grid}に弾着。目標は見当たらない、効果不明。`,
-    `${u.callsign}より。${grid}、着弾確認したが……そこには何もいない。`,
-  ]);
+  if (correction) {
+    return {
+      text:
+        `こちら${u.callsign}、${grid}に弾着。目標を外している。` +
+        `修正 ${correction.phrase}。繰り返す、修正 ${correction.phrase}。どうぞ`,
+      correction,
+    };
+  }
+  return {
+    text: rng.pick([
+      `こちら${u.callsign}、${grid}に弾着。目標は見当たらない、効果不明。`,
+      `${u.callsign}より。${grid}、着弾確認したが……そこには何もいない。`,
+    ]),
+  };
+}
+
+/** 観測者が見ている敵と弾着点の差から、修正量を作る */
+function findCorrection(u, mission, world) {
+  let best = null;
+  for (const c of u.contacts.values()) {
+    if (world.now - c.lastSeenAt > 120) continue;
+    if (c.side !== 'enemy') continue;
+    const d = dist(mission.x, mission.y, c.x, c.y);
+    if (d > 900 || d < 90) continue;
+    if (!best || d < best.d) best = { c, d };
+  }
+  if (!best) return null;
+
+  // 観測にも誤差はある。修正しても一発では当たらない。
+  const pos = reportedPosition(best.c, world.rng, u.skill);
+  const dx = pos.x - mission.x;
+  const dy = pos.y - mission.y;
+
+  const parts = [];
+  if (Math.abs(dy) > 80) parts.push(`${dy < 0 ? '北' : '南'}へ${Math.round(Math.abs(dy) / 50) * 50}`);
+  if (Math.abs(dx) > 80) parts.push(`${dx < 0 ? '西' : '東'}へ${Math.round(Math.abs(dx) / 50) * 50}`);
+  if (!parts.length) return null;
+
+  return {
+    x: pos.x,
+    y: pos.y,
+    grid: toGrid(pos.x, pos.y),
+    phrase: parts.join('、'),
+  };
 }
 
 export { TYPE_JA };

@@ -15,6 +15,7 @@ import {
   getMission,
   getRosterOrder,
   getMarkers,
+  issueOrder,
   MARKER_TYPES,
   CONFIDENCE,
   SKETCH_TOOLS,
@@ -165,11 +166,20 @@ function startMission() {
     selectInRoster(rosterView, unitId);
     if (isNarrow()) openTab('order');
     audio.click();
+  }, (grid) => {
+    // 「最後に聞いた位置」へ跳ぶ。今そこに居るとは限らない。
+    const p = fromGrid(grid);
+    if (!p) return;
+    flashGrid(mapView, p.x, p.y);
+    centerOn(mapView, p.x, p.y, Math.max(mapView.zoom, 1.8));
+    if (isNarrow()) closeSheet();
+    audio.click();
   });
 
   logView = createRadioLog($('radiolog'), {
     onCite: (entry) => citeReport(entry),
     onMark: (entry) => markFromReport(entry),
+    onAdjustFire: (entry) => adjustFire(entry),
   });
 
   orderPanel = createOrderPanel(
@@ -217,6 +227,7 @@ function startMission() {
       jam: $('radio-jam'),
       he: $('ammo-he'),
       smoke: $('ammo-smoke'),
+      vis: $('visibility'),
       objective: $('objective-line'),
     },
     game,
@@ -225,6 +236,7 @@ function startMission() {
 
   wireMap();
   wireTabs();
+  wireSheet();
   wireZoom();
 
   if (new URLSearchParams(location.search).has('debug')) {
@@ -382,6 +394,31 @@ function markFromReport(entry) {
   mapView.selectedMarkId = m.id;
   flashGrid(mapView, p.x, p.y);
   if (!isWellVisible(mapView, p.x, p.y)) centerOn(mapView, p.x, p.y, Math.max(mapView.zoom, 1.8));
+  if (isNarrow()) closeSheet();
+  audio.click();
+}
+
+/**
+ * 観測者の修正を容れて効力射を撃つ。
+ * 容れるかどうかは指揮官の判断 ― 観測者も間違えるし、砲弾は有限である。
+ */
+function adjustFire(entry) {
+  const meta = entry.meta ?? {};
+  if (meta.correctionX == null) return;
+  const order = issueOrder(game, {
+    unitId: 'TH',
+    verb: 'fire_mission',
+    x: meta.correctionX,
+    y: meta.correctionY,
+  });
+  if (!order) {
+    showToast('ソーン 発', '砲弾が残っていない。射撃要請には応じられない。', true);
+    return;
+  }
+  flashGrid(mapView, meta.correctionX, meta.correctionY);
+  if (!isWellVisible(mapView, meta.correctionX, meta.correctionY)) {
+    centerOn(mapView, meta.correctionX, meta.correctionY, Math.max(mapView.zoom, 1.8));
+  }
   if (isNarrow()) closeSheet();
   audio.click();
 }
@@ -544,9 +581,10 @@ function wireMap() {
       else showMarkerEditor(mark, ev);
     },
 
-    onMoveMarker: (id, x, y, committed) => {
+    onMoveMarker: (id, x, y, phase) => {
       if (!getMarkers(game).some((m) => m.id === id)) return;
-      moveMarker(game, id, x, y, { record: committed });
+      // 控えを取るのは動かし「始める」とき。終わってからでは元の位置が残らない。
+      moveMarker(game, id, x, y, { record: phase === 'start' });
       hideMarkerEditor();
     },
 
@@ -568,6 +606,9 @@ function wireMap() {
 
   window.addEventListener('resize', () => {
     resize(mapView);
+    // 画面の向きや大きさが変わったら、まだ自分で拡大していない人には
+    // 図面が画面を満たす倍率を出し直す
+    if (!mapView.userZoomed && isNarrow()) setZoom(mapView, coverZoom(mapView));
     hideMarkerEditor();
   });
   window.addEventListener('orientationchange', () => setTimeout(() => resize(mapView), 250));
@@ -583,7 +624,7 @@ function wireZoom() {
     audio.click();
   });
   $('zoom-fit').addEventListener('click', () => {
-    setZoom(mapView, ZOOM_MIN);
+    setZoom(mapView, ZOOM_MIN, { byUser: true });
     audio.click();
   });
 }
@@ -624,6 +665,38 @@ function hideMarkerEditor() {
 /* ================================================================== */
 
 let currentTab = 'map';
+
+function wireSheet() {
+  const handle = $('sheet-handle');
+  const side = $('side');
+  let start = null;
+
+  handle.addEventListener('pointerdown', (e) => {
+    handle.setPointerCapture?.(e.pointerId);
+    start = { y: e.clientY, h: side.offsetHeight };
+    side.style.transition = 'none';
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!start) return;
+    const dy = Math.max(0, e.clientY - start.y);
+    side.style.transform = `translateY(${dy}px)`;
+  });
+  const release = (e) => {
+    if (!start) return;
+    const dy = Math.max(0, e.clientY - start.y);
+    side.style.transition = '';
+    side.style.transform = '';
+    // 高さの1/4以上を払ったら閉じる
+    if (dy > start.h * 0.25) closeSheet();
+    start = null;
+  };
+  handle.addEventListener('pointerup', release);
+  handle.addEventListener('pointercancel', () => {
+    side.style.transition = '';
+    side.style.transform = '';
+    start = null;
+  });
+}
 
 function wireTabs() {
   $('tabbar').addEventListener('click', (e) => {
@@ -696,7 +769,7 @@ window.addEventListener('keydown', (e) => {
     case '3': setSpeed(4); break;
     case '+': case '=': zoomAt(mapView, 1.5); break;
     case '-': case '_': zoomAt(mapView, 1 / 1.5); break;
-    case '0': setZoom(mapView, ZOOM_MIN); break;
+    case '0': setZoom(mapView, ZOOM_MIN, { byUser: true }); break;
     case 'm': case 'M': {
       tool.mode = 'symbol';
       const i = MARKER_KEYS.indexOf(tool.markerType);

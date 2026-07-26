@@ -4,9 +4,15 @@
 import { getRoster, getSimTime } from '../state.js';
 import { formatAgo, formatClock } from '../util.js';
 
-export function createRoster(el, game, onSelect) {
+export function createRoster(el, game, onSelect, onJumpToGrid) {
   const view = { el, game, onSelect, selectedId: null, _sig: '' };
   el.addEventListener('click', (e) => {
+    // 方眼の札を叩いたら、選択ではなく地図へ跳ぶ
+    const grid = e.target.closest('[data-grid]');
+    if (grid && onJumpToGrid) {
+      onJumpToGrid(grid.dataset.grid);
+      return;
+    }
     const li = e.target.closest('li[data-unit]');
     if (!li) return;
     view.selectedId = li.dataset.unit;
@@ -47,7 +53,9 @@ export function renderRoster(view) {
     top.className = 'roster__top';
     top.innerHTML =
       `<span class="roster__cs">${row.callsign}</span>` +
-      `<span class="roster__grid">${heard ? heard.grid : '──'}</span>` +
+      (heard
+        ? `<button class="roster__grid" data-grid="${heard.grid}" title="この方眼へ跳ぶ">${heard.grid}</button>`
+        : '<span class="roster__grid roster__grid--none">──</span>') +
       `<span class="roster__age">${heard ? formatClock(heard.heardAt) : '交信なし'}</span>`;
     li.appendChild(top);
 

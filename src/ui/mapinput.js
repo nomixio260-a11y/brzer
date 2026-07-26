@@ -39,6 +39,7 @@ export function attachMapInput(canvas, api) {
   let longPressTimer = null;
   let pinch = null;
   let suppressClick = false;
+  let grabbed = false; // 掴んだ記号を実際に動かし始めたか
 
   const view = () => api.getView();
 
@@ -130,6 +131,7 @@ export function attachMapInput(canvas, api) {
 
     if (hit) {
       gesture = 'mark';
+      grabbed = false;
       view().selectedMarkId = hit.id;
       api.onSelectMark(hit, e);
       return;
@@ -194,7 +196,12 @@ export function attachMapInput(canvas, api) {
 
     if (gesture === 'mark' && rec.moved) {
       const id = view().selectedMarkId;
-      if (id) api.onMoveMarker(id, w.x, w.y, false);
+      if (id) {
+        // 動かし始めた瞬間を知らせる。ここで控えを取らないと
+        // 「動かす前」に戻せなくなる（動かし終えてから控えても手遅れ）。
+        api.onMoveMarker(id, w.x, w.y, grabbed ? 'move' : 'start');
+        grabbed = true;
+      }
       return;
     }
 
@@ -247,9 +254,10 @@ export function attachMapInput(canvas, api) {
     if (gesture === 'mark') {
       if (rec.moved) {
         const w = toWorld(view(), e.clientX, e.clientY);
-        api.onMoveMarker(view().selectedMarkId, w.x, w.y, true);
+        api.onMoveMarker(view().selectedMarkId, w.x, w.y, 'end');
       }
       gesture = null;
+      grabbed = false;
       suppressClick = false;
       return;
     }

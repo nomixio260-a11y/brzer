@@ -6,6 +6,7 @@ import { issueOrder } from '../src/sim/orders.js';
 import { evaluate } from '../src/sim/scenario.js';
 import { WORLD, toGrid, fromGrid, formatClock, parseClock } from '../src/util.js';
 import { generateTerrain, lineOfSight, terrainAt, T } from '../src/sim/terrain.js';
+import { mistDensity, mistAttenuation } from '../src/sim/weather.js';
 import { findPath } from '../src/sim/pathfind.js';
 
 let failures = 0;
@@ -135,6 +136,57 @@ check('決着後はティックが止まる', world.now === frozen);
 
 // 砲弾の残数が正しく減っている
 check('砲弾が消費された', world.support.artillery.rounds < 12, `left=${world.support.artillery.rounds}`);
+
+/* ------------------------------------------------------------------ */
+
+section('視程（川霧）');
+{
+  const w = createWorld();
+  const b = w.terrain.bridge;
+  const early = mistDensity(w, b.x, b.y);
+  const hill = mistDensity(w, 1150, 2560);
+  check('開戦時、谷は霧で埋まっている', early > 0.8, `${early.toFixed(2)}`);
+  check('高地は霧が薄い', hill < early * 0.4, `谷${early.toFixed(2)} / 高地${hill.toFixed(2)}`);
+
+  for (let i = 0; i < parseClock('0850') - parseClock('0700'); i++) tick(w, 1);
+  const late = mistDensity(w, b.x, b.y);
+  check('0850には霧が晴れている', late < 0.02, `${late.toFixed(2)}`);
+
+  const w2 = createWorld();
+  for (let i = 0; i < 600; i++) tick(w2, 1);
+  const cut = mistAttenuation(w2, b.x - 300, b.y, b.x + 300, b.y);
+  check('霧の中では600mの視線が大きく削られる', cut > 0.4 && cut < 0.95, `${cut.toFixed(2)}`);
+}
+
+section('射撃指揮の手順');
+{
+  const w = createWorld();
+  let fired = false;
+  for (let i = 0; i < 7500 && !w.outcome; i++) {
+    tick(w, 1);
+    if (!fired && w.now >= parseClock('0805')) {
+      fired = true;
+      issueOrder(w, { unitId: 'TH', verb: 'fire_mission', x: 2330, y: 1290 });
+    }
+  }
+  const fc = w.radio.log.filter((l) => l.kind === 'firecontrol');
+  check('「撃った」が返る', fc.some((l) => l.text.includes('撃った')), `${fc.length}件`);
+  check('「弾着5秒前」が返る', fc.some((l) => l.text.includes('弾着5秒前')));
+  check('弾着観測が返る', w.radio.log.some((l) => l.kind === 'spot'));
+}
+
+section('射撃統制');
+{
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  issueOrder(w, { unitId: 'H3', verb: 'hold_fire' });
+  for (let i = 0; i < 400; i++) tick(w, 1);
+  const h3 = w.unitsById.get('H3');
+  check('射撃統制が部隊に届く', h3.weaponsHold === true);
+  issueOrder(w, { unitId: 'H3', verb: 'free_fire' });
+  for (let i = 0; i < 200; i++) tick(w, 1);
+  check('射撃自由で解除される', h3.weaponsHold === false);
+}
 
 /* ------------------------------------------------------------------ */
 

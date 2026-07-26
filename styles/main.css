@@ -780,8 +780,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .msg__act:hover { border-color: #7a6334; color: #ffd9a0; }
 
-/* 下部タブ（携帯のみ） */
+/* 下部タブとボトムシートのつまみ ─ どちらも携帯でだけ出る。
+   既定値はメディアクエリより前に置くこと（後ろに書くと後勝ちで打ち消される）。 */
 .tabbar { display: none; }
+.sheet-handle { display: none; }
 .tabbar__badge {
   display: inline-block;
   min-width: 16px;
@@ -811,20 +813,28 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
   .topbar {
     height: 46px;
-    gap: 12px;
-    padding: 0 10px;
+    gap: 7px;
+    padding: 0 8px;
     padding-top: env(safe-area-inset-top);
     height: calc(46px + env(safe-area-inset-top));
   }
   .clock { font-size: 19px; letter-spacing: 0.06em; }
-  .clock__phase, .radiostate__label, .support__item:nth-child(2) { display: none; }
+  .clock__phase, .radiostate__label { display: none; }
   .radiostate { gap: 5px; }
   .radiostate__net { min-width: 0; font-size: 0; }
   .radiostate__net::before { width: 9px; height: 9px; }
   .radiostate__queue, .radiostate__jam { white-space: nowrap; font-size: 9px; }
-  .support { gap: 8px; font-size: 10.5px; margin-left: auto; }
-  .support__item b { font-size: 12px; }
+  /* 上部帯は幅が足りない。視程は地図の欄外に出しているので、ここでは落とす。 */
+  .support { gap: 10px; font-size: 0; margin-left: auto; }
+  .support__item { font-size: 0; }
+  .support__item:first-child { display: none; } /* 視程 */
+  .support__item b { font-size: 12.5px; }
+  .support__item b::before { font-size: 9.5px; color: var(--ink-faint); letter-spacing: 0.1em; }
+  #ammo-he::before { content: '砲 '; }
+  #ammo-smoke::before { content: '煙 '; }
   .topbar { overflow: hidden; }
+  /* 拡大ボタンは欄外表記に被らない高さへ */
+  .mapzoom { bottom: 66px; }
 
   /* ラベル欄は画面を覆わない大きさに留め、下端に寄せる */
   .markeredit {
@@ -836,8 +846,21 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   }
   .markeredit input { width: 100%; font-size: 16px; }
   .objective { display: none; }
-  .speed__btn { min-width: 40px; padding: 7px 8px; }
-  .iconbtn { width: 34px; height: 30px; }
+  .speed__btn { min-width: 33px; padding: 7px 4px; }
+  .iconbtn { width: 30px; height: 30px; flex: none; }
+
+  /* 妨害は文字を置く幅がない。赤い灯で示す。 */
+  .radiostate__jam {
+    font-size: 0;
+    width: 10px;
+    height: 10px;
+    padding: 0;
+    border-radius: 50%;
+    background: var(--lamp-red);
+    border-color: transparent;
+    box-shadow: 0 0 7px rgba(226, 72, 58, 0.9);
+  }
+  .radiostate__queue { display: none; }
 
   /* 地図が主役。パネルは下から呼び出す。 */
   .layout { grid-template-columns: 1fr; position: relative; }
@@ -860,6 +883,32 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
     overflow: hidden;
   }
   .side.is-open { transform: translateY(0); }
+
+  /* 指で掴んで下へ払うと閉じる */
+  .sheet-handle {
+    display: block;
+    padding: 9px 0 5px;
+    touch-action: none;
+    cursor: grab;
+    background: linear-gradient(rgba(255, 240, 210, 0.04), transparent);
+  }
+  .sheet-handle span {
+    display: block;
+    width: 44px;
+    height: 4px;
+    margin: 0 auto;
+    border-radius: 2px;
+    background: #4a4239;
+  }
+  .side { display: flex; flex-direction: column; }
+  .side .panel { flex: 1; min-height: 0; }
+
+  /* 命令は指で押せる大きさに。ここが一番押し間違えやすい。 */
+  .panel--order .order__row { gap: 5px; }
+  .panel--order .tool { font-size: 13px; padding: 9px 12px; min-height: 38px; }
+  .panel--order .order__target { font-size: 12px; }
+  .panel--order .order__target b { font-size: 17px; }
+  .panel--order .order__status { font-size: 12px; }
   .side .panel { display: none; height: 100%; border-bottom: none; }
   .side .panel.is-active { display: flex; }
   .panel--roster .roster { overflow-y: auto; }
@@ -911,3 +960,27 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   .side { height: 74%; max-height: 74%; }
   .tabbar__btn { padding: 9px 0; }
 }
+
+.msg__act--fire { border-color: #7a3a34; color: #e8a49c; }
+.msg__act--fire:hover { border-color: var(--lamp-red); color: #ffdad4; }
+
+/* 視程 */
+.vis { font-family: var(--sans) !important; font-size: 11.5px !important; }
+.vis--0 { color: #e2685c; }
+.vis--1 { color: var(--lamp-amber); }
+.vis--2, .vis--3 { color: #8fe0ac; }
+
+/* 部隊一覧の方眼は「跳べる札」 */
+.roster__grid {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: #0e0c0a;
+  border: 1px solid #2b2620;
+  padding: 1px 6px;
+  border-radius: 1px;
+  cursor: pointer;
+}
+button.roster__grid:hover { border-color: #7a6334; color: #ffd9a0; }
+.roster__grid--none { cursor: default; color: var(--ink-faint); }
+

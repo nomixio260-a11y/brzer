@@ -33,6 +33,10 @@ export function createRadioLog(el, hooks = {}) {
       hooks.onMark?.(entry);
       return;
     }
+    if (e.target.closest('[data-act="adjust"]')) {
+      hooks.onAdjustFire?.(entry);
+      return;
+    }
     for (const other of el.querySelectorAll('li.is-cited')) other.classList.remove('is-cited');
     li.classList.add('is-cited');
     hooks.onCite?.(entry);
@@ -111,19 +115,30 @@ function renderEntry(entry) {
 
   li.append(meta, body);
 
+  const acts = document.createElement('div');
+  acts.className = 'msg__acts';
+
   // 敵を報せてきた報告には「聞いたとおりに置く」を用意する。
   // 置かれるのは報告された位置であって、実際の位置ではない。
   if (entry.meta?.reportedX != null && !entry.lost) {
-    const acts = document.createElement('div');
-    acts.className = 'msg__acts';
     const mark = document.createElement('button');
     mark.className = 'msg__act';
     mark.dataset.act = 'mark';
     mark.textContent = `▣ ${entry.meta.grid} に記号`;
     acts.appendChild(mark);
-    li.appendChild(acts);
   }
 
+  // 観測者が修正を返してきたら、一手で修正射を命じられる。
+  // これを容れるかどうかは指揮官の判断（観測者も間違える）。
+  if (entry.meta?.correctionGrid && !entry.lost) {
+    const adj = document.createElement('button');
+    adj.className = 'msg__act msg__act--fire';
+    adj.dataset.act = 'adjust';
+    adj.textContent = `◎ 修正 ${entry.meta.correctionGrid} へ効力射`;
+    acts.appendChild(adj);
+  }
+
+  if (acts.childElementCount) li.appendChild(acts);
   return li;
 }
 
