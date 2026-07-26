@@ -550,6 +550,14 @@ function strokeSketch(ctx, sk, px, alpha, emphasised) {
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
+    // 名前。無線で「統制線甲」と呼ぶための札なので、両端に書く。
+    if (sk.name) {
+      ctx.setLineDash([]);
+      ctx.shadowColor = 'transparent';
+      for (const [p, side] of [[a, -1], [b, 1]]) {
+        penLabel(ctx, `統制線${sk.name}`, p.x + side * px(30), p.y - px(9), sk.color, px(9.5), alpha);
+      }
+    }
     ctx.restore();
     return;
   }

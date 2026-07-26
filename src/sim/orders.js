@@ -114,6 +114,22 @@ export const TRIGGERS = Object.freeze({
       u.strength < u.maxStrength * 0.6 ||
       u.morale < 45,
   },
+  on_line: {
+    key: 'on_line',
+    label: '統制線',
+    needsLine: true,
+    hint: '引いてある統制線を敵が越えた時点で発動する',
+    phrase: (o) => `統制線${o.lineName ?? ''}を敵が越えたら、`,
+    // 越えたことを知るのは、それを見た部下である。指揮所ではない。
+    ready: (world, u, order) => {
+      if (!order.line?.length) return false;
+      for (const c of u.contacts.values()) {
+        if (world.now - c.lastSeenAt > 25) continue;
+        if (crossedLine(order.line, c.x, c.y)) return true;
+      }
+      return false;
+    },
+  },
   at_time: {
     key: 'at_time',
     label: '時刻',
@@ -124,6 +140,33 @@ export const TRIGGERS = Object.freeze({
   },
 });
 
+/**
+ * 統制線を越えたか。
+ *
+ * 線の x の範囲でその点の高さを求め、南（y が大きい側）に居れば「越えた」。
+ * 統制線は東西に引くものなので、これで足りる。
+ */
+export function crossedLine(points, x, y) {
+  let lineY = null;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const lo = Math.min(a.x, b.x);
+    const hi = Math.max(a.x, b.x);
+    if (x < lo || x > hi || hi - lo < 1) continue;
+    const t = (x - a.x) / (b.x - a.x);
+    lineY = a.y + (b.y - a.y) * t;
+    break;
+  }
+  // 線の外側なら、いちばん近い端の高さで見る
+  if (lineY == null) {
+    const first = points[0];
+    const last = points[points.length - 1];
+    lineY = Math.abs(x - first.x) < Math.abs(x - last.x) ? first.y : last.y;
+  }
+  return y > lineY;
+}
+
 let orderSeq = 1;
 
 /**
@@ -132,7 +175,10 @@ let orderSeq = 1;
  */
 export function issueOrder(
   world,
-  { unitId, verb, x, y, modifier = 'normal', legs = null, trigger = 'now', triggerAt = null }
+  {
+    unitId, verb, x, y, modifier = 'normal', legs = null,
+    trigger = 'now', triggerAt = null, line = null, lineName = null,
+  }
 ) {
   const u = world.unitsById.get(unitId);
   const spec = VERBS[verb];
@@ -141,6 +187,8 @@ export function issueOrder(
   const trig = TRIGGERS[trigger] ?? TRIGGERS.now;
   // 過ぎた時刻を条件にしても意味がない
   if (trig.needsTime && !(triggerAt > world.now)) trigger = 'now';
+  // 線が渡されていなければ統制線条件は成立しない
+  if (trig.needsLine && !(line?.length >= 2)) trigger = 'now';
 
   // 砲撃・煙幕は砲兵に対する要請なので、弾数を先に確認する
   if (verb === 'fire_mission' || verb === 'smoke') {
@@ -191,6 +239,8 @@ export function issueOrder(
     modifier,
     trigger,
     triggerAt,
+    line,
+    lineName,
     issuedAt: world.now,
     state: 'transmitting',
     receivedAt: null,
@@ -407,6 +457,7 @@ function triggerReasonJa(key) {
   switch (key) {
     case 'on_contact': return '敵を認めた';
     case 'on_pressure': return '圧されている';
+    case 'on_line': return '敵が統制線を越えた';
     case 'at_time': return '時刻になった';
     default: return '条件が満ちた';
   }
@@ -444,6 +495,7 @@ function standbyAckText(u, order, rng) {
   const cond = {
     on_contact: '敵を認めしだい',
     on_pressure: '圧されたら',
+    on_line: `統制線${order.lineName ?? ''}を敵が越えたら`,
     at_time: `${formatClock(order.triggerAt)}をもって`,
   }[order.trigger] ?? '条件が満ちしだい';
 

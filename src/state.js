@@ -165,9 +165,14 @@ function absorb(game, entry) {
 /* ------------------------------------------------------------------ */
 
 /** 命令を発令する。UI からはここだけを呼ぶ。 */
-export function issueOrder(game, { unitId, verb, x, y, modifier, legs, trigger, triggerAt }) {
+export function issueOrder(game, { unitId, verb, x, y, modifier, legs, trigger, triggerAt, lineId }) {
+  // 統制線を条件にする場合、線そのものを命令に添えて渡す。
+  // 部下は地図を見ているわけではないので、線は言葉として伝わる必要がある。
+  const line = lineId ? getControlLines(game).find((l) => l.id === lineId) : null;
   const order = simIssueOrder(game.world, {
     unitId, verb, x, y, modifier, legs, trigger, triggerAt,
+    line: line ? line.points : null,
+    lineName: line ? line.name : null,
   });
   if (order) {
     const r = game.belief.roster.get(unitId);
@@ -310,8 +315,31 @@ export function addSketch(game, { tool, points }) {
     createdAt: game.world.now,
     updatedAt: game.world.now,
   };
+  // 統制線には名前を付ける。名前がなければ無線で呼べず、
+  // 呼べなければ「あの線を越えたら」という命令が出せない。
+  if (tool === 'line_control') {
+    const used = new Set(game.belief.sketches.filter((s) => s.name).map((s) => s.name));
+    for (const ch of '甲乙丙丁戊己庚辛') {
+      if (!used.has(ch)) {
+        sketch.name = ch;
+        break;
+      }
+    }
+    sketch.name ??= String(game.belief.sketches.length + 1);
+  }
   game.belief.sketches.push(sketch);
   return sketch;
+}
+
+/**
+ * 引いてある統制線。
+ * 指揮官が自分で引いた線なので、当然その位置を知っている。
+ * これを予令の発動条件に使える ── 「統制線甲を敵が越えたら下がれ」。
+ */
+export function getControlLines(game) {
+  return game.belief.sketches
+    .filter((s) => s.tool === 'line_control' && s.points.length >= 2)
+    .map((s) => ({ id: s.id, name: s.name ?? '?', points: s.points }));
 }
 
 export function removeSketch(game, id) {

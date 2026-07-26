@@ -7,7 +7,7 @@
 import {
   VERBS, VERB_GROUPS, MODIFIERS, ROE, TRIGGERS,
   getRosterOrder, getSupport, getRoeOf, getHeldOrder, getSimTime, getTrains, isLongBattle,
-  toGrid, formatClock, issueOrder,
+  getControlLines, toGrid, formatClock, issueOrder,
 } from '../state.js';
 
 // 部隊ごとに出せる命令は違う。砲兵に「突撃せよ」とは言えない。
@@ -27,7 +27,7 @@ const VERBS_BY_UNIT = {
 
 const MOD_ORDER = ['normal', 'rapid', 'cautious', 'stealth'];
 const GROUP_ORDER = ['maneuver', 'fires', 'roe', 'sustain', 'intel'];
-const TRIGGER_ORDER = ['now', 'on_contact', 'on_pressure', 'at_time'];
+const TRIGGER_ORDER = ['now', 'on_contact', 'on_pressure', 'on_line', 'at_time'];
 
 // 予令を渡せない命令。今すぐ聞きたいことを「後で」と言っても仕方がない。
 const NO_TRIGGER = new Set(['sitrep', 'ammo_check', 'roe_hold_fast', 'roe_standard', 'roe_elastic']);
@@ -43,6 +43,7 @@ export function createOrderPanel(dom, game, hooks) {
     modifier: 'normal',
     trigger: 'now',
     triggerAt: null,
+    lineId: null,
     legs: [], // 経路点。最後の点が目標。
   };
 
@@ -87,11 +88,20 @@ export function createOrderPanel(dom, game, hooks) {
     if (!b || b.disabled) return;
     panel.trigger = b.dataset.trig;
     if (panel.trigger === 'at_time') panel.triggerAt = nextTimeChoice(panel);
+    if (panel.trigger === 'on_line') {
+      const lines = getControlLines(panel.game);
+      panel.lineId = lines[lines.length - 1]?.id ?? null;
+    }
     refresh(panel);
   });
 
   dom.trigTime?.addEventListener('change', () => {
     panel.triggerAt = Number(dom.trigTime.value);
+    refresh(panel);
+  });
+
+  dom.trigLine?.addEventListener('change', () => {
+    panel.lineId = dom.trigLine.value || null;
     refresh(panel);
   });
 
@@ -213,6 +223,7 @@ function send(panel) {
     modifier: panel.modifier,
     trigger: NO_TRIGGER.has(panel.verb) ? 'now' : panel.trigger,
     triggerAt: panel.triggerAt,
+    lineId: panel.trigger === 'on_line' ? panel.lineId : null,
   });
 
   if (!order) {
@@ -325,10 +336,42 @@ export function refresh(panel, status) {
     }
     const canHold = !!panel.verb && !NO_TRIGGER.has(panel.verb);
     if (!canHold && panel.trigger !== 'now') panel.trigger = 'now';
+
+    // 統制線は、引いてなければ条件にできない
+    const lines = getControlLines(game);
+    if (panel.trigger === 'on_line' && !lines.length) panel.trigger = 'now';
+
     dom.triggers.parentElement.classList.toggle('is-dim', !canHold);
     for (const b of dom.triggers.querySelectorAll('button')) {
+      const usable = canHold && (b.dataset.trig !== 'on_line' || lines.length > 0);
       b.classList.toggle('is-on', b.dataset.trig === panel.trigger && canHold);
-      b.disabled = !canHold;
+      b.disabled = !usable;
+      if (b.dataset.trig === 'on_line') {
+        b.title = lines.length
+          ? TRIGGERS.on_line.hint
+          : '統制線を引いてからでないと選べない（図式 → 統制線）';
+      }
+    }
+
+    // どの統制線を条件にするか
+    const showLine = canHold && panel.trigger === 'on_line' && lines.length > 0;
+    if (dom.trigLine) {
+      dom.trigLine.hidden = !showLine;
+      if (showLine) {
+        const key = lines.map((l) => l.id + l.name).join(',');
+        if (dom.trigLine.dataset.for !== key) {
+          dom.trigLine.dataset.for = key;
+          dom.trigLine.innerHTML = '';
+          for (const l of lines) {
+            const o = document.createElement('option');
+            o.value = l.id;
+            o.textContent = `統制線${l.name}`;
+            dom.trigLine.appendChild(o);
+          }
+        }
+        if (!lines.some((l) => l.id === panel.lineId)) panel.lineId = lines[lines.length - 1].id;
+        dom.trigLine.value = panel.lineId;
+      }
     }
 
     // 時刻の候補は進行につれて動く
@@ -386,8 +429,13 @@ export function refresh(panel, status) {
   } else if (panel.trigger !== 'now' && !NO_TRIGGER.has(panel.verb) &&
              !(VERBS[panel.verb].needsTarget && !panel.legs.length)) {
     const t = TRIGGERS[panel.trigger];
-    dom.status.textContent =
-      `予令として渡す ─ ${panel.trigger === 'at_time' ? formatClock(panel.triggerAt) : t.label}に発動する。`;
+    const when =
+      panel.trigger === 'at_time'
+        ? formatClock(panel.triggerAt)
+        : panel.trigger === 'on_line'
+          ? `統制線${getControlLines(game).find((l) => l.id === panel.lineId)?.name ?? ''}を敵が越えた時`
+          : t.label;
+    dom.status.textContent = `予令として渡す ─ ${when}に発動する。`;
   } else if (VERBS[panel.verb].needsTarget && !panel.legs.length) {
     dom.status.textContent = '地図を叩いて目標を指定せよ。';
     dom.status.classList.add('is-warn');

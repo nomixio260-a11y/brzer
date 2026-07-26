@@ -457,6 +457,35 @@ try {
       window.__brzer.game.world.orders.some((o) => o.trigger === 'at_time')));
   check('部隊一覧に予令が載る', (await page.textContent('#roster')).includes('予令'));
 
+  // 統制線を引いて、それを予令の条件にする
+  await page.click('#sketch-tools button[data-sketch="line_control"]');
+  await page.mouse.move(box.x + box.width * 0.24, box.y + box.height * 0.4);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.72, box.y + box.height * 0.4, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(250);
+  check('統制線が引ける',
+    await page.evaluate(() =>
+      window.__brzer.game.belief.sketches.some((s) => s.tool === 'line_control')));
+  check('統制線に名前が付く',
+    await page.evaluate(() =>
+      !!window.__brzer.game.belief.sketches.find((s) => s.tool === 'line_control')?.name));
+
+  await page.click('#marker-tools button[data-marker="enemy_inf"]'); // 記号へ戻す
+  await page.click('#order-units button[data-unit="H2"]');
+  await page.click('#order-groups button[data-group="maneuver"]');
+  await page.click('#order-verbs button[data-verb="withdraw"]');
+  await page.mouse.click(box.x + box.width * 0.36, box.y + box.height * 0.74);
+  await page.click('#map-hint-done');
+  await page.click('#order-triggers button[data-trig="on_line"]');
+  check('統制線を条件に選べる', await page.isVisible('#order-trigline'));
+  check('統制線の説明が出る', (await page.textContent('#order-status')).includes('統制線'));
+  await page.click('#order-send');
+  await page.waitForTimeout(400);
+  check('統制線つきの予令が発令された',
+    await page.evaluate(() =>
+      window.__brzer.game.world.orders.some((o) => o.trigger === 'on_line' && o.line?.length >= 2)));
+
   // 交戦規定には条件を付けられない（枠は今から効くもの）
   await page.click('#order-groups button[data-group="roe"]');
   await page.click('#order-verbs button[data-verb="roe_elastic"]');

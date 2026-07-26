@@ -248,6 +248,7 @@ function startMission() {
       mods: $('order-mods'),
       triggers: $('order-triggers'),
       trigTime: $('order-trigtime'),
+      trigLine: $('order-trigline'),
       grid: $('order-grid'),
       undoLeg: $('order-undoleg'),
       send: $('order-send'),
@@ -674,7 +675,11 @@ function wireMap() {
     },
 
     onSketchDone: (toolKey, points) => {
-      addSketch(game, { tool: toolKey, points });
+      const sk = addSketch(game, { tool: toolKey, points });
+      // 統制線は名前を付けて呼べるようにしてある。付いた名前をその場で伝える。
+      if (sk?.name) {
+        showToast('指揮所', `統制線${sk.name}を設定した。予令の発動条件に使える。`, false);
+      }
       audio.click();
     },
 

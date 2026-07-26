@@ -2,7 +2,7 @@
 //   node tests/sim-smoke.mjs
 
 import { createWorld, tick } from '../src/sim/world.js';
-import { issueOrder } from '../src/sim/orders.js';
+import { issueOrder, crossedLine } from '../src/sim/orders.js';
 import { evaluate, missionList } from '../src/sim/scenario.js';
 import { WORLD, toGrid, fromGrid, formatClock, parseClock } from '../src/util.js';
 import { generateTerrain, lineOfSight, terrainAt, isPassable, T, TERRAIN_NAME_JA } from '../src/sim/terrain.js';
@@ -345,6 +345,47 @@ section('予令（発動条件つきの命令）');
   }
   check('接敵条件は敵を認めるまで待つ', heldEarly);
   check('接敵で予令が発動する', o.state !== 'standby', o.state);
+}
+
+section('統制線を条件にする予令');
+{
+  // 東西に引いた線。北から南へ来る敵が越えたら発動する。
+  const line = [{ x: 1200, y: 1500 }, { x: 3600, y: 1500 }];
+  check('線より南は「越えた」', crossedLine(line, 2400, 1700) === true);
+  check('線より北は「越えていない」', crossedLine(line, 2400, 1300) === false);
+  check('線の外側でも端で判定する', crossedLine(line, 4600, 1700) === true);
+  // 斜めに引いた線でも高さを補間する
+  const slant = [{ x: 1000, y: 1000 }, { x: 3000, y: 2000 }];
+  check('斜めの線を補間する',
+    crossedLine(slant, 2000, 1600) === true && crossedLine(slant, 2000, 1400) === false);
+
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const h1 = w.unitsById.get('H1');
+
+  const order = issueOrder(w, {
+    unitId: 'H1', verb: 'withdraw', x: 2100, y: 2600,
+    trigger: 'on_line', line, lineName: '甲',
+  });
+  check('統制線つきの予令が出せる', order?.trigger === 'on_line');
+  check('線が命令に添えられる', order.line?.length === 2 && order.lineName === '甲');
+
+  for (let i = 0; i < 400; i++) tick(w, 1);
+  check('越えるまでは発動しない', order.state === 'standby', order.state);
+
+  // 線を越えた敵を H1 に見せる
+  for (let i = 0; i < 60 && order.state === 'standby'; i++) {
+    h1.contacts.set('LX', {
+      targetId: 'LX', x: 2300, y: 1900, lastSeenAt: w.now,
+      quality: 1, classified: 'infantry', trueType: 'infantry', count: 1,
+    });
+    tick(w, 1);
+  }
+  check('越えられたら発動する', order.state !== 'standby', order.state);
+
+  // 線を渡さなければ即時命令に落ちる
+  const o2 = issueOrder(w, { unitId: 'H2', verb: 'hold', trigger: 'on_line' });
+  check('線がなければ即時命令になる', o2.trigger === 'now');
 }
 
 section('敵の指揮官');
