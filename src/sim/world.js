@@ -18,6 +18,58 @@ import { stepFires, FIRE_MODES } from './fires.js';
 import { createCreative, reinforcementDef } from './creative.js';
 import { ASPECT_JA } from './armor.js';
 import { getMission, friendlyOrderOfBattle, timeline, evaluate } from './scenario.js';
+import { officerFactors } from './officers.js';
+import { attachmentMods, isObserver } from './attachments.js';
+
+/**
+ * 戦役の持ち越しを一個の部隊に適用する。
+ *
+ * 「昨日の続き」を作るのはここ一箇所だけにしてある ─
+ * 途中で湧く増援も同じ道を通るので、二日目の増援が満員で来ることはない。
+ */
+function applyCarry(world, u) {
+  const setup = world.setup;
+  if (!setup) return;
+
+  // 率いる者。名前と気質は、部隊そのものより長く残る。
+  const officer = setup.officers?.get?.(u.id) ?? null;
+  if (officer) u.officer = officer;
+
+  // 任務編成。今朝どの分隊に何を付けたか。
+  const attached = setup.attach?.[u.id];
+  if (attached?.length) {
+    u.attach = [...attached];
+    u.mods = attachmentMods(attached);
+  }
+
+  const c = setup.units?.[u.id];
+  if (c) {
+    if (c.dead) {
+      // 昨日消えた部隊は、補充を入れて再編するしかない。
+      // 中身は新兵ばかりで、率いる者も代わっている。
+      u.strength = Math.max(1, Math.min(u.maxStrength, c.strength));
+      u.skill = Math.max(0.42, u.skill - 0.12);
+      u.morale = Math.min(u.morale, 72);
+    } else {
+      u.strength = Math.max(0.6, Math.min(u.maxStrength, c.strength));
+      u.morale = c.morale ?? u.morale;
+    }
+    u.ammo = Math.round((u.tpl.maxAmmo || 100) * (c.ammoRatio ?? 1));
+    u.fatigue = c.fatigue ?? 0;
+    if (c.skillBias) u.skill = Math.max(0.4, u.skill + c.skillBias);
+  }
+
+  // 熟練は腕に出る。三日目の分隊は、初日の分隊とは別物である。
+  if (officer) {
+    const f = officerFactors(officer);
+    u.skill = Math.min(0.97, u.skill * (0.94 + f.aim * 0.06));
+  }
+
+  // 夜通し掘った陣地。防御を命じられている部隊にだけ意味がある。
+  if (setup.fortify && (u.posture === 'dug_in' || u.state === 'defending') && !u.tpl.flying) {
+    u.posture = 'fortified';
+  }
+}
 
 export function createWorld(opts = {}) {
   const mission = getMission(opts.missionId);
@@ -54,13 +106,28 @@ export function createWorld(opts = {}) {
     },
     enemyCommand: null, // 下で組み立てる（world 参照が要るため）
 
+    // 戦役の持ち越し。単発の戦闘では null のまま。
+    setup: opts.setup ?? null,
+
+    // H時前。作戦命令を下達し、火力計画を立てている間。
+    // この間は時計が止まっており、命令は無線ではなく口頭で渡る。
+    planning: !!opts.planning,
+
     support: {
-      artillery: { name: mission.support.artillery.name, rounds: mission.support.artillery.rounds },
-      smoke: { name: mission.support.smoke.name, rounds: mission.support.smoke.rounds },
+      // 戦役では、前の晩に段列から回してきたぶんが積み増しになる。
+      artillery: {
+        name: mission.support.artillery.name,
+        rounds: mission.support.artillery.rounds + (opts.setup?.support?.rounds ?? 0),
+      },
+      smoke: {
+        name: mission.support.smoke.name,
+        rounds: mission.support.smoke.rounds + (opts.setup?.support?.smoke ?? 0),
+      },
       // 照明弾。夜明け前の戦闘では、これが弾薬より効くことがある。
       illum: {
         name: mission.support.illum?.name ?? mission.support.artillery.name,
-        rounds: mission.support.illum?.rounds ?? (mission.duration === 'long' ? 8 : 4),
+        rounds: (mission.support.illum?.rounds ?? (mission.duration === 'long' ? 8 : 4)) +
+          (opts.setup?.support?.illum ?? 0),
       },
     },
 
@@ -94,7 +161,74 @@ export function createWorld(opts = {}) {
     addUnit(world, def);
   }
 
+  // 夜のうちに斥候を出していれば、夜明けに一報が入っている。
+  if (world.setup?.recon) nightReconReport(world);
+
   return world;
+}
+
+/**
+ * 夜間偵察の成果。
+ *
+ * 斥候が見てきたのは「どちらに何が集まっているか」だけである。
+ * 敵がそれを夜明け後に振り替えることまでは分からない ―
+ * 夜の報告が翌昼まで正しい保証は、どこにも無い。
+ */
+function nightReconReport(world) {
+  const a = world.terrain.bridge;
+  const b = world.terrain.ford;
+  const mid = (a.x + b.x) / 2;
+
+  let main = 0;
+  let flank = 0;
+  let armor = 0;
+  for (const ev of world.events) {
+    if (ev.kind !== 'spawn' || !ev.units) continue;
+    // 夜が明ける前に出てくるぶんだけが、斥候の目に入る。
+    if (ev.at > world.now + 5400) continue;
+    for (const u of ev.units) {
+      if (u.side !== 'enemy') continue;
+      const x = u.ai?.crossing?.x ?? u.x;
+      const toFlank = b.x > a.x ? x > mid : x < mid;
+      if (toFlank) flank++; else main++;
+      if (u.type === 'tank' || u.type === 'mech') armor++;
+    }
+  }
+
+  const heavier = flank > main
+    ? world.terrain.crossings[1]?.label ?? '側面'
+    : world.terrain.crossings[0]?.label ?? '主正面';
+  const ratio = Math.max(main, flank) / Math.max(1, main + flank);
+  const firmness = ratio > 0.68 ? '間違いない' : ratio > 0.55 ? 'そう見える' : '半々だ、断定はできない';
+
+  world.radio.log.push({
+    id: 'RECON0',
+    at: world.now,
+    from: '夜間斥候',
+    fromId: null,
+    kind: 'hq',
+    priority: PRI.PRIORITY,
+    text:
+      `夜間偵察の報告。敵の集結は${heavier}に厚い ─ ${firmness}。` +
+      (armor > 0 ? `履帯の音を${armor}両ぶん数えた。` : '車輌の音は聞かなかった。') +
+      '夜のうちの話である。明るくなってから振り替えられれば、この報告は外れる。',
+    garbled: false,
+    lost: false,
+    meta: { observedAt: world.now },
+    composedAt: world.now,
+    observedAt: world.now,
+  });
+}
+
+/**
+ * H時。計画を畳んで時計を回し始める。
+ * これ以後、指揮官と部下を繋ぐのは無線だけになる。
+ */
+export function endPlanning(world) {
+  if (!world.planning) return false;
+  world.planning = false;
+  world.planEndedAt = world.now;
+  return true;
 }
 
 export function addUnit(world, def) {
@@ -107,6 +241,8 @@ export function addUnit(world, def) {
   }
   u.role = def.role;
   u.ai = def.ai ? structuredCloneSafe(def.ai) : null;
+  // 戦役では、昨日の続きから始まる。人も弾も士気も、昨日のままである。
+  if (u.side === 'friend') applyCarry(world, u);
   // 演習では味方は倒れない。ここで一括して掛けておく ―
   // 途中で湧く増援にも同じ扱いが要るからである。
   if (world.creative?.invulnerable && u.side === 'friend') u.invulnerable = true;
@@ -154,6 +290,11 @@ function structuredCloneSafe(v) {
  */
 export function tick(world, dt = 1) {
   if (world.outcome) return [];
+
+  // このティックで通信記録簿に増えたぶんを、まとめて返す。
+  // 「無線で届いたもの」だけを返していたので、指揮所が自分で書いた覚書
+  //（弾が無い・射程外・作戦命令の下達）は、どこにも出ないまま消えていた。
+  const logMark = world.radio.log.length;
 
   world.now += dt;
   world.tickCount++;
@@ -211,7 +352,17 @@ export function tick(world, dt = 1) {
     world.outcomeReason = verdict.reason;
   }
 
-  return delivered;
+  return world.radio.log.slice(logMark);
+}
+
+/**
+ * H時前の一手。時計は動かさずに、命令のやり取りだけを進める。
+ * @returns {Array} 記録簿に増えたぶん
+ */
+export function planningTick(world) {
+  const logMark = world.radio.log.length;
+  stepOrders(world, 0);
+  return world.radio.log.slice(logMark);
 }
 
 /* ------------------------------------------------------------------ */
@@ -573,14 +724,17 @@ function reportFireMissions(world) {
     fm._reported = true;
 
     // 弾着を見られる味方がいれば観測報告が入る。いなければ「効果不明」すら来ない。
-    const observer = world.units.find(
+    // 弾着を見て修正を返せる部隊。
+    // 観測班が付いていれば、その分隊が優先される ─ 砲兵の目とはそういう役である。
+    const eyes = world.units.filter(
       (w) =>
         w.alive &&
         w.side === 'friend' &&
         w.commsOk &&
         w.tpl.radio > 0 &&
-        dist(w.x, w.y, fm.x, fm.y) < w.tpl.spot * 1.3
+        dist(w.x, w.y, fm.x, fm.y) < w.tpl.spot * (w.mods?.spot ?? 1) * 1.3
     );
+    const observer = eyes.find(isObserver) ?? eyes[0];
     if (!observer) continue;
 
     const spot = composeSpotReport(observer, fm, world);

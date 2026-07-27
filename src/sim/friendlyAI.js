@@ -11,6 +11,7 @@ import { clamp, dist, toGrid } from '../util.js';
 import { coverAt, mobilityAt } from './terrain.js';
 import { setDestination } from './units.js';
 import { enqueue, PRI } from './comms.js';
+import { officerFactors } from './officers.js';
 
 /** 交戦規定。部下がどこまで独断でやってよいか。 */
 export const ROE = Object.freeze({
@@ -88,8 +89,11 @@ function considerWithdrawal(world, u) {
 
   const hurt = u.strength / u.maxStrength;
   const pressed = u.suppression > 70 && world.now - u.lastHitAt < 20;
-  const bleeding = hurt < (roe.eager ? 0.72 : 0.45);
-  const shaken = u.morale < (roe.eager ? 48 : 32);
+  // 腰の据わった下士官は、同じ損害でも動かない。
+  // 慎重な者は、まだ戦えるうちに下がってくる ─ どちらが正しいかは状況が決める。
+  const nerve = officerFactors(u.officer).nerve;
+  const bleeding = hurt < (roe.eager ? 0.72 : 0.45) / nerve;
+  const shaken = u.morale < (roe.eager ? 48 : 32) / nerve;
 
   if (!((bleeding && pressed) || shaken)) return false;
   // 一度下がったらしばらくは下がらない

@@ -144,4 +144,5 @@ function renderEntry(entry) {
 
 export function clearLog(view) {
   view.el.innerHTML = '';
+  view.entries.clear();
 }

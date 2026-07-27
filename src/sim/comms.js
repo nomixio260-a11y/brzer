@@ -69,6 +69,7 @@ export function enqueue(world, tx) {
     duration: world.creative?.instantRadio ? 0.4 : (tx.duration ?? 5 + tx.text.length * 0.16),
   };
   radio.queue.push(entry);
+  if (sender && sender.side === 'friend') sender.txCount = (sender.txCount ?? 0) + 1;
   return entry;
 }
 
@@ -219,7 +220,8 @@ export function commsQuality(world, u) {
   // 稜線に切られても完全には切れない（回折・中継）
   const losFactor = los.visible ? 0.55 + los.quality * 0.45 : 0.16;
 
-  return clamp(rangeFactor * losFactor * u.tpl.radio, 0, 1);
+  // 中継班を付けた部隊は、谷底からでも繋がる。
+  return clamp(rangeFactor * losFactor * u.tpl.radio * u.mods.radio, 0, 1);
 }
 
 /** 各ユニットの通信状態を更新し、途絶・復旧のイベントを返す */

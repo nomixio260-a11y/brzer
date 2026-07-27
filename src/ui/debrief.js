@@ -280,6 +280,9 @@ function renderUnitFates(el, truth) {
     name.textContent = u.callsign;
 
     const fate = document.createElement('span');
+    // 戦役では、誰が率いていて何を付けていたかまで残す。
+    // 呼出符号だけでは、明日その分隊を立て直すかどうかの判断ができない。
+    const tag = [u.officer, u.attach].filter(Boolean).join(' ／ ');
     if (!u.alive) {
       fate.className = 'is-dead';
       fate.textContent =
@@ -289,6 +292,13 @@ function renderUnitFates(el, truth) {
       fate.textContent =
         `${toGrid(u.x, u.y)} ・${Math.round(u.strength)}/${u.maxStrength}${u.unitJa} 健在` +
         (u.killedByFriendly ? ' ─ 味方の砲撃を受けた' : '');
+    }
+
+    if (tag) {
+      const who = document.createElement('i');
+      who.className = 'unitfate__who';
+      who.textContent = tag;
+      fate.appendChild(who);
     }
 
     li.append(name, fate);

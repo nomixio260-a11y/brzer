@@ -18,6 +18,12 @@ function phasesOf(mission) {
   ];
 }
 
+/** 盤を差し替える（聞き手は付け直さない） */
+export function rebindHud(hud, game) {
+  hud.game = game;
+  hud._sig = '';
+}
+
 export function createHud(dom, game, hooks) {
   const hud = { dom, game, hooks, _sig: '' };
 

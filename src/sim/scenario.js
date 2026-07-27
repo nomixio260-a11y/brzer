@@ -852,4 +852,43 @@ export function scoreMission(world, outcome) {
   };
 }
 
+/**
+ * 戦役へ渡す一戦ぶんの記録。
+ *
+ * scoreMission が「指揮官の成績」なら、こちらは「部隊の履歴」である。
+ * 誰が何人残り、何発持ち、どれだけ粘ったか ─ 明日の編成はこれで決まる。
+ */
+export function battleReport(world, outcome = world.outcome) {
+  const units = world.units
+    .filter((u) => u.side === 'friend' && !u.tpl.civilian && !u.tpl.flying)
+    .map((u) => ({
+      id: u.id,
+      callsign: u.callsign,
+      type: u.type,
+      alive: !!u.alive,
+      strength: Math.max(0, u.strength),
+      maxStrength: u.maxStrength,
+      ammoRatio: (u.tpl.maxAmmo || 100) ? u.ammo / (u.tpl.maxAmmo || 100) : 1,
+      morale: u.morale,
+      fatigue: u.fatigue ?? 0,
+      walkingWounded: u.walkingWounded ?? 0,
+      inflicted: u.inflicted ?? 0,
+      losses: u.losses ?? 0,
+      selfWithdrew: u._lastSelfWithdrawAt != null,
+      // 「砲撃を浴びながら線を動かさなかった」の判定。
+      // 撃たれた回数だけを見る ─ 何発浴びたかではなく、浴び続けたかである。
+      heldUnderFire: (u.hitCount ?? 0) > 40,
+      refusedOrders: u.refusedCount ?? 0,
+      transmissions: u.txCount ?? 0,
+      avgResponse: u.responseCount ? u.responseSum / u.responseCount : 999,
+    }));
+
+  return {
+    missionId: world.mission.id,
+    outcome,
+    units,
+    score: scoreMission(world, outcome),
+  };
+}
+
 export { BRIDGE_RADIUS };

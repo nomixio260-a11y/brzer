@@ -9,6 +9,7 @@ import { composeSitrep, composeAmmoReport } from './reports.js';
 import { setRoe } from './friendlyAI.js';
 import { orderResupply } from './logistics.js';
 import { FIRE_MODES, fireMode, fireCheck, dangerClose } from './fires.js';
+import { officerFactors } from './officers.js';
 
 /**
  * 命令。
@@ -284,6 +285,30 @@ export function issueOrder(
   u.pendingOrder = order;
 
   const modPhrase = modifier === 'normal' ? '' : `${MODIFIERS[modifier]}に。`;
+  // --- H時前 ------------------------------------------------------
+  //
+  // 作戦命令は無線で読み上げるものではない。H時前に部下を集め、
+  // 地図を広げ、顔を見て渡す。だからこの間の命令は遅れず、歪まず、
+  // 網も埋めない ─ そして復唱もその場で返る。
+  //
+  // 「開戦前に全部言っておけばよい」ようだが、そうはならない。
+  // H時前に分かっているのは自分の企図だけであって、敵の企図ではない。
+  // 計画で渡せるのは「そのつもりでいろ」までである。
+  if (world.planning) {
+    order.viaOrders = true;
+    order.state = 'received';
+    order.receivedAt = world.now;
+    order.ackDueAt = world.now;
+    u.pendingOrder = null;
+    world.stats.ordersIssued++;
+    world.stats.planningOrders = (world.stats.planningOrders ?? 0) + 1;
+    pushSystemMessage(
+      world,
+      `作戦命令 ─ ${u.callsign}（${officerTag(u)}）に下達。${cond0(order)}${spec.phrase(grid)}。${modPhrase}`
+    );
+    return order;
+  }
+
   const via =
     path && path.length > 1
       ? `経路は${path.slice(0, -1).map((p) => toGrid(p.x, p.y)).join('、')}を経由。`
@@ -308,6 +333,17 @@ export function issueOrder(
   return order;
 }
 
+/** 命令書に書く条件句（予令なら「敵を認めしだい」等） */
+function cond0(order) {
+  const t = TRIGGERS[order.trigger] ?? TRIGGERS.now;
+  return order.trigger === 'now' ? '' : `予令 ─ ${t.phrase(order)}`;
+}
+
+/** 命令を受け取った者。戦役では名前で呼ぶ。 */
+function officerTag(u) {
+  return u.officer ? `${u.officer.name} ${u.officer.rank}` : (u.role ?? u.tpl.label);
+}
+
 /** 無線で届いた命令を受領処理する（stepComms が配信したものを渡す） */
 export function deliverOrders(world, delivered) {
   for (const entry of delivered) {
@@ -328,9 +364,11 @@ export function deliverOrders(world, delivered) {
     order.state = 'received';
     // 受領して応答するまでの間（部隊が状況を見て判断する時間）。
     // 演習では待たせない ─ 手順を試すための盤だからである。
+    // 呑み込みの早い者は復唱が速い。一徹な者は、まず自分の目で状況を見てから返す。
+    const obey = officerFactors(u.officer).obey;
     order.ackDueAt = world.creative?.instantRadio
       ? world.now + 1
-      : world.now + 3 + (1 - u.skill) * 14 + world.rng.range(0, 8);
+      : world.now + 3 + ((1 - u.skill) * 14 + world.rng.range(0, 8)) / obey;
   }
 }
 
@@ -341,6 +379,9 @@ export function stepOrders(world, dt) {
   for (const order of world.orders) {
     if (order.state !== 'received') continue;
     if (now < order.ackDueAt) continue;
+
+    // 口頭で渡した命令の復唱は、その場で返る。網には乗らない。
+    const spoken = !!order.viaOrders;
 
     const u = world.unitsById.get(order.unitId);
     if (!u || !u.alive) {
@@ -355,6 +396,7 @@ export function stepOrders(world, dt) {
       order.refusedReason = refusal.reason;
       u.pendingOrder = null;
       world.stats.ordersRefused++;
+      u.refusedCount = (u.refusedCount ?? 0) + 1;
       enqueue(world, {
         from: u.callsign,
         fromId: u.id,
@@ -372,6 +414,8 @@ export function stepOrders(world, dt) {
     u.pendingOrder = null;
     u.lastOrderAt = now;
     world.stats.responseTimes.push(now - order.issuedAt);
+    u.responseSum = (u.responseSum ?? 0) + (now - order.issuedAt);
+    u.responseCount = (u.responseCount ?? 0) + 1;
 
     // --- 予令は懐に入れて待つ -------------------------------------
     if (order.trigger && order.trigger !== 'now') {
@@ -380,6 +424,10 @@ export function stepOrders(world, dt) {
       order.state = 'standby';
       u.heldOrder = order;
       world.stats.heldOrders = (world.stats.heldOrders ?? 0) + 1;
+      if (spoken) {
+        pushSystemMessage(world, `${u.callsign}: ${standbyAckText(u, order, rng)}`);
+        continue;
+      }
       enqueue(world, {
         from: u.callsign,
         fromId: u.id,
@@ -417,6 +465,10 @@ export function stepOrders(world, dt) {
     }
 
     // 通常の受領応答
+    if (spoken) {
+      pushSystemMessage(world, `${u.callsign}: ${ackText(u, order, rng)}`);
+      continue;
+    }
     enqueue(world, {
       from: u.callsign,
       fromId: u.id,
@@ -501,6 +553,8 @@ function triggerReasonJa(key) {
 function refusalReason(u, order, world) {
   const rng = world.rng;
   const movement = ['move', 'advance', 'attack', 'recon', 'withdraw'].includes(order.verb);
+  // 従順な者ほど渋らない。一徹な者は、納得しない命令を返事だけで済ませる。
+  const obey = officerFactors(u.officer).obey;
 
   if (u.state === 'broken') {
     return {
@@ -509,14 +563,14 @@ function refusalReason(u, order, world) {
     };
   }
   // 激しく制圧されている最中に「動け」は通らない
-  if (movement && u.suppression > 78 && order.verb !== 'withdraw' && rng.chance(0.75)) {
+  if (movement && u.suppression > 78 && order.verb !== 'withdraw' && rng.chance(0.75 / obey)) {
     return {
       reason: 'pinned',
       text: `こちら${u.callsign}、今は動けない！釘付けだ、頭が上げられない！`,
     };
   }
   // 士気が落ちていると攻勢命令を渋る
-  if ((order.verb === 'attack' || order.verb === 'advance') && u.morale < 42 && rng.chance(0.5)) {
+  if ((order.verb === 'attack' || order.verb === 'advance') && u.morale < 42 && rng.chance(0.5 / obey)) {
     return {
       reason: 'morale',
       text: `こちら${u.callsign}……前へは出られない。ここを維持するのが精一杯だ。`,
@@ -712,7 +766,9 @@ function beginExecution(world, u, order) {
         x: order.x,
         y: order.y,
         grid: order.grid,
-        readyAt: world.now + 180, // 諸元が出るまで3分
+        // 諸元が出るまで3分。ただし H時前に立てた点は、
+        // 前夜のうちに砲側で計算が済んでいる ─ 火力計画とはそういうものである。
+        readyAt: order.viaOrders ? world.now : world.now + 180,
       });
       break;
     }

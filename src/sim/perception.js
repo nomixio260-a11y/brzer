@@ -33,7 +33,7 @@ export function stepPerception(u, others, terrain, now, dt, rng, smokes, world) 
   // 何時間も起きている部隊は、見落とす
   const alert = 1 - clamp(u.fatigue / 700, 0, 0.3);
   const baseSpot =
-    u.tpl.spot * posture.spot * watching * alert *
+    u.tpl.spot * u.mods.spot * posture.spot * watching * alert *
     (1 - clamp(u.suppression / 200, 0, 0.5));
 
   for (const t of others) {

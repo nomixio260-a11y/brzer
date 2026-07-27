@@ -6,15 +6,27 @@
 // UI モジュールは belief と terrain しか受け取らない。地図は指揮官の手元にある
 // ものなので地形は見てよいが、その上に誰がいるかは一切見えない。
 
-import { createWorld, tick, spawnReinforcement } from './sim/world.js';
+import { createWorld, tick, spawnReinforcement, endPlanning, planningTick } from './sim/world.js';
 import { replenish, REINFORCEMENTS } from './sim/creative.js';
 import { issueOrder as simIssueOrder, VERBS } from './sim/orders.js';
 import { congestion } from './sim/comms.js';
 import { enemyIntentLog } from './sim/enemyCommand.js';
 import { visibilityJa } from './sim/weather.js';
 import { supportGun, layingLeft } from './sim/fires.js';
-import { scoreMission, missionList } from './sim/scenario.js';
-import { toGrid, fromGrid, formatClock } from './util.js';
+import {
+  scoreMission, missionList, battleReport, friendlyOrderOfBattle,
+  getMission as simGetMission,
+} from './sim/scenario.js';
+import { UNIT_TYPES } from './sim/units.js';
+import {
+  CAMPAIGNS, getCampaign, createCampaign, currentStage, battleSetup, recordBattle,
+  replacementRoom, assignedTotal, allottedTotal, poolLeft,
+  NIGHT_PLANS, NIGHT_PLAN_IDS, serializeCampaign, deserializeCampaign,
+  attachAsset, detachAsset, assetsLeft, canAttach, campaignList,
+} from './sim/campaign.js';
+import { ATTACHMENTS, attachmentShort, attachmentLabels } from './sim/attachments.js';
+import { TEMPERAMENTS, TRAITS, gradeOf, officerLine } from './sim/officers.js';
+import { Rng, toGrid, fromGrid, formatClock } from './util.js';
 
 let markerSeq = 1;
 
@@ -73,10 +85,14 @@ export function createGame(opts = {}) {
     variable: !!opts.variable,
     planSeed: opts.variable ? Math.floor(Math.random() * 0x7fffffff) + 1 : 0,
     creative: { enabled: !!opts.creative },
+    // 戦役の持ち越し。単発の戦闘では渡されない。
+    setup: opts.setup ?? null,
+    // H時前の計画。既定で入る ─ 命令も出さずに戦闘が始まる方がおかしい。
+    planning: opts.planning !== false,
   });
   const long = world.mission.duration === 'long';
 
-  return {
+  const game = {
     world,
 
     // 指揮官の認識
@@ -109,7 +125,16 @@ export function createGame(opts = {}) {
     maxSpeed: long ? 8 : 4,
     finished: false,
     score: null,
+
+    // 戦役で回している時だけ入る。単発の戦闘では null。
+    campaign: null,
+    stage: null,
   };
+
+  // 盤を起こした時点で記録簿にあるもの（夜間偵察の報告）も、指揮官は聞いている。
+  game._logSeen = 0;
+  drainLog(game);
+  return game;
 }
 
 /* ------------------------------------------------------------------ */
@@ -120,7 +145,31 @@ export function createGame(opts = {}) {
  * dt 実秒ぶんシミュレーションを進める。
  * @returns {Array} 新たに届いた無線ログ
  */
+/**
+ * 通信記録簿のうち、まだ指揮官が取り込んでいないぶんを取り込む。
+ *
+ * 無線で届いたものも、指揮所が自分で書いた覚書も、記録簿には同じ順で載る。
+ * 取り込みをここ一本にしておかないと、「弾が無い」のような一行が
+ * どこにも出ないまま消える ─ 実際、長いあいだ消えていた。
+ */
+function drainLog(game) {
+  const log = game.world.radio.log;
+  const from = game._logSeen ?? 0;
+  if (log.length <= from) return [];
+  game._logSeen = log.length;
+  const fresh = log.slice(from);
+  for (const entry of fresh) absorb(game, entry);
+  return fresh;
+}
+
+export { drainLog };
+
 export function advance(game, realDt) {
+  // H時前。時計は止まっているが、口頭で渡した命令は動いている。
+  if (game.world.planning) {
+    planningTick(game.world);
+    return drainLog(game);
+  }
   if (!game.running || game.finished) return [];
 
   const simSeconds = realDt * game.simSecondsPerRealSecond * game.speed;
@@ -133,12 +182,11 @@ export function advance(game, realDt) {
   steps = Math.min(steps, 400);
 
   for (let i = 0; i < steps; i++) {
-    const delivered = tick(game.world, 1);
-    for (const entry of delivered) fresh.push(entry);
+    tick(game.world, 1);
     if (game.world.outcome) break;
   }
 
-  for (const entry of fresh) absorb(game, entry);
+  fresh.push(...drainLog(game));
 
   if (game.world.outcome && !game.finished) {
     game.finished = true;
@@ -204,6 +252,20 @@ function absorb(game, entry) {
 const SAME_TRACK = 620;
 /** 誰も何も言わなくなった敵の駒を、盤から下ろすまでの時間 */
 const TRACK_LIFE = 1500;
+
+/** H時。計画を畳んで時計を回し始める。 */
+export function startClock(game) {
+  const ok = endPlanning(game.world);
+  if (ok) {
+    game.running = true;
+    game.speed = 1;
+  }
+  return ok;
+}
+
+export function isPlanning(game) {
+  return !!game?.world?.planning;
+}
 
 export function setAutoPlot(game, on) {
   game.autoPlot = !!on;
@@ -356,6 +418,8 @@ export function issueOrder(game, { unitId, verb, x, y, modifier, legs, trigger, 
       });
     }
   }
+  // 発令そのものが記録簿に一行を残すことがある（弾が無い・射程外・作戦命令の下達）。
+  drainLog(game);
   return order;
 }
 
@@ -758,11 +822,18 @@ export function getRoster(game) {
   for (const def of getRosterOrder(game)) {
     if (def.virtual) continue;
     const heard = game.belief.roster.get(def.id);
+    // 誰が率いていて、何を付けたか。これは前線の話ではなく編成の話なので、
+    // 指揮官は最初から知っている ─ 自分で決めたことである。
+    const u = game.world.unitsById.get(def.id);
     out.push({
       unitId: def.id,
       callsign: def.callsign,
       typeLabel: def.typeLabel,
       role: def.role,
+      officer: u?.officer ? `${u.officer.name} ${u.officer.rank}` : null,
+      temperament: u?.officer ? TEMPERAMENTS[u.officer.temperament]?.label ?? '' : null,
+      attach: attachmentShort(u?.attach),
+      attachLabels: attachmentLabels(u?.attach).join('・'),
       heard: heard ?? null,
       silentFor: heard ? game.world.now - heard.heardAt : null,
     });
@@ -942,6 +1013,9 @@ export function revealTruth(game) {
       deathAt: u.deathAt,
       state: u.state,
       role: u.role ?? null,
+      // 誰が率いていたか。戦役では、これが翌日の編成の話になる。
+      officer: u.officer ? `${u.officer.name} ${u.officer.rank}` : null,
+      attach: attachmentLabels(u.attach).join('・') || null,
     })),
     // 敵が何を考え、どこで決心を変えたか。ここが講評で一番効く。
     enemyIntent: enemyIntentLog(game.world).map((e) => ({ at: e.at, text: e.text })),
@@ -953,3 +1027,280 @@ export { VERBS, MODIFIERS, VERB_GROUPS, TRIGGERS } from './sim/orders.js';
 export { FIRE_MODES, FIRE_MODE_ORDER } from './sim/fires.js';
 export { REINFORCEMENTS };
 export { ROE } from './sim/friendlyAI.js';
+
+/* ================================================================== */
+/* 戦役                                                               */
+/* ================================================================== */
+//
+// 戦闘そのものは今までどおり createGame が回す。
+// ここは「戦闘と戦闘のあいだ」を持ち、次の戦闘へ持ち越しを渡す係である。
+//
+// 戦役の帳簿は指揮所の帳簿なので、指揮官は全部見てよい ―
+// 誰が何人残っているかは、点呼を取れば分かることである。
+// 見えないのは今この瞬間の前線の様子だけであり、そこは今までどおり belief を通す。
+
+const CAMPAIGN_KEY = 'brzer.campaign';
+
+export function newCampaign(campaignId = CAMPAIGNS[0].id, seed = null) {
+  const campaign = getCampaign(campaignId);
+  const used = (seed ?? Math.floor(Math.random() * 0x7fffffff)) | 1;
+  const rng = new Rng(used);
+  const first = getMissionRoster(campaign.stages[0].missionId);
+  // 途中の日から出てくる部隊にも、最初から名前を配っておく。
+  // 三日目に初めて現れる分隊が「H4」と呼ばれていては、中隊の話にならない。
+  const everyone = new Map();
+  for (const stage of campaign.stages) {
+    for (const r of getMissionRoster(stage.missionId)) if (!everyone.has(r.id)) everyone.set(r.id, r);
+  }
+  const state = createCampaign(campaign, rng, [...everyone.values()]);
+
+  // 初日の編成を「昨日の終わり」として置いておく。
+  // これが無いと、補充を割り当てる先が一つも無い状態で第一日が始まる。
+  for (const r of first) {
+    state.carry[r.id] = {
+      strength: r.maxStrength, maxStrength: r.maxStrength,
+      ammoRatio: 1, morale: 82, fatigue: 0, walkingWounded: 0, dead: false,
+    };
+  }
+  state.seed = used;
+  return state;
+}
+
+/** そのミッションの編成表を、将校を配るのに使える形で返す */
+function getMissionRoster(missionId) {
+  const mission = simGetMission(missionId);
+  const orbat = friendlyOrderOfBattle(mission);
+  const byId = new Map(orbat.map((d) => [d.id, d]));
+  return (mission.rosterOrder ?? []).map((r) => {
+    const def = byId.get(r.id);
+    const tpl = def ? UNIT_TYPES[def.type] : null;
+    return {
+      id: r.id,
+      callsign: r.callsign,
+      role: r.role,
+      icon: r.icon,
+      echelon: r.echelon,
+      unitType: def?.type ?? 'infantry',
+      typeLabel: r.typeLabel,
+      maxStrength: tpl?.maxStrength ?? 9,
+      virtual: !!r.virtual,
+    };
+  });
+}
+
+export { getMissionRoster, campaignList };
+
+/** 戦役の次の一戦を起こす。createGame の戦役版。 */
+export function startCampaignBattle(campaignState, opts = {}) {
+  const campaign = getCampaign(campaignState.campaignId);
+  const stage = currentStage(campaignState, campaign);
+  if (!stage) return null;
+
+  const setup = battleSetup(campaignState);
+  const game = createGame({
+    missionId: stage.missionId,
+    variable: true, // 戦役の敵は毎回同じ手は使わない
+    autoPlot: opts.autoPlot,
+    setup,
+  });
+  game.campaign = campaignState;
+  game.stage = stage;
+  return game;
+}
+
+/** 戦闘の結果を戦役に取り込む。講評を出したあとに呼ぶ。 */
+export function finishCampaignBattle(game) {
+  if (!game?.campaign || !game.world.outcome) return null;
+  if (game._campaignRecorded) return game._campaignRecorded;
+  const rng = new Rng((game.world.tickCount + 977) | 1);
+  const report = battleReport(game.world);
+  const res = recordBattle(game.campaign, report, rng);
+  game._campaignRecorded = res;
+  saveCampaign(game.campaign);
+  return res;
+}
+
+/* --- 保存 ---------------------------------------------------------- */
+
+export function saveCampaign(state) {
+  try {
+    window.localStorage.setItem(CAMPAIGN_KEY, JSON.stringify(serializeCampaign(state)));
+    return true;
+  } catch {
+    return false; // 保存できなくても戦役そのものは続けられる
+  }
+}
+
+export function loadCampaign() {
+  try {
+    const raw = window.localStorage.getItem(CAMPAIGN_KEY);
+    if (!raw) return null;
+    return deserializeCampaign(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+export function clearCampaign() {
+  try {
+    window.localStorage.removeItem(CAMPAIGN_KEY);
+  } catch {
+    /* 消せなくても実害は無い */
+  }
+}
+
+/* --- UI 向けの読み出し --------------------------------------------- */
+
+/** 戦役の全体像。戦線・段階・これまでの経過。 */
+export function getCampaignView(state) {
+  if (!state) return null;
+  const campaign = getCampaign(state.campaignId);
+  const stage = currentStage(state, campaign);
+  return {
+    id: campaign.id,
+    title: campaign.title,
+    subtitle: campaign.subtitle,
+    blurb: campaign.blurb,
+    front: state.front,
+    frontMax: campaign.front.max,
+    frontLabel: campaign.front.label,
+    stageIndex: state.stage,
+    stageCount: campaign.stages.length,
+    stage: stage && {
+      id: stage.id, day: stage.day, title: stage.title,
+      prologue: stage.prologue, missionId: stage.missionId,
+    },
+    finished: !!state.finished,
+    result: state.result,
+    resultReason: state.resultReason,
+    history: state.history.map((h) => ({ ...h })),
+    pool: { ...state.pool },
+    left: poolLeft(state),
+    allot: { ...state.allot },
+    night: state.night,
+    nights: NIGHT_PLAN_IDS.map((id) => ({ ...NIGHT_PLANS[id] })),
+  };
+}
+
+/** 中隊の顔ぶれ。名前・気質・特性・残兵。 */
+export function getCompany(state) {
+  if (!state) return [];
+  const campaign = getCampaign(state.campaignId);
+  const stage = currentStage(state, campaign);
+  const roster = getMissionRoster(stage?.missionId ?? campaign.stages[0].missionId);
+  const rosterIds = new Set(roster.map((r) => r.id));
+
+  const rows = [];
+  for (const r of roster) {
+    const c = state.carry[r.id];
+    const officer = state.officers.get(r.id);
+    rows.push({
+      id: r.id,
+      callsign: r.callsign,
+      typeLabel: r.typeLabel,
+      unitType: r.unitType,
+      icon: r.icon,
+      echelon: r.echelon,
+      role: r.role,
+      present: true,
+      strength: c ? Math.round(c.strength) : r.maxStrength,
+      maxStrength: c?.maxStrength ?? r.maxStrength,
+      wounded: Math.round(c?.walkingWounded ?? 0),
+      ammoRatio: c?.ammoRatio ?? 1,
+      morale: c?.morale ?? 82,
+      fatigue: c?.fatigue ?? 0,
+      dead: !!c?.dead,
+      room: replacementRoom(state, r.id),
+      assigned: state.assign[r.id] ?? 0,
+      officer: officer && {
+        name: officer.name, rank: officer.rank,
+        temperament: officer.temperament,
+        temperamentLabel: TEMPERAMENTS[officer.temperament]?.label ?? '',
+        temperamentNote: TEMPERAMENTS[officer.temperament]?.note ?? '',
+        traits: officer.traits.map((id) => ({ ...TRAITS[id] })).filter((t) => t.label),
+        grade: gradeOf(officer).label,
+        battles: officer.battles, kills: officer.kills,
+        line: officerLine(officer),
+      },
+    });
+  }
+
+  // 今日は出番の無い部隊も、中隊の一部である。
+  for (const [id, c] of Object.entries(state.carry)) {
+    if (rosterIds.has(id)) continue;
+    const officer = state.officers.get(id);
+    rows.push({
+      id,
+      callsign: officer?.callsign ?? id,
+      typeLabel: '', unitType: 'infantry', icon: null, echelon: null, role: '本日は編成外',
+      present: false,
+      strength: Math.round(c.strength), maxStrength: c.maxStrength ?? 9,
+      wounded: Math.round(c.walkingWounded ?? 0),
+      ammoRatio: c.ammoRatio ?? 1, morale: c.morale ?? 82, fatigue: c.fatigue ?? 0,
+      dead: !!c.dead, room: replacementRoom(state, id), assigned: state.assign[id] ?? 0,
+      officer: officer && {
+        name: officer.name, rank: officer.rank,
+        temperament: officer.temperament,
+        temperamentLabel: TEMPERAMENTS[officer.temperament]?.label ?? '',
+        temperamentNote: TEMPERAMENTS[officer.temperament]?.note ?? '',
+        traits: officer.traits.map((tid) => ({ ...TRAITS[tid] })).filter((t) => t.label),
+        grade: gradeOf(officer).label,
+        battles: officer.battles, kills: officer.kills,
+        line: officerLine(officer),
+      },
+    });
+  }
+  return rows;
+}
+
+/* --- 戦闘前の割り当て ---------------------------------------------- */
+
+export function assignReplacement(state, unitId, n) {
+  const room = replacementRoom(state, unitId);
+  const others = assignedTotal(state) - (state.assign[unitId] ?? 0);
+  const max = Math.min(room, state.pool.replacements - others);
+  state.assign[unitId] = Math.max(0, Math.min(max, Math.round(n)));
+  return state.assign[unitId];
+}
+
+export function allotRounds(state, kind, n) {
+  if (!['rounds', 'smoke', 'illum'].includes(kind)) return 0;
+  const others = allottedTotal(state) - state.allot[kind];
+  const max = Math.max(0, state.pool.rounds - others);
+  state.allot[kind] = Math.max(0, Math.min(max, Math.round(n)));
+  return state.allot[kind];
+}
+
+export function attachTo(state, unitId, attachId, unitType) {
+  return attachAsset(state, unitId, attachId, unitType);
+}
+
+export function detachFrom(state, unitId, attachId) {
+  return detachAsset(state, unitId, attachId);
+}
+
+export function getAttachState(state) {
+  return {
+    attachments: ATTACHMENTS,
+    assets: { ...state.assets },
+    assetsLeft: assetsLeft(state),
+    attachOf: (unitId) => state.attach[unitId] ?? [],
+    canAttach: (unitId, attachId, unitType) => canAttach(state, unitId, attachId, unitType),
+  };
+}
+
+export function setNightPlan(state, id) {
+  if (NIGHT_PLANS[id]) state.night = id;
+  return state.night;
+}
+
+/** 戦役中の将校（戦闘中の画面から名前を出すのに使う） */
+export function getOfficerOf(game, unitId) {
+  const o = game?.world?.unitsById?.get(unitId)?.officer;
+  if (!o) return null;
+  return {
+    name: o.name, rank: o.rank, line: officerLine(o),
+    temperamentLabel: TEMPERAMENTS[o.temperament]?.label ?? '',
+    traits: o.traits.map((id) => TRAITS[id]?.label).filter(Boolean),
+  };
+}

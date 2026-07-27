@@ -93,6 +93,22 @@ function modSetFor(panel) {
   };
 }
 
+/** 盤を差し替える（聞き手は付け直さない） */
+export function rebindOrderPanel(panel, game) {
+  panel.game = game;
+  panel.unitId = null;
+  panel.group = 'maneuver';
+  panel.verb = null;
+  panel.modifier = 'normal';
+  panel.fireMode = 'impact';
+  panel.unitType = 'infantry';
+  panel.trigger = 'now';
+  panel.triggerAt = null;
+  panel.lineId = null;
+  panel.legs = [];
+  panel._sig = '';
+}
+
 export function createOrderPanel(dom, game, hooks) {
   const panel = {
     game,

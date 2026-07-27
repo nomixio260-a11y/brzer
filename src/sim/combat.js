@@ -8,6 +8,7 @@ import { smokeAttenuation, createSmoke } from './smoke.js';
 import { mistAttenuation } from './weather.js';
 import { fatigueFactor } from './logistics.js';
 import { fireMode, createFlare, walkRounds } from './fires.js';
+import { officerFactors } from './officers.js';
 import { isArmorDuel, canDefeat, resolveArmorShot } from './armor.js';
 
 const LETHALITY = 0.0012; // 1秒あたりの基礎損耗率
@@ -107,13 +108,19 @@ export function stepDirectFire(world, dt) {
 
     // 装甲は小火器を弾く。対装甲火力だけが通る。
     const armor = target.tpl.armor;
-    const power = u.tpl.firepower * (1 - armor) + u.tpl.ap * armor;
+    // 分派で変わるのはここである。機関銃を付ければ対人が、
+    // 対戦車小隊を付ければ対装甲が上がる ─ 兵種そのものは変わらない。
+    const power = u.tpl.firepower * u.mods.firepower * (1 - armor) +
+      u.tpl.ap * u.mods.ap * armor;
 
     // 何時間も撃ち合っている部隊は、当たらなくなる。
     // 短い戦闘では出てこない差だが、半日守るならここが効いてくる。
+    // 同じ火器でも、統制の取れた分隊はよく当てる。
+    // 差は一割前後に留める ─ 人の当たり外れで戦闘が決まっては、指揮に意味が無くなる。
+    const aim = 0.94 + officerFactors(u.officer).aim * 0.06;
     const effectiveness =
       rangeFactor * visibility * moraleFactor * suppressionFactor * movingPenalty *
-      strengthFrac * fatigueFactor(u) * (0.55 + u.skill * 0.6);
+      strengthFrac * fatigueFactor(u) * (0.55 + u.skill * 0.6) * aim;
 
     // 的の大きさ。掩体に伏せている部隊と、開豁地を駆けている部隊とでは
     // 同じ弾でも当たり方が違う。ここを見ていなかったので、
@@ -130,11 +137,13 @@ export function stepDirectFire(world, dt) {
     }
 
     // 制圧は遮蔽を貫通する（当たらなくても頭は下がる）
-    applySuppression(target, SUPPRESSION_RATE * u.tpl.firepower * effectiveness * dt);
+    applySuppression(
+      target, SUPPRESSION_RATE * u.tpl.firepower * u.mods.firepower * effectiveness * dt
+    );
     target.lastHitAt = now;
     target._threatFrom = { x: u.x, y: u.y, at: now };
 
-    u.ammo = Math.max(0, u.ammo - AMMO_DRAIN * u.tpl.ammoDrain * dt);
+    u.ammo = Math.max(0, u.ammo - AMMO_DRAIN * u.tpl.ammoDrain * u.mods.ammoDrain * dt);
     u.lastFiredAt = now;
 
     events.push({ type: 'fire', from: u.id, to: target.id, at: now, x: target.x, y: target.y });
@@ -172,8 +181,9 @@ function pickTarget(u, candidates, terrain, now, smokes) {
 
     // 近い目標・脅威の大きい目標を優先
     const threat = t.tpl.firepower + t.tpl.ap * 0.5;
-    const armorBonus = t.tpl.armor >= 0.3 && u.tpl.ap >= 0.45 ? 2.2 : 0;
-    const power = u.tpl.firepower * (1 - t.tpl.armor) + u.tpl.ap * t.tpl.armor;
+    const armorBonus = t.tpl.armor >= 0.3 && u.tpl.ap * u.mods.ap >= 0.45 ? 2.2 : 0;
+    const power = u.tpl.firepower * u.mods.firepower * (1 - t.tpl.armor) +
+      u.tpl.ap * u.mods.ap * t.tpl.armor;
     const score = power * 2 + threat + armorBonus - (d / u.tpl.range) * 2.2;
     if (score > bestScore) {
       bestScore = score;

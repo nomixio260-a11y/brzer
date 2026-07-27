@@ -45,6 +45,21 @@ function section(title) {
 }
 
 /**
+ * 時計を回す。
+ *
+ * 戦闘は「H時前」から始まるので、H時を宣言しないと running を立てても時刻は動かない。
+ * 検査の各所でこれを忘れると、交信が一度も起きないまま待ち続けることになる。
+ */
+async function runClock(p, speed = 30) {
+  await p.evaluate((sp) => {
+    const b = window.__brzer;
+    if (b.game.world.planning) b.state.startClock(b.game);
+    b.game.speed = sp;
+    b.game.running = true;
+  }, speed);
+}
+
+/**
  * 版面の検査。
  *
  * 「見にくくないように」を人の目で毎回確かめるのは続かないので、機械に見させる。
@@ -148,6 +163,11 @@ async function auditLayouts() {
     await p.click('#btn-start');
     await p.waitForTimeout(700);
 
+    // H時前の版面（作戦命令の帯が出ている状態）
+    found.push(...(await p.evaluate(AUDIT)).map((s) => `[H時前] ${s}`));
+    await p.click('#btn-hhour');
+    await p.waitForTimeout(400);
+
     // 携帯・板ではタブごとに版面が変わるので、順に開いて見る。
     // 最後は命令タブで終える（続けて命令パネルの中身を検めるため）。
     const narrow = await p.evaluate(() => !!document.querySelector('.tabbar')?.offsetParent);
@@ -199,6 +219,9 @@ async function checkLongBattle() {
   check('夜間と表示される', (await p.textContent('#visibility')).includes('夜間'));
   check('段列の残数が出る', await p.isVisible('#trains-item'));
   check('静穏を飛ばす8倍が出る', await p.isVisible('#speed-8'));
+  // H時前は時計が止まっている。速さの話はH時を宣言してからになる。
+  await p.click('#btn-hhour');
+  await p.waitForTimeout(300);
   await p.click('#speed-8');
   check('8倍が効く', (await p.evaluate(() => window.__brzer.game.speed)) === 8);
 
@@ -320,7 +343,7 @@ async function checkQuickMarking() {
   await p.waitForTimeout(900);
 
   // 交信が入るまで進める（聞いていない部隊は置けない）
-  await p.evaluate(() => { window.__brzer.game.speed = 30; window.__brzer.game.running = true; });
+  await runClock(p, 30);
   await p.waitForSelector('#roster button[data-mark-unit]', { timeout: 120000 });
   await p.evaluate(() => { window.__brzer.game.running = false; });
 
@@ -340,7 +363,7 @@ async function checkQuickMarking() {
     (await p.evaluate(() => window.__brzer.game.belief.markers.length)) === before + 1);
 
   // 二度目は増やさずに動かす（名前を打ち直させない）
-  await p.evaluate(() => { window.__brzer.game.speed = 30; window.__brzer.game.running = true; });
+  await runClock(p, 30);
   await p.waitForTimeout(1200);
   await p.evaluate(() => { window.__brzer.game.running = false; });
   await p.click(`#roster button[data-mark-unit="${unit}"]`);
@@ -425,7 +448,7 @@ async function checkAutoPlot() {
   check('入切の釦が出ている', await p.isVisible('#btn-autoplot'));
 
   // 一度も地図を叩かないまま進める
-  await p.evaluate(() => { window.__brzer.game.speed = 30; window.__brzer.game.running = true; });
+  await runClock(p, 30);
   await p.waitForFunction(
     () => window.__brzer.game.belief.markers.filter((m) => m.unitId).length >= 3,
     null, { timeout: 120000 }
@@ -453,7 +476,7 @@ async function checkAutoPlot() {
   check('釦を押すと消灯する',
     !(await p.$eval('#btn-autoplot', (b) => b.classList.contains('is-on'))));
   const frozen = await p.evaluate(() => window.__brzer.game.belief.markers.length);
-  await p.evaluate(() => { window.__brzer.game.speed = 30; window.__brzer.game.running = true; });
+  await runClock(p, 30);
   await p.waitForTimeout(2500);
   await p.evaluate(() => { window.__brzer.game.running = false; });
   check('切れば駒は増えない',
@@ -467,6 +490,211 @@ async function checkAutoPlot() {
 
   check('自動記入でエラーが出ない', errs.length === 0, errs.slice(0, 3).join(' | '));
   await p.screenshot({ path: `${SHOTS}/12-autoplot.png` });
+  await ctx.close();
+}
+
+/**
+ * H時前の作戦命令。
+ * 時計が止まっていること、渡した命令が網に乗らないこと、H時で回り始めること。
+ */
+async function checkPlanning() {
+  const ctx = await browser.newContext({ viewport: { width: 1500, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message));
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+
+  await p.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+  await p.waitForFunction(() => document.querySelectorAll('#mission-pick button').length > 0,
+    null, { timeout: 10000 });
+  await p.click('#btn-start');
+  await p.waitForTimeout(800);
+
+  check('H時前の帯が出る', await p.isVisible('#planbar'));
+  check('時計は止まっている',
+    await p.evaluate(() => window.__brzer.state.isPlanning(window.__brzer.game)));
+  const t0 = await p.evaluate(() => window.__brzer.game.world.now);
+  await p.waitForTimeout(1200);
+  check('待っても時刻が進まない',
+    (await p.evaluate(() => window.__brzer.game.world.now)) === t0);
+
+  // 計画で命令を渡す ─ 網には乗らない
+  const box = await p.locator('#map').boundingBox();
+  await p.click('#order-units button[data-unit="H1"]');
+  await p.click('#order-groups button[data-group="maneuver"]');
+  await p.click('#order-verbs button[data-verb="defend"]');
+  await p.mouse.click(box.x + box.width * 0.45, box.y + box.height * 0.5);
+  await p.waitForTimeout(200);
+  check('計画中でも地図から送信できる', await p.isVisible('#map-hint-send'));
+  await p.click('#map-hint-send');
+  await p.waitForTimeout(400);
+
+  const st = await p.evaluate(() => ({
+    plan: window.__brzer.game.world.stats.planningOrders ?? 0,
+    queue: window.__brzer.game.world.radio.queue.length,
+    acks: window.__brzer.game.world.radio.log.filter((l) => l.kind === 'ack').length,
+    sys: window.__brzer.game.belief.log.filter((l) => l.text.includes('作戦命令')).length,
+  }));
+  check('口頭で渡した扱いになる', st.plan === 1, `${st.plan}`);
+  check('網は空いたまま', st.queue === 0 && st.acks === 0, JSON.stringify(st));
+  check('命令書が記録簿に残る', st.sys >= 1, `${st.sys}`);
+
+  await p.screenshot({ path: `${SHOTS}/13-planning.png` });
+
+  await p.click('#btn-hhour');
+  await p.waitForTimeout(600);
+  check('H時で帯が引っ込む', !(await p.isVisible('#planbar')));
+  check('H時で時計が回り始める',
+    await p.evaluate(() => window.__brzer.game.running && !window.__brzer.game.world.planning));
+  await p.waitForTimeout(1000);
+  check('時刻が進む', (await p.evaluate(() => window.__brzer.game.world.now)) > t0);
+
+  check('H時前後でエラーが出ない', errs.length === 0, errs.slice(0, 3).join(' | '));
+  await ctx.close();
+}
+
+/**
+ * 戦役。
+ * 三日を続けて戦い、損害と経歴が翌日へ持ち越されること。
+ */
+async function checkCampaign() {
+  const ctx = await browser.newContext({ viewport: { width: 1500, height: 950 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message));
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+
+  await p.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+  await p.waitForFunction(() => document.querySelectorAll('#campaign-pick button').length > 0,
+    null, { timeout: 10000 });
+  check('戦役の入口がある', await p.isVisible('#campaign-pick button[data-campaign]'));
+  check('更新内容への入口がある', await p.isVisible('#btn-notes'));
+
+  await p.click('#btn-notes');
+  await p.waitForTimeout(300);
+  check('更新内容が開く', await p.isVisible('#view-notes'));
+  await p.click('#btn-notes-back');
+  await p.waitForTimeout(200);
+
+  await p.click('#campaign-pick button[data-campaign]');
+  await p.waitForTimeout(500);
+  check('戦役の画面が開く', await p.isVisible('#view-campaign'));
+  check('初日は峠', (await p.textContent('#camp-day')).includes('コルプ峠'));
+
+  const cards = await p.$$('#camp-company .unitcard');
+  check('中隊の顔ぶれが並ぶ', cards.length >= 6, `${cards.length}`);
+  const officers = await p.$$eval('.unitcard__officer b', (e) => e.map((x) => x.textContent));
+  check('全員に名前がある', officers.length >= 6, officers.join(','));
+  check('気質が出ている', (await p.$$('.tempchip')).length >= 6);
+  check('今夜の使い方は三択', (await p.$$('#camp-night .nightopt')).length === 3);
+
+  // 分派を付ける
+  const chip = await p.$('#camp-company .attachchip:not(:disabled)');
+  check('分派が付けられる', !!chip);
+  if (chip) {
+    await chip.click();
+    await p.waitForTimeout(200);
+    check('付けた分派が点く', (await p.$$('.attachchip.is-on')).length === 1);
+  }
+  await p.click('#camp-night .nightopt >> nth=1');
+  await p.waitForTimeout(150);
+  check('今夜の使い方が選べる',
+    await p.$eval('#camp-night .nightopt:nth-child(2)', (b) => b.classList.contains('is-on')));
+
+  await p.screenshot({ path: `${SHOTS}/14-campaign.png`, fullPage: true });
+
+  // 一日戦う
+  await p.click('#btn-sortie');
+  await p.waitForTimeout(1200);
+  check('戦役の戦闘もH時前から始まる', await p.isVisible('#planbar'));
+  check('付けた分派が盤に載る', await p.evaluate(() =>
+    [...window.__brzer.game.world.unitsById.values()].some((u) => (u.attach ?? []).length > 0)));
+  check('部隊に将校が付いている', await p.evaluate(() =>
+    [...window.__brzer.game.world.unitsById.values()].some((u) => u.side === 'friend' && !!u.officer)));
+
+  await p.click('#btn-hhour');
+  await runClock(p, 60);
+  await p.waitForSelector('#view-debrief.is-active', { timeout: 240000 });
+  await p.waitForTimeout(900);
+  check('講評に到達する', ['任務達成', '辛勝', '任務失敗']
+    .includes((await p.textContent('#debrief-verdict')).replace(/\s/g, '')));
+  check('戦役では「次の日へ」が出る', await p.isVisible('#btn-nextday'));
+  check('戦役では「もう一度戦う」は出ない', !(await p.isVisible('#btn-again')));
+
+  await p.click('#btn-nextday');
+  await p.waitForTimeout(600);
+  check('二日目の画面に戻る', await p.isVisible('#view-campaign'));
+  check('二日目は橋', (await p.textContent('#camp-day')).includes('橋梁'));
+  check('これまでが残る', (await p.$$('#camp-history .camphistory__item')).length === 1);
+
+  const carried = await p.evaluate(() => {
+    const st = window.__brzer.state;
+    return st.getCompany(window.__brzer.game.campaign).map((r) => ({
+      id: r.id, s: r.strength, max: r.maxStrength, ammo: r.ammoRatio,
+    }));
+  });
+  check('損害が持ち越される', carried.some((r) => r.s < r.max), JSON.stringify(carried.slice(0, 3)));
+  check('弾薬も持ち越される', carried.some((r) => r.ammo < 1));
+
+  // 二日目に、聞き手が二重になっていないこと。
+  // 画面を読み込み直さずに次の戦闘へ入るので、ここを見落とすと
+  // 二日目は駒が2つ置かれ、取消が2手戻り、拡大が2段飛ぶ。
+  await p.click('#btn-sortie');
+  await p.waitForTimeout(1200);
+  const box2 = await p.locator('#map').boundingBox();
+  const m0 = await p.evaluate(() => window.__brzer.game.belief.markers.length);
+  await p.mouse.click(box2.x + box2.width * 0.3, box2.y + box2.height * 0.3);
+  await p.waitForTimeout(250);
+  check('二日目でも一叩きで駒は一つ',
+    (await p.evaluate(() => window.__brzer.game.belief.markers.length)) === m0 + 1,
+    `${m0} → ${await p.evaluate(() => window.__brzer.game.belief.markers.length)}`);
+  await p.keyboard.press('Escape');
+
+  const z0 = await p.evaluate(() => window.__brzer.mapView.zoom);
+  await p.click('#zoom-in');
+  const z1 = await p.evaluate(() => window.__brzer.mapView.zoom);
+  check('二日目でも拡大は一段', Math.abs(z1 / z0 - 1.5) < 0.02, `${z0} → ${z1}`);
+  await p.click('#zoom-fit');
+
+  await p.click('#order-units button[data-unit="H1"]');
+  await p.click('#order-groups button[data-group="roe"]');
+  const o0 = await p.evaluate(() => window.__brzer.game.world.orders.length);
+  await p.click('#order-verbs button[data-verb="roe_elastic"]');
+  await p.click('#order-send');
+  await p.waitForTimeout(300);
+  check('二日目でも命令は一通',
+    (await p.evaluate(() => window.__brzer.game.world.orders.length)) === o0 + 1);
+  check('二日目の記録簿は白紙から始まる',
+    (await p.$$('#radiolog li')).length <= 3,
+    `${(await p.$$('#radiolog li')).length}`);
+
+  // 戦役をやめてブリーフィングへ戻る
+  await p.click('#btn-hhour');
+  await runClock(p, 60);
+  await p.waitForSelector('#view-debrief.is-active', { timeout: 240000 });
+  await p.waitForTimeout(700);
+  await p.click('#btn-nextday');
+  await p.waitForTimeout(500);
+
+  // 閉じても続きから戦える
+  await p.reload({ waitUntil: 'networkidle' });
+  await p.waitForFunction(() => document.querySelectorAll('#campaign-pick button').length > 0,
+    null, { timeout: 10000 });
+  check('途中の戦役が残っている',
+    (await p.textContent('#campaign-pick button[data-campaign]')).includes('途中まで'));
+  await p.click('#campaign-pick button[data-campaign]');
+  await p.waitForTimeout(400);
+  check('続きから開く', (await p.textContent('#camp-day')).includes('ザーレン'),
+    await p.textContent('#camp-day'));
+
+  // やめれば消える
+  await p.click('#btn-abandon');
+  await p.waitForTimeout(300);
+  check('やめればブリーフィングへ戻る', await p.isVisible('#view-briefing'));
+  check('やめれば記録も消える',
+    !(await p.textContent('#campaign-pick button[data-campaign]')).includes('途中まで'));
+
+  check('戦役でエラーが出ない', errs.length === 0, errs.slice(0, 3).join(' | '));
   await ctx.close();
 }
 
@@ -562,6 +790,12 @@ try {
   await page.waitForTimeout(900);
   check('戦闘画面へ移る', await page.isVisible('#view-game'));
   check('目標行が入る', (await page.textContent('#objective-line')).length > 0);
+
+  // この通しでは戦闘そのものを見る。H時前の検査は checkPlanning に分けてある。
+  check('H時前から始まる', await page.isVisible('#planbar'));
+  await page.click('#btn-hhour');
+  await page.waitForTimeout(300);
+  check('H時で時計が回り始める', await page.evaluate(() => window.__brzer.game.running));
 
   // 地図が「紙」として描けているか（真っ黒でないこと）
   const painted = await page.evaluate(() => {
@@ -803,10 +1037,7 @@ try {
 
   console.log('\n== 無線から地図へ ==');
   // 接敵報告が出るまで進めてから、その一行を叩く
-  await page.evaluate(() => {
-    window.__brzer.game.speed = 30;
-    window.__brzer.game.running = true;
-  });
+  await runClock(page, 30);
   await page.waitForSelector('#radiolog li[data-grid] [data-act="mark"]', { timeout: 120000 });
   await page.evaluate(() => { window.__brzer.game.running = false; });
   const marksBefore = await page.evaluate(() => window.__brzer.game.belief.markers.length);
@@ -820,10 +1051,7 @@ try {
   }));
 
   console.log('\n== 決着まで ==');
-  await page.evaluate(() => {
-    window.__brzer.game.speed = 45;
-    window.__brzer.game.running = true;
-  });
+  await runClock(page, 45);
   await page.waitForSelector('#view-debrief.is-active', { timeout: 240000 });
   await page.waitForTimeout(1200);
 
@@ -911,7 +1139,13 @@ try {
   await mp.waitForTimeout(300);
   check('地図タブでシートが閉じる', !(await mp.$eval('#side', (e) => e.classList.contains('is-open'))));
 
-  // 部隊の方眼を叩くと、その位置へ跳ぶ
+  // 部隊の方眼を叩くと、その位置へ跳ぶ。
+  // 方眼は「無線で聞いた位置」なので、H時を宣言して交信が始まるまでは出ない。
+  await mp.click('#btn-hhour');
+  await runClock(mp, 30);
+  // 部隊タブを開くまでは見えない場所にあるので、あることだけ確かめる
+  await mp.waitForSelector('#roster button.roster__grid', { state: 'attached', timeout: 60000 });
+  await mp.evaluate(() => { window.__brzer.game.running = false; });
   await mp.click('.tabbar__btn[data-tab="roster"]');
   await mp.waitForTimeout(300);
   // 部隊一覧は毎フレーム描き直されるので、要素を掴まずセレクタで押す
@@ -974,6 +1208,12 @@ try {
 
   section('自動記入');
   await checkAutoPlot();
+
+  section('H時前の作戦命令');
+  await checkPlanning();
+
+  section('戦役');
+  await checkCampaign();
 
   section('演習モード');
   await checkCreative();

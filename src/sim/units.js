@@ -3,6 +3,8 @@
 import { clamp, dist } from '../util.js';
 import { mobilityAt, coverAt, obstacleAt } from './terrain.js';
 import { findPath } from './pathfind.js';
+import { officerFactors } from './officers.js';
+import { attachmentMods } from './attachments.js';
 
 /**
  * 兵種テンプレート。
@@ -113,6 +115,10 @@ export function createUnit(def) {
     fatigue: def.fatigue ?? 0,
     skill: def.skill ?? tpl.skill,
 
+    // 任務編成。どの分隊に何を付けたか ─ 紙の編成表と実際の部隊の違い。
+    attach: [...(def.attach ?? [])],
+    mods: attachmentMods(def.attach),
+
     state: def.state ?? 'holding',
     posture: def.posture ?? 'normal',
     path: [],
@@ -184,8 +190,13 @@ export function currentSpeed(u, terrain) {
   // 障害の本当の効果は「止めること」ではなく「遅らせること」である ―
   // 遅れたぶんだけ、こちらの火力がそこに集まる。
   const obs = u.tpl.flying ? null : obstacleAt(terrain, u.x, u.y);
-  const obstacleFactor = obs ? (obs.kind === 'wire' ? 0.5 : 0.62) : 1;
-  return u.tpl.speed * mob * posture.speed * suppressionFactor * fatigueFactor * obstacleFactor;
+  // 工兵が付いていれば、鉄条網は切れるし地雷原には道が拓ける。
+  // 障害が止めるのは「処理する道具を持たない部隊」だけである。
+  const obstacleFactor = obs
+    ? Math.min(1, (obs.kind === 'wire' ? 0.5 : 0.62) * u.mods.obstacle)
+    : 1;
+  return u.tpl.speed * u.mods.speed * mob * posture.speed *
+    suppressionFactor * fatigueFactor * obstacleFactor;
 }
 
 /** 目的地を設定して経路を引く */
@@ -284,6 +295,7 @@ export function applyDamage(u, amount, now, opts = {}) {
   if (opts.friendly && lost > 0) u.killedByFriendly = true;
 
   if (lost > 0) {
+    u.hitCount = (u.hitCount ?? 0) + 1;
     // 損害は士気を削る。損耗の「割合」に比例させる。
     // 定数項を足すと毎ティック課金されて一瞬で崩壊するので入れない。
     const share = lost / u.maxStrength;
@@ -292,7 +304,10 @@ export function applyDamage(u, amount, now, opts = {}) {
     // 倒れた者が全員死ぬわけではない。手当てが届けば戻ってくる者がいる ―
     // 短い戦闘では誤差だが、半日守るならこれが最後の1個分隊を作る。
     // 装甲車輌は別（乗員は助かっても車輌は戻らない）。
-    if (!u.tpl.armor || u.tpl.armor < 0.3) u.walkingWounded += lost * 0.3;
+    // 面倒見のよい下士官の分隊は、倒れた者を必ず引きずって帰ってくる。
+    if (!u.tpl.armor || u.tpl.armor < 0.3) {
+      u.walkingWounded += lost * 0.3 * officerFactors(u.officer).care * u.mods.care;
+    }
   }
 
   if (u.strength <= 0.05) {
@@ -347,7 +362,9 @@ export function effectiveCover(u, terrain) {
   const posture = POSTURES[u.posture] ?? POSTURES.normal;
   // 死守を命じられた部隊は、退がる算段をしない分だけ深く掘る
   const resolve = u.roe === 'hold_fast' ? 0.06 : 0;
-  return clamp(coverAt(terrain, u.x, u.y) + posture.coverBonus + resolve, 0, 0.92);
+  // 工兵の手が入った陣地は、同じ地面でも深い。
+  const dug = (coverAt(terrain, u.x, u.y) + posture.coverBonus) * u.mods.cover;
+  return clamp(dug + resolve, 0, 0.94);
 }
 
 /** 日本語の状態表記 */

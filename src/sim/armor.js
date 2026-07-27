@@ -65,14 +65,14 @@ function apAtRange(shooter, d) {
 
 /** 貫徹比。1 を超えれば貫く。 */
 export function penetrationRatio(shooter, target, d) {
-  const ap = shooter.tpl.ap * apAtRange(shooter, d);
+  const ap = shooter.tpl.ap * (shooter.mods?.ap ?? 1) * apAtRange(shooter, d);
   const armor = armorValueAt(shooter, target);
   return ap / Math.max(0.05, armor);
 }
 
 /** その射手が、その目標を装甲戦闘として解決すべきか */
 export function isArmorDuel(shooter, target) {
-  return target.tpl.armor >= 0.3 && shooter.tpl.ap >= 0.45;
+  return target.tpl.armor >= 0.3 && shooter.tpl.ap * (shooter.mods?.ap ?? 1) >= 0.45;
 }
 
 /** 装甲目標に対して、その射手に見込みがあるか（目標選定用） */

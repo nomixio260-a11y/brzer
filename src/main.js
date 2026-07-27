@@ -29,6 +29,23 @@ import {
   getCallsigns,
   setAutoPlot,
   plotContact,
+  startClock,
+  isPlanning,
+  newCampaign,
+  loadCampaign,
+  saveCampaign,
+  clearCampaign,
+  startCampaignBattle,
+  finishCampaignBattle,
+  getCampaignView,
+  getCompany,
+  getAttachState,
+  assignReplacement,
+  allotRounds,
+  setNightPlan,
+  attachTo,
+  detachFrom,
+  campaignList,
 } from './state.js';
 
 import {
@@ -45,8 +62,8 @@ import {
 } from './ui/mapview.js';
 import { attachMapInput } from './ui/mapinput.js';
 import { symbolChip, symbolFor } from './ui/symbolchip.js';
-import { createRoster, renderRoster, selectInRoster } from './ui/roster.js';
-import { createRadioLog, appendEntries } from './ui/radiolog.js';
+import { createRoster, renderRoster, selectInRoster, rebindRoster } from './ui/roster.js';
+import { createRadioLog, appendEntries, clearLog } from './ui/radiolog.js';
 import {
   createOrderPanel,
   selectUnit,
@@ -57,9 +74,11 @@ import {
   submit as submitOrder,
   cancel as cancelOrder,
   refresh as refreshOrders,
+  rebindOrderPanel,
 } from './ui/orderpanel.js';
-import { createHud, renderHud } from './ui/hud.js';
+import { createHud, renderHud, rebindHud } from './ui/hud.js';
 import { showDebrief } from './ui/debrief.js';
+import { renderCampaign } from './ui/campaign.js';
 import { fromGrid, formatClock, WORLD } from './util.js';
 // 検査用の窓口。?debug=1 のときだけ window に出す（本番の遊びには一切関わらない）。
 import * as stateApi from './state.js';
@@ -251,18 +270,89 @@ function showView(id) {
 }
 
 /* ================================================================== */
+/* 戦役                                                                */
+/* ================================================================== */
+//
+// 戦闘そのものは今までどおり。戦役は、その前後に画面を一枚ずつ足しただけである。
+//   ブリーフィング → 戦役の画面 → 戦闘（H時前 → 戦闘）→ 講評 → 戦役の画面 → …
+
+let campaign = null;
+
+const campDom = () => ({
+  title: $('camp-title'),
+  sub: $('camp-sub'),
+  day: $('camp-day'),
+  prologue: $('camp-prologue'),
+  frontFill: $('camp-frontfill'),
+  frontValue: $('camp-frontvalue'),
+  company: $('camp-company'),
+  allot: $('camp-allot'),
+  night: $('camp-night'),
+  history: $('camp-history'),
+  historyBlock: $('camp-history-block'),
+});
+
+function drawCampaign() {
+  if (!campaign) return;
+  const view = getCampaignView(campaign);
+  const att = getAttachState(campaign);
+
+  renderCampaign(campDom(), view, getCompany(campaign), {
+    ...att,
+    onAssign: (id, n) => { assignReplacement(campaign, id, n); saveCampaign(campaign); drawCampaign(); },
+    onAllot: (kind, n) => { allotRounds(campaign, kind, n); saveCampaign(campaign); drawCampaign(); },
+    onNight: (id) => { setNightPlan(campaign, id); saveCampaign(campaign); drawCampaign(); audio.click(); },
+    onAttach: (id, a, t) => { attachTo(campaign, id, a, t); saveCampaign(campaign); drawCampaign(); audio.click(); },
+    onDetach: (id, a) => { detachFrom(campaign, id, a); saveCampaign(campaign); drawCampaign(); audio.click(); },
+  });
+
+  // 終わった戦役では出撃できない。残るのは結果と、やり直しだけである。
+  const done = view.finished;
+  $('btn-sortie').hidden = done;
+  $('btn-abandon').textContent = done ? '新しい戦役を始める' : '戦役をやめる';
+  const res = $('camp-result');
+  res.hidden = !done;
+  if (done) {
+    res.innerHTML = '';
+    const b = document.createElement('b');
+    b.className = `is-${view.result}`;
+    b.textContent = { victory: '戦役 ─ 勝利', narrow: '戦役 ─ 辛勝', defeat: '戦役 ─ 敗北' }[view.result] ?? '終わり';
+    res.append(b, document.createTextNode(view.resultReason ?? ''));
+  }
+  document.title = `BRZER ─ ${view.title}`;
+}
+
+function openCampaign() {
+  if (!campaign) campaign = loadCampaign() ?? newCampaign();
+  drawCampaign();
+  showView('view-campaign');
+}
+
+function beginCampaignStage() {
+  const g = startCampaignBattle(campaign, { autoPlot: options.autoPlot });
+  if (!g) return;
+  saveCampaign(campaign);
+  enterBattle(g, { creative: false });
+}
+
+/* ================================================================== */
 /* 開始                                                                */
 /* ================================================================== */
 
-function startMission() {
+function readOptions() {
   options.variable = $('opt-variable').checked;
   options.voice = $('opt-voice').checked;
   options.creative = $('opt-creative').checked;
   options.autoPlot = $('opt-autoplot').checked;
   saveAutoPlot(options.autoPlot);
+}
+
+function startMission() {
+  readOptions();
+  campaign = null;
 
   // 敵の企図を変えるなら、下敷きに作った盤は捨てて作り直す
-  game =
+  const g =
     options.variable || options.creative || !previewGame ||
     previewGame.world.mission.id !== pickedMission
       ? createGame({
@@ -272,20 +362,51 @@ function startMission() {
         })
       : previewGame;
   previewGame = null;
+  enterBattle(g, { creative: options.creative });
+}
+
+/**
+ * 盤を戦闘画面に載せる。
+ * 単発の戦闘も戦役の一日も、ここから先は同じ道を通る。
+ */
+// 画面の部品と、その聞き手。
+//
+// createRoster / createRadioLog / createOrderPanel / createHud / attachMapInput は
+// いずれも「戦闘が終わっても残る要素」に委譲で聞き手を結ぶ。
+// 戦役では画面を読み込み直さずに二日目へ入るので、作り直せば聞き手が積み上がる ─
+// 二日目は駒が2つ置かれ、取消が2手戻り、拡大が2段飛ぶ。
+// だから部品を作るのは一度きりにして、以後は盤だけを差し替える。
+let panelsBuilt = false;
+
+function enterBattle(g, { creative = false } = {}) {
+  game = g;
   setAutoPlot(game, options.autoPlot);
   syncAutoPlotButton();
-  document.body.classList.toggle('is-drill', options.creative);
 
   showView('view-game');
   audio.initAudio();
   audio.setVoiceEnabled(options.voice);
   audio.resume();
 
-  buildToolbox();
-
   mapView = createMapView($('map'), game);
   // 縦長の画面では、全体表示だと上下が大きく余る。最初から画面を満たしておく。
   if (isNarrow()) setZoom(mapView, coverZoom(mapView));
+
+  if (panelsBuilt) {
+    rebindRoster(rosterView, game);
+    rebindOrderPanel(orderPanel, game);
+    rebindHud(hud, game);
+    clearLog(logView);
+    unread = 0;
+    $('tab-unread').hidden = true;
+    hideMarkerEditor();
+    $('map-hint').hidden = true;
+    finishBattleWiring(creative);
+    return;
+  }
+  panelsBuilt = true;
+
+  buildToolbox();
 
   rosterView = createRoster($('roster'), game, (unitId) => {
     selectUnit(orderPanel, unitId);
@@ -374,26 +495,63 @@ function startMission() {
     { onSpeed: setSpeed }
   );
 
-  // 演習の釦は演習の盤にしか出ない
-  $('btn-reveal').hidden = !isCreative(game);
-  $('btn-reveal').classList.toggle('is-on', !!getCreative(game)?.reveal);
-
   wireMap();
   wireTabs();
   wireSheet();
   wireZoom();
 
+  finishBattleWiring(creative);
+}
+
+/** 盤ごとに毎回やること（聞き手を結ばない部分） */
+function finishBattleWiring(creative) {
+  // 演習の釦は演習の盤にしか出ない
+  $('btn-reveal').hidden = !isCreative(game);
+  $('btn-reveal').classList.toggle('is-on', !!getCreative(game)?.reveal);
+  document.body.classList.toggle('is-drill', creative);
+
   if (new URLSearchParams(location.search).has('debug')) {
-    window.__brzer = { game, get mapView() { return mapView; }, tool, state: stateApi };
+    window.__brzer = {
+      get game() { return game; },
+      get mapView() { return mapView; },
+      get campaign() { return campaign; },
+      tool,
+      state: stateApi,
+    };
   }
 
   // 半日の戦闘では、静穏を飛ばすための x8 を出す
   $('speed-8').hidden = !isLongBattle(game);
 
-  game.running = true;
+  // H時前。時計は止まっており、部下はまだ目の前にいる。
+  syncPlanBar();
+  game.running = !isPlanning(game);
   game.speed = 1;
   lastFrame = performance.now();
+  if (rafId) cancelAnimationFrame(rafId);
   loop(lastFrame);
+}
+
+/** H時前の帯の出し入れ */
+function syncPlanBar() {
+  const on = isPlanning(game);
+  $('planbar').hidden = !on;
+  document.body.classList.toggle('is-planning', on);
+  $('clock').classList.toggle('is-planning', on);
+  document.querySelector('.speed').classList.toggle('is-off', on);
+}
+
+/** H時を宣言する。ここから先は無線だけになる。 */
+function declareHHour() {
+  if (!game || !isPlanning(game)) return;
+  startClock(game);
+  syncPlanBar();
+  audio.click();
+  showToast(
+    'H時',
+    '時計が回り始めた。ここから先、部下と貴官を繋ぐのは無線だけである。',
+    false
+  );
 }
 
 /* ================================================================== */
@@ -424,8 +582,13 @@ function loop(t) {
     audio.stopSpeaking();
     cancelAnimationFrame(rafId);
     rafId = null;
+    // 戦役なら、この一戦を帳簿に取り込む（損害も経歴も、ここで確定する）
+    if (game.campaign) finishCampaignBattle(game);
+
     setTimeout(() => {
       showView('view-debrief');
+      $('btn-nextday').hidden = !game.campaign;
+      $('btn-again').hidden = !!game.campaign;
       showDebrief(
         {
           verdict: $('debrief-verdict'),
@@ -486,6 +649,11 @@ function showToast(head, text, urgent) {
 
 function setSpeed(s) {
   if (!game) return;
+  // H時前に「進め」を押したなら、それはH時の宣言である。
+  if (isPlanning(game)) {
+    if (s > 0) declareHHour();
+    return;
+  }
   if (s > (game.maxSpeed ?? 4)) return; // 短期戦に x8 はない
   if (s === 0) {
     game.running = false;
@@ -1053,7 +1221,8 @@ window.addEventListener('keydown', (e) => {
   switch (e.key) {
     case ' ':
       e.preventDefault();
-      setSpeed(game.running ? 0 : game.speed || 1);
+      if (isPlanning(game)) declareHHour();
+      else setSpeed(game.running ? 0 : game.speed || 1);
       break;
     case '1': setSpeed(1); break;
     case '2': setSpeed(2); break;
@@ -1124,5 +1293,95 @@ $('btn-reveal').addEventListener('click', () => {
   audio.click();
 });
 
+/* --- 戦役の結線 ---------------------------------------------------- */
+
+function buildCampaignPicker() {
+  const wrap = $('campaign-pick');
+  wrap.innerHTML = '';
+  const saved = loadCampaign();
+
+  for (const c of campaignList()) {
+    const b = document.createElement('button');
+    b.className = 'missionpick__opt';
+    b.dataset.campaign = c.id;
+    const t = document.createElement('b');
+    t.textContent = c.title;
+    const tag = document.createElement('i');
+    tag.className = 'missionpick__tag';
+    tag.textContent = `${c.stages.length}日間 ─ 連続作戦`;
+    t.appendChild(tag);
+    const line = document.createElement('em');
+    line.textContent = saved && saved.campaignId === c.id && !saved.finished
+      ? `途中まで進んでいる（${saved.stage + 1}日目から／戦線 ${Math.round(saved.front)}）`
+      : c.stages.map((st) => st.title).join(' → ');
+    const note = document.createElement('span');
+    note.textContent = c.blurb;
+    b.append(t, line, note);
+    wrap.appendChild(b);
+  }
+
+  // 更新内容への入口。ここに置くのが一番目に入る。
+  const nb = document.createElement('button');
+  nb.className = 'btn notesbtn';
+  nb.id = 'btn-notes';
+  nb.textContent = '更新内容 v2.0「継戦」';
+  wrap.appendChild(nb);
+}
+
+$('campaign-pick').addEventListener('click', (e) => {
+  if (e.target.closest('#btn-notes')) {
+    showView('view-notes');
+    audio.click();
+    return;
+  }
+  const b = e.target.closest('button[data-campaign]');
+  if (!b) return;
+  readOptions();
+  const saved = loadCampaign();
+  campaign = saved && saved.campaignId === b.dataset.campaign && !saved.finished
+    ? saved
+    : newCampaign(b.dataset.campaign);
+  saveCampaign(campaign);
+  openCampaign();
+  audio.click();
+});
+
+$('btn-notes-back').addEventListener('click', () => {
+  showView('view-briefing');
+  audio.click();
+});
+
+$('btn-sortie').addEventListener('click', () => {
+  audio.initAudio();
+  audio.setVoiceEnabled(options.voice);
+  beginCampaignStage();
+});
+
+$('btn-abandon').addEventListener('click', () => {
+  const view = getCampaignView(campaign);
+  if (view?.finished) {
+    campaign = newCampaign(campaign.campaignId);
+    saveCampaign(campaign);
+    buildCampaignPicker();
+    drawCampaign();
+    audio.click();
+    return;
+  }
+  clearCampaign();
+  campaign = null;
+  buildCampaignPicker();
+  showView('view-briefing');
+  audio.click();
+});
+
+$('btn-nextday').addEventListener('click', () => {
+  audio.stopSpeaking();
+  openCampaign();
+  audio.click();
+});
+
+$('btn-hhour').addEventListener('click', declareHHour);
+
 syncAutoPlotButton();
+buildCampaignPicker();
 fillBriefing();

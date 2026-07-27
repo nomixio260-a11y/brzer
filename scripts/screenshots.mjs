@@ -25,9 +25,14 @@ await page.screenshot({ path: `${OUT}/briefing.png` });
 await page.click('#btn-start');
 await page.waitForTimeout(500);
 
+// H時を宣言しないと時計が動かない（作戦命令を渡す間は止まっている）
+await page.click('#btn-hhour');
+await page.waitForTimeout(300);
+
 // 0808 まで飛ばす ― 陽動が北岸に貼りつき、迂回部隊が動き出している頃
 await page.evaluate(() => {
   window.__brzer.game.speed = 40;
+  window.__brzer.game.running = true;
 });
 await page.waitForFunction(() => window.__brzer.game.world.now >= 8 * 3600 + 8 * 60, { timeout: 120000 });
 await page.evaluate(() => {

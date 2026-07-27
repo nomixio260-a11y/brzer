@@ -7,6 +7,20 @@ import { formatAgo, formatClock } from '../util.js';
 // 砲兵・ドローン・段列には交戦規定を与えない（陣地を守る部隊ではない）
 const NO_ROE = new Set(['TH', 'EG', 'LD']);
 
+/**
+ * 盤を差し替える。
+ *
+ * 聞き手は「ずっとそこにある要素」に付いているので、戦闘のたびに
+ * createRoster を呼び直すと二日目は全ての操作が二度効く。
+ * 作るのは一度きりにして、盤だけを取り替える。
+ */
+export function rebindRoster(view, game) {
+  view.game = game;
+  view.selectedId = null;
+  view._sig = '';
+  view.el.innerHTML = '';
+}
+
 export function createRoster(el, game, onSelect, onJumpToGrid, onMark) {
   const view = { el, game, onSelect, selectedId: null, _sig: '' };
   el.addEventListener('click', (e) => {
@@ -80,6 +94,32 @@ export function renderRoster(view) {
       tag.textContent = roe.label;
       tag.title = roe.note;
       top.insertBefore(tag, top.lastElementChild); // 時刻は右端に残す
+    }
+
+    // 率いている者と、付けてある分派。
+    // どちらも「前線の様子」ではなく「自分が決めた編成」なので、常に分かる。
+    if (row.officer || row.attach) {
+      const who = document.createElement('div');
+      who.className = 'roster__officer';
+      if (row.officer) {
+        const b = document.createElement('b');
+        b.textContent = row.officer;
+        who.appendChild(b);
+        if (row.temperament) {
+          const t = document.createElement('span');
+          t.className = 'roster__temp';
+          t.textContent = row.temperament;
+          who.appendChild(t);
+        }
+      }
+      if (row.attach) {
+        const a = document.createElement('span');
+        a.className = 'roster__attach';
+        a.textContent = row.attach;
+        a.title = row.attachLabels;
+        who.appendChild(a);
+      }
+      li.appendChild(who);
     }
 
     // 兵力の帯。数字だけより「あとどれだけ保つか」が掴みやすい。

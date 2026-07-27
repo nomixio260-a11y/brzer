@@ -24,8 +24,22 @@ import { composeSitrep } from '../src/sim/reports.js';
 import { findPath } from '../src/sim/pathfind.js';
 import {
   createGame, advance, getMarkers, markUnit, updateMarker, removeMarker,
-  setAutoPlot, isAutoPlot, plotContact,
+  setAutoPlot, isAutoPlot, plotContact, startClock, isPlanning,
+  newCampaign, startCampaignBattle, finishCampaignBattle, getCampaignView, getCompany,
+  assignReplacement, allotRounds, setNightPlan, campaignList,
 } from '../src/state.js';
+import { endPlanning } from '../src/sim/world.js';
+import {
+  rollOfficers, createOfficer, officerFactors, debriefOfficer, TEMPERAMENTS,
+} from '../src/sim/officers.js';
+import {
+  attachmentMods, fits, canBreach, SLOTS_PER_UNIT,
+} from '../src/sim/attachments.js';
+import { isArmorDuel } from '../src/sim/armor.js';
+import {
+  replacementRoom, serializeCampaign, deserializeCampaign,
+} from '../src/sim/campaign.js';
+import { Rng } from '../src/util.js';
 
 let failures = 0;
 let checks = 0;
@@ -1141,6 +1155,8 @@ section('演習モード');
 section('自動記入');
 {
   const runFor = (g, seconds) => {
+    // H時を宣言しないと時計は動かない（作戦命令を渡す間は止まっている）。
+    if (isPlanning(g)) startClock(g);
     g.running = true;
     // advance() は実秒を受ける。1回 0.5 実秒 = 3 秒ぶん進む。
     for (let i = 0; i < seconds / 3 && !g.finished; i++) advance(g, 0.5);
@@ -1212,6 +1228,240 @@ section('自動記入');
   };
   plotContact(g3, lost);
   check('聞こえなかった報告は写らない', getMarkers(g3).length === 0);
+}
+
+/* ------------------------------------------------------------------ */
+
+section('H時前の作戦命令');
+{
+  const w = createWorld({ missionId: 'bridge_hold', planning: true });
+  check('既定で計画中', w.planning === true);
+
+  const before = w.radio.queue.length;
+  issueOrder(w, { unitId: 'H1', verb: 'defend', x: 2380, y: 1180 });
+  issueOrder(w, { unitId: 'TH', verb: 'register', x: 2400, y: 900 });
+  check('計画の命令は網に乗らない', w.radio.queue.length === before, `${w.radio.queue.length}`);
+  check('計画の命令は即座に受領される', w.orders.every((o) => o.state === 'received'));
+
+  tick(w, 1);
+  check('概定射点は前夜のうちに諸元が出る',
+    w.registrations.length === 1 && w.registrations[0].readyAt <= w.now,
+    JSON.stringify(w.registrations));
+  // 網に増えるのは大隊本部からの一報だけで、部下の復唱は乗らない
+  check('復唱も網に乗らない',
+    !w.radio.queue.some((t) => t.kind === 'ack') &&
+    !w.radio.log.some((l) => l.kind === 'ack'),
+    w.radio.queue.map((t) => t.kind).join(','));
+  check('命令書は記録簿に残る',
+    w.radio.log.some((l) => l.kind === 'system' && l.text.includes('作戦命令')));
+
+  endPlanning(w);
+  check('H時で計画は畳まれる', w.planning === false);
+  const q = w.radio.queue.length;
+  issueOrder(w, { unitId: 'H2', verb: 'defend', x: 2300, y: 1300 });
+  check('H時以後の命令は網に乗る', w.radio.queue.length > q);
+
+  // 単発の戦闘でも、標定に時間が要ることは変わらない
+  const w2 = createWorld({ missionId: 'bridge_hold' });
+  check('計画を渡さなければ最初から時計が動く', w2.planning === false);
+  issueOrder(w2, { unitId: 'TH', verb: 'register', x: 2400, y: 900 });
+  for (let i = 0; i < 30; i++) tick(w2, 1);
+  check('戦闘中の標定には時間が要る',
+    w2.registrations.length === 1 && w2.registrations[0].readyAt > w2.now,
+    JSON.stringify(w2.registrations));
+}
+
+/* ------------------------------------------------------------------ */
+
+section('将校');
+{
+  const rng = new Rng(4242);
+  const roster = [
+    { id: 'H1', callsign: 'ハンマー1', unitType: 'infantry' },
+    { id: 'H2', callsign: 'ハンマー2', unitType: 'infantry' },
+    { id: 'TH', callsign: 'ソーン', unitType: 'mortar' },
+  ];
+  const officers = rollOfficers(rng, roster);
+  check('全員に将校が付く', officers.size === 3);
+  check('同姓が並ばない', new Set([...officers.values()].map((o) => o.name)).size === 3);
+  check('階級が兵科に見合う', ['准尉', '少尉'].includes(officers.get('TH').rank), officers.get('TH').rank);
+
+  // 気質は係数に出る。ただし極端には振れない。
+  for (const id of Object.keys(TEMPERAMENTS)) {
+    const f = officerFactors(createOfficer({ unitId: 'X', temperament: id }));
+    const bad = Object.entries(f).filter(([, v]) => !(v >= 0.6 && v <= 1.6));
+    check(`${TEMPERAMENTS[id].label}の係数が範囲内`, bad.length === 0, JSON.stringify(bad));
+  }
+  check('将校が居なければ全て並', Object.values(officerFactors(null)).every((v) => v === 1));
+
+  // 特性は与えるものではなく生えるもの
+  const o = createOfficer({ unitId: 'H1', callsign: 'ハンマー1', temperament: 'steady' });
+  check('最初は特性を持たない', o.traits.length === 0);
+  const gained = debriefOfficer(o, {
+    survived: true, strengthRatio: 0.6, lossRatio: 0.3, inflicted: 2,
+    heldUnderFire: true, selfWithdrew: false, refusedOrders: 0, transmissions: 9, avgResponse: 40,
+  });
+  check('砲撃下で線を動かさなければ不動が付く',
+    o.traits.includes('ironhearted'), o.traits.join(','));
+  check('生えた特性が返る', gained.some((t) => t.label === '不動'));
+  check('生き延びた戦闘が経験になる', o.xp === 1 && o.battles === 1);
+  check('特性は係数を動かす', officerFactors(o).nerve > officerFactors(
+    createOfficer({ unitId: 'H1', temperament: 'steady' })).nerve);
+
+  const o2 = createOfficer({ unitId: 'H2', temperament: 'steady' });
+  debriefOfficer(o2, { survived: true, strengthRatio: 0.3, lossRatio: 0.7, inflicted: 0 });
+  check('半分に削られた者には手負いが付く', o2.traits.includes('scarred'), o2.traits.join(','));
+  check('三つを超えて札は提げない', (() => {
+    const o3 = createOfficer({ unitId: 'H3', temperament: 'steady' });
+    for (let i = 0; i < 6; i++) {
+      debriefOfficer(o3, {
+        survived: true, strengthRatio: 0.3, lossRatio: 0.5, inflicted: 9,
+        heldUnderFire: true, selfWithdrew: false, refusedOrders: 3,
+        transmissions: 1, avgResponse: 10, woundedRecovered: 4,
+      });
+    }
+    return o3.traits.length <= 3;
+  })());
+
+  // 気質は実際の戦闘に効く
+  const w = createWorld({ missionId: 'bridge_hold' });
+  const h1 = w.unitsById.get('H1');
+  check('単発の戦闘に将校は居ない', !h1.officer);
+  const w2 = createWorld({
+    missionId: 'bridge_hold',
+    setup: { units: {}, officers: new Map([['H1', createOfficer({ unitId: 'H1', temperament: 'meticulous' })]]) },
+  });
+  check('戦役では部隊に将校が付く', !!w2.unitsById.get('H1').officer);
+  check('熟練は腕に出る', w2.unitsById.get('H1').skill !== h1.skill);
+}
+
+/* ------------------------------------------------------------------ */
+
+section('任務編成');
+{
+  check('分派は兵科を選ぶ', fits('mg', 'infantry') && !fits('mg', 'mortar'));
+  const m = attachmentMods(['mg', 'eng']);
+  check('分派は掛け算で効く', m.firepower > 1 && m.speed < 1 && m.cover > 1, JSON.stringify(m));
+  check('何も付けなければ全て並',
+    Object.values(attachmentMods([])).every((v) => v === 1));
+
+  const mk = (attach) => createWorld({
+    missionId: 'bridge_hold',
+    setup: { units: {}, officers: new Map(), attach },
+  }).unitsById.get('H1');
+
+  const plain = mk({});
+  const mg = mk({ H1: ['mg'] });
+  check('機関銃班で火力が上がる', mg.mods.firepower > plain.mods.firepower);
+  check('機関銃班で足が鈍る', mg.mods.speed < plain.mods.speed);
+
+  const wEng = createWorld({
+    missionId: 'bridge_hold', setup: { units: {}, officers: new Map(), attach: { H1: ['eng'] } },
+  });
+  const wPlain = createWorld({ missionId: 'bridge_hold' });
+  check('工兵で掩体が深くなる',
+    effectiveCover(wEng.unitsById.get('H1'), wEng.terrain) >
+    effectiveCover(wPlain.unitsById.get('H1'), wPlain.terrain));
+  check('工兵は障害を処理できる', canBreach(wEng.unitsById.get('H1')));
+  check('素の分隊は障害を処理できない', !canBreach(wPlain.unitsById.get('H1')));
+
+  const at = mk({ H1: ['at'] });
+  const tank = { tpl: { armor: 0.88 } };
+  const apOf = (u) => u.tpl.ap * u.mods.ap;
+  check('対戦車小隊で対装甲火力が上がる', apOf(at) > apOf(plain) * 2, `${apOf(plain)}→${apOf(at)}`);
+  check('付けた部隊は装甲と撃ち合える', isArmorDuel(at, tank));
+  check('一個の部隊に3つは付かない', SLOTS_PER_UNIT === 2);
+}
+
+/* ------------------------------------------------------------------ */
+
+section('戦役');
+{
+  const st = newCampaign('volne_three_days', 20260727);
+  check('三日である', getCampaignView(st).stageCount === 3);
+  check('初日は峠', getCampaignView(st).stage.missionId === 'kolp_delay');
+  check('全段階の任務が実在する', (() => {
+    const ids = new Set(missionList().map((m) => m.id));
+    return campaignList()[0].stages.every((s) => ids.has(s.missionId));
+  })());
+  check('全員に名前が配られる', getCompany(st).every((r) => !!r.officer), '');
+  check('三日目に初めて出る部隊にも名前がある', (() => {
+    const st2 = newCampaign('volne_three_days', 11);
+    return !!st2.officers.get('SH');
+  })());
+
+  // 補充は定員まで、かつ一晩ぶんまで
+  st.carry.H1.strength = 2;
+  check('壊滅した分隊は一晩では戻らない', replacementRoom(st, 'H1') === 4, `${replacementRoom(st, 'H1')}`);
+  assignReplacement(st, 'H1', 99);
+  check('手持ちを超えて配れない', st.assign.H1 <= st.pool.replacements, `${st.assign.H1}`);
+
+  // 弾薬の割り当ては次の戦闘に上乗せされる
+  st.assign = {};
+  allotRounds(st, 'rounds', 3);
+  const g = startCampaignBattle(st);
+  check('戦役の一戦が起こせる', !!g);
+  check('割り当てた砲弾が上乗せされる',
+    g.world.support.artillery.rounds === g.world.mission.support.artillery.rounds + 3,
+    `${g.world.support.artillery.rounds}`);
+  check('戦役の戦闘もH時前から始まる', isPlanning(g));
+
+  // 夜の使い方
+  setNightPlan(st, 'fortify');
+  const gF = startCampaignBattle(st);
+  check('陣地構築で防御の部隊が構築陣地から始まる',
+    [...gF.world.unitsById.values()].some((u) => u.side === 'friend' && u.posture === 'fortified'));
+  setNightPlan(st, 'recon');
+  const gR = startCampaignBattle(st);
+  check('夜間偵察は夜明けに一報が入る',
+    gR.world.radio.log.some((l) => l.from === '夜間斥候'));
+  check('その一報は指揮官に届いている',
+    gR.belief.log.some((l) => l.from === '夜間斥候'));
+
+  // 一戦を回して持ち越す
+  setNightPlan(st, 'rest');
+  const g2 = startCampaignBattle(st);
+  startClock(g2);
+  let guard = 0;
+  while (!g2.finished && guard++ < 6000) advance(g2, 0.5);
+  check('戦役の一戦が決着する', g2.finished && !!g2.world.outcome, `${g2.world.outcome}`);
+
+  const before = st.stage;
+  const res = finishCampaignBattle(g2);
+  check('結果が帳簿に入る', st.stage === before + 1 && st.history.length === 1, `${st.stage}`);
+  check('二度取り込まない', finishCampaignBattle(g2) === res);
+  check('戦線が動く', st.front !== 50, `${st.front}`);
+  check('残兵が持ち越される', Object.keys(st.carry).length > 0);
+  check('将校が一戦ぶん歳を取る',
+    [...st.officers.values()].some((o) => o.battles === 1 || o.fallen));
+
+  const rows = getCompany(st);
+  check('中隊の現況が読める', rows.length >= 6 && rows.every((r) => r.maxStrength > 0));
+  check('弾は減っている', rows.some((r) => r.ammoRatio < 1));
+
+  // 保存と読み出し
+  const raw = serializeCampaign(st);
+  const back = deserializeCampaign(JSON.parse(JSON.stringify(raw)));
+  check('戦役を書き出して読み戻せる',
+    back.stage === st.stage && back.front === st.front &&
+    back.officers.size === st.officers.size &&
+    back.history.length === st.history.length);
+  check('読み戻した将校も特性を持つ',
+    [...back.officers.values()].every((o) => Array.isArray(o.traits)));
+
+  // 三日走り切る
+  const st3 = newCampaign('volne_three_days', 991);
+  let days = 0;
+  while (!st3.finished && days++ < 6) {
+    const gg = startCampaignBattle(st3);
+    startClock(gg);
+    let k = 0;
+    while (!gg.finished && k++ < 6000) advance(gg, 0.5);
+    finishCampaignBattle(gg);
+  }
+  check('戦役が決着する', st3.finished && !!st3.result, `${st3.result}`);
+  check('戦役の結果に理由がある', (st3.resultReason ?? '').length > 5);
+  check('日数は三日を超えない', st3.history.length <= 3, `${st3.history.length}`);
 }
 
 /* ------------------------------------------------------------------ */

@@ -6,6 +6,7 @@ import { enqueue, PRI } from './comms.js';
 import { moraleJa } from './units.js';
 import { localVisibilityJa } from './weather.js';
 import { landmarkAt } from './terrain.js';
+import { officerFactors } from './officers.js';
 
 /**
  * 位置の言い方。
@@ -57,9 +58,10 @@ const EQUIPMENT_JA = {
 /* ------------------------------------------------------------------ */
 
 /** 観測の質から、報告される位置を求める（ずれる） */
-function reportedPosition(c, rng, skill) {
+function reportedPosition(c, rng, skill, accuracy = 1) {
   // 質が低いほど大きくずれる。ドローンや練度の高い部隊はマシ。
-  const sd = (1 - c.quality) * 420 * (1.25 - skill * 0.5) + 45;
+  // 観測班を付けた分隊は、地図と方位盤で位置を出す ─ 目分量とは精度が違う。
+  const sd = ((1 - c.quality) * 420 * (1.25 - skill * 0.5) + 45) / accuracy;
   return {
     x: c.x + rng.gauss(0, sd),
     y: c.y + rng.gauss(0, sd),
@@ -112,7 +114,7 @@ function ammoJa(u) {
  */
 function contactText(u, c, world) {
   const rng = world.rng;
-  const pos = reportedPosition(c, rng, u.skill);
+  const pos = reportedPosition(c, rng, u.skill, u.mods?.accuracy ?? 1);
   const grid = toGrid(pos.x, pos.y);
   const type = TYPE_JA[c.classified] ?? '正体不明';
   const count = countPhrase(c, rng);
@@ -148,7 +150,7 @@ function contactText(u, c, world) {
 /** 続報。様式を繰り返すと無線が埋まるので、変わった所だけ言う。 */
 function contactUpdateText(u, c, world) {
   const rng = world.rng;
-  const pos = reportedPosition(c, rng, u.skill);
+  const pos = reportedPosition(c, rng, u.skill, u.mods?.accuracy ?? 1);
   const grid = toGrid(pos.x, pos.y);
   const type = TYPE_JA[c.classified] ?? '正体不明';
   const move = movementPhrase(c, rng);
@@ -185,7 +187,10 @@ export function stepReporting(world, dt) {
     if (!u.commsOk) continue;
 
     // --- 被弾報告（最優先） ---------------------------------------
-    if (now - u.lastHitAt < 4 && now - (u.lastUnderFireReportAt ?? -Infinity) > REPORT_COOLDOWN) {
+    // 几帳面な者はよく喋り、寡黙な者は要点しか言わない。
+    // 網は一本しかないので、口数の多さはそのまま他の部隊の待ち時間になる。
+    const chatter = officerFactors(u.officer).chatter;
+    if (now - u.lastHitAt < 4 && now - (u.lastUnderFireReportAt ?? -Infinity) > REPORT_COOLDOWN / chatter) {
       u.lastUnderFireReportAt = now;
       const grid = toGrid(u.x, u.y);
       const dire = u.strength / u.maxStrength < 0.55;
@@ -287,7 +292,7 @@ export function stepReporting(world, dt) {
     // 何も起きていない時間も無線は流れている。同じ文面が続くと
     // 「戦場が動いていない」ではなく「作り物」に見えてしまうので言い回しを散らす。
     const quiet = now - Math.max(u.lastReportAt, u.lastHitAt) > 420;
-    if (quiet && rng.chance(0.0016 * dt * 60)) {
+    if (quiet && rng.chance(0.0016 * chatter * dt * 60)) {
       u.lastReportAt = now;
       enqueue(world, {
         from: u.callsign,
@@ -375,7 +380,7 @@ export function composeSitrep(u, world) {
   let enemyPart = '接敵なし';
   if (contacts.length) {
     const c = contacts.sort((a, b) => b.quality - a.quality)[0];
-    const pos = reportedPosition(c, rng, u.skill);
+    const pos = reportedPosition(c, rng, u.skill, u.mods?.accuracy ?? 1);
     enemyPart = `${toGrid(pos.x, pos.y)}に${TYPE_JA[c.classified] ?? '正体不明'}${countPhrase(c, rng)}`;
   }
 

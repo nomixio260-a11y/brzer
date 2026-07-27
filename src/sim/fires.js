@@ -182,7 +182,7 @@ export function walkRounds(world, fm) {
     if (!o.alive || o.side !== 'friend' || !o.commsOk) continue;
     if (o.tpl.indirect) continue; // 砲側は自分の弾着を見ていない
     const dObs = dist(o.x, o.y, fm.x, fm.y);
-    if (dObs > o.tpl.spot * 1.25) continue;
+    if (dObs > o.tpl.spot * (o.mods?.spot ?? 1) * 1.25) continue;
     if (!o.tpl.flying && !lineOfSight(world.terrain, o.x, o.y, fm.x, fm.y).visible) continue;
 
     // その観測者に見えている敵のうち、弾着圏の近くにいるもの
