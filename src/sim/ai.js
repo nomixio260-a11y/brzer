@@ -1,8 +1,9 @@
 // 敵の行動。プレイヤーには見えないので、派手さより「筋の通った圧力」を優先する。
 
-import { clamp, dist, toGrid, bearing, compassJa } from '../util.js';
+import { dist, toGrid, bearing, compassJa } from '../util.js';
 
-import { setDestination, clearDestination } from './units.js';
+import { setDestination, clearDestination, isVehicle } from './units.js';
+import { isPassable } from './terrain.js';
 import { createFireMission } from './combat.js';
 import { visibleEnemies } from './perception.js';
 import { backOffPoint } from './armor.js';
@@ -294,10 +295,15 @@ function resolveGoal(world, u, ai) {
   const onSouthBank = u.y > world.terrain.front(u.x) + 70;
 
   if (ai.crossing && !onSouthBank) {
-    const dCross = dist(u.x, u.y, ai.crossing.x, ai.crossing.y);
-    if (dCross > 90) return ai.crossing;
+    // 車輌に徒歩の間道が割り当てられることがある。通れない道は道ではない ―
+    // その部隊は主通過点へ回す。
+    const cross = isPassable(world.terrain, ai.crossing.x, ai.crossing.y, isVehicle(u))
+      ? ai.crossing
+      : { x: world.terrain.bridge.x, y: world.terrain.bridge.y };
+    const dCross = dist(u.x, u.y, cross.x, cross.y);
+    if (dCross > 90) return cross;
     // 渡河点の上。対岸へ押し出す。
-    return { x: ai.crossing.x, y: world.terrain.front(ai.crossing.x) + 220 };
+    return { x: cross.x, y: world.terrain.front(cross.x) + 220 };
   }
   return ai.objective ?? null;
 }

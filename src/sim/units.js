@@ -30,11 +30,13 @@ export const UNIT_TYPES = Object.freeze({
     ammoDrain: 1.0, maxAmmo: 100, radio: 1.0, skill: 0.88,
   },
   mech: {
+    vehicle: true,
     label: '機械化歩兵', unitJa: '両', maxStrength: 3,
     speed: 3.4, spot: 760, range: 520, firepower: 1.35, ap: 0.9, armor: 0.35,
     ammoDrain: 1.2, maxAmmo: 100, radio: 1.0, skill: 0.68,
   },
   tank: {
+    vehicle: true,
     label: '戦車', unitJa: '両', maxStrength: 2,
     speed: 4.2, spot: 800, range: 1500, firepower: 2.0, ap: 2.6, armor: 0.88,
     ammoDrain: 1.4, maxAmmo: 100, radio: 1.0, skill: 0.7,
@@ -53,12 +55,14 @@ export const UNIT_TYPES = Object.freeze({
     ammoDrain: 0, maxAmmo: 100, radio: 1.0, skill: 0.96, flying: true,
   },
   convoy: {
+    vehicle: true,
     label: '車列', unitJa: '両', maxStrength: 5,
     speed: 3.0, spot: 260, range: 0, firepower: 0, ap: 0, armor: 0.08,
     ammoDrain: 0, maxAmmo: 0, radio: 0, skill: 0.3, civilian: true,
   },
   // 補給班。撃つためではなく、撃ち続けさせるためにいる。
   supply: {
+    vehicle: true,
     label: '補給班', unitJa: '名', maxStrength: 4,
     speed: 2.2, spot: 340, range: 200, firepower: 0.2, ap: 0.05, armor: 0.05,
     ammoDrain: 0.4, maxAmmo: 100, radio: 1.0, skill: 0.55, logistics: true,
@@ -150,6 +154,11 @@ export function createUnit(def) {
   };
 }
 
+/** 車輌か。徒歩でしか越えられない道があるので、これを分ける必要がある。 */
+export function isVehicle(u) {
+  return !!u.tpl.vehicle;
+}
+
 export function isCombatEffective(u) {
   return u.alive && u.strength > u.maxStrength * 0.34 && u.morale > 25;
 }
@@ -164,7 +173,7 @@ export function currentSpeed(u, terrain) {
   // 動かない戦車は、もはや戦車ではなく、掩体に据えた砲である。
   if (u._immobile) return 0;
   const posture = POSTURES[u.posture] ?? POSTURES.normal;
-  const mob = u.tpl.flying ? 1 : mobilityAt(terrain, u.x, u.y);
+  const mob = u.tpl.flying ? 1 : mobilityAt(terrain, u.x, u.y, isVehicle(u));
   // 経路の脚と脚の間で、通行不能な角をかすめてしまうことがある。
   // そこで速度を 0 にすると二度と動けなくなるので、這い出すぶんだけは残す。
   // 実際、川縁に踏み込んだ分隊は止まりはしても、戻ってくる。
@@ -185,7 +194,7 @@ export function setDestination(u, terrain, x, y) {
   if (u.tpl.flying) {
     u.path = [{ x, y }];
   } else {
-    const path = findPath(terrain, u.x, u.y, x, y);
+    const path = findPath(terrain, u.x, u.y, x, y, isVehicle(u));
     u.path = path.length ? path : [];
     if (!u.path.length) {
       // 到達不能。その場に留まる。
@@ -239,7 +248,7 @@ export function stepMovement(u, terrain, dt) {
   // 最後の砦。経路がどう引かれていようと、部隊は水の上や岩の上には立たない。
   // 踏み込みかけたらその一歩を戻し、経路を捨てて引き直させる ―
   // ここを見ていなかったので、川に入り込んで動けなくなる部隊が出ていた。
-  if (!u.tpl.flying && mobilityAt(terrain, u.x, u.y) <= 0) {
+  if (!u.tpl.flying && mobilityAt(terrain, u.x, u.y, isVehicle(u)) <= 0) {
     u.x = fromX;
     u.y = fromY;
     u.path = [];

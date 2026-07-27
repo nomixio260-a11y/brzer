@@ -17,7 +17,18 @@ export const T = Object.freeze({
   RAIL: 9, // 鉄道。築堤が胸壁になる ─ 線路は歩兵にとって陣地である。
   ORCHARD: 10, // 果樹園。頭は隠せるが、弾は止まらない。
   HEDGE: 11, // 生垣。低いが視線を切る ─ 前進の道になり、防御の骨にもなる。
+  // 間道。人が肩で担いで越える道であって、車輌の通る道ではない。
+  TRACK: 12,
 });
+
+/**
+ * 車輌が入れない地形。
+ *
+ * 徒歩なら越えられるが、車輌には無理な道がある ─ 山越えの間道がそれである。
+ * これを分けていなかったので、「徒歩でしか越えられない」と図に書いてある
+ * 東の間道を、戦車が平然と走り抜けていた。
+ */
+const VEHICLE_BLOCKED = new Set([T.TRACK]);
 
 export const TERRAIN_NAME_JA = Object.freeze({
   [T.FIELD]: '開豁地',
@@ -32,6 +43,7 @@ export const TERRAIN_NAME_JA = Object.freeze({
   [T.RAIL]: '鉄道',
   [T.ORCHARD]: '果樹園',
   [T.HEDGE]: '生垣',
+  [T.TRACK]: '間道',
 });
 
 /** 遮蔽（射撃に対する防護）。0 = 遮蔽なし、1 = 完全遮蔽。 */
@@ -51,6 +63,7 @@ const COVER = {
   [T.ORCHARD]: 0.22,
   // 生垣の根方は土手になっている。低いが、伏せるには十分である。
   [T.HEDGE]: 0.45,
+  [T.TRACK]: 0.2,
 };
 
 /** 隠蔽（発見されにくさ）。視線が通っていても見つかりにくくなる。 */
@@ -68,6 +81,7 @@ const CONCEAL = {
   // 隠蔽は森に近い。だから果樹園は「見えないが撃たれる」場所になる。
   [T.ORCHARD]: 0.55,
   [T.HEDGE]: 0.6,
+  [T.TRACK]: 0.3,
 };
 
 /** 移動速度の倍率。0 は通行不能。 */
@@ -86,6 +100,8 @@ const MOBILITY = {
   [T.ORCHARD]: 0.85,
   // 生垣は越えるものではなく、切り開くものである。
   [T.HEDGE]: 0.5,
+  // 徒歩でなら越えられる。ただし荷を担いでの山越えなので、速くはない。
+  [T.TRACK]: 0.5,
 };
 
 /** これだけの厚みの植生を貫くと視線が完全に切れる（メートル） */
@@ -300,11 +316,13 @@ export function generateTerrain(seed, mapId = 'volne_river') {
   }));
   for (const cr of crossings) {
     const kind = CROSSING_TYPE[cr.kind] ?? T.ROAD;
+    // 通過点の指定は道路より強い。図幅が「ここは間道」と言っているのに
+    // 道路の帯が上書きしていたので、徒歩専用のはずの道を車輌が走っていた。
     const over = cr.kind === 'bridge'
       ? [T.WATER, T.MARSH, T.ROAD]
       : cr.kind === 'ford'
         ? [T.WATER, T.MARSH]
-        : [T.FIELD, T.FOREST, T.MARSH, T.TOWN, T.ROCK];
+        : [T.FIELD, T.FOREST, T.MARSH, T.TOWN, T.ROCK, T.ROAD, T.ORCHARD, T.HEDGE];
     paintDisc(type, cr.x, cr.y, cr.radius ?? 110, kind, over);
   }
 
@@ -403,6 +421,26 @@ function landmarkPhrase(l, x, y) {
   }
 }
 
+/**
+ * その点が通れなければ、いちばん近い通れる点へ寄せる。
+ *
+ * 配置表の座標がわずかに岩や水へ食い込んでいるだけで、その部隊は
+ * 一歩も動けなくなり、戦闘にまるごと参加しなくなる ─ 実際そうなっていた。
+ * 盤に置く前に、必ずここを通す。
+ */
+export function nearestPassable(terrain, x, y, maxRadius = 1200, heavy = false) {
+  if (mobilityAt(terrain, x, y, heavy) > 0) return { x, y };
+  for (let r = WORLD.cell; r <= maxRadius; r += WORLD.cell) {
+    for (let a = 0; a < 24; a++) {
+      const t = (a / 24) * Math.PI * 2;
+      const px = clamp(x + Math.cos(t) * r, 1, WORLD.width - 1);
+      const py = clamp(y + Math.sin(t) * r, 1, WORLD.height - 1);
+      if (mobilityAt(terrain, px, py, heavy) > 0) return { x: px, y: py };
+    }
+  }
+  return { x, y };
+}
+
 /** 障害の中にいるか（地雷原・鉄条網） */
 export function obstacleAt(terrain, x, y) {
   for (const o of terrain.obstacles ?? []) {
@@ -416,7 +454,9 @@ const CROSSING_TYPE = {
   bridge: T.BRIDGE,
   ford: T.FORD,
   defile: T.ROAD,
-  track: T.FIELD,
+  // 間道は「徒歩でしか越えられない道」である。開豁地を敷いていたので、
+  // 車輌が平然と走り抜けていた。
+  track: T.TRACK,
 };
 
 /** 折れ線に沿って道路を敷く（水上は橋にしない ― 橋は明示的に置く） */
@@ -492,13 +532,15 @@ export function concealAt(terrain, x, y) {
   return CONCEAL[terrainAt(terrain, x, y)] ?? 0.05;
 }
 
-export function mobilityAt(terrain, x, y) {
-  return MOBILITY[terrainAt(terrain, x, y)] ?? 1;
+export function mobilityAt(terrain, x, y, heavy = false) {
+  const t = terrainAt(terrain, x, y);
+  if (heavy && VEHICLE_BLOCKED.has(t)) return 0;
+  return MOBILITY[t] ?? 1;
 }
 
 /** 地上部隊が進入できるか（車輌は浅瀬・湿地も苦手だが不可ではない） */
-export function isPassable(terrain, x, y) {
-  return mobilityAt(terrain, x, y) > 0;
+export function isPassable(terrain, x, y, heavy = false) {
+  return mobilityAt(terrain, x, y, heavy) > 0;
 }
 
 /**

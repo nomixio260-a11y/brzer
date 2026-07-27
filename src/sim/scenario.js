@@ -765,11 +765,16 @@ function evaluateSeize(world) {
       u.strength > u.maxStrength * 0.3 &&
       dist(u.x, u.y, p.x, p.y) < p.radius
   );
+  // その土地を「押さえている」と言えるのは、まだ戦える部隊だけである。
+  // 潰走している分隊も、三分の一まで削られた分隊も、交差点を扼してはいない ―
+  // 25%の残骸が奪回を拒み続けるので、この任務は誰にも達成できなかった。
   const enemyOn = world.units.filter(
     (u) =>
       u.side === 'enemy' &&
       u.alive &&
-      u.strength > u.maxStrength * 0.25 &&
+      u.strength > u.maxStrength * 0.34 &&
+      u.morale > 25 &&
+      u.state !== 'broken' &&
       dist(u.x, u.y, p.x, p.y) < p.radius
   );
 
@@ -835,6 +840,12 @@ export function scoreMission(world, outcome) {
     fireMissions: world.stats.fireMissions,
     registeredMissions: world.stats.registeredMissions ?? 0,
     artilleryLeft: world.support.artillery.rounds,
+    illumLeft: world.support.illum.rounds,
+    illumUsed: Math.max(0, (world.mission.support.illum?.rounds ??
+      (world.mission.duration === 'long' ? 8 : 4)) - world.support.illum.rounds),
+    dangerClose: world.stats.dangerClose ?? 0,
+    checkFires: world.stats.checkFires ?? 0,
+    armor: world.stats.armor,
     avgResponse,
     airtimeRatio: world.radio.airtimeUsed / Math.max(1, world.now - world.mission.startTime),
     droppedTransmissions: world.radio.droppedCount,

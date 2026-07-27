@@ -777,8 +777,10 @@ function drawMarkers(ctx, view, game, px) {
         y: m.y,
         r,
         affiliation: spec.affiliation,
-        icon: spec.icon,
-        echelon: spec.echelon ?? null,
+        // 部隊から起こした駒は、その部隊の兵科で描く ─
+        // ソードなら対戦車、ソーンなら砲兵。呼出符号だけでなく絵でも分かる。
+        icon: m.icon ?? spec.icon,
+        echelon: m.echelon ?? spec.echelon ?? null,
         color: spec.color,
         lineWidth: px(2),
         dash: conf.dash ? conf.dash.map((n) => px(n)) : null,

@@ -70,7 +70,8 @@ export const MISSION_PASS = Object.freeze({
       '死守を命じれば部隊は消える。だが下がりすぎれば、その日のうちに南口を抜かれる。',
     notes: [
       '峠の東西は急斜面である。車輌はもちろん、徒歩でも越えられない。',
-      `東の間道（${TRACK_GRID}付近）だけは徒歩で越えられる。敵の歩兵はそこから回ってくる。`,
+      `東の間道（${TRACK_GRID}付近）だけは徒歩で越えられる。敵の歩兵はそこから回ってくる ─ ` +
+        '車輌は通れないので、戦車と装甲車は必ず谷筋の隘路を通る。',
       '遅滞では「弾力防御」が基本になる。圧されたら早めに下がり、次の稜線でまた止める。',
       '砲兵「ソーン」は16発。隘路に詰まった縦隊は、砲兵にとって最良の目標である。',
       '開始時刻は薄明前である。照明弾が6発ある ─ 夜の谷では、弾より「見えること」が要る。',
@@ -149,7 +150,7 @@ export const MISSION_PASS = Object.freeze({
         ] },
       { at: jit(parseClock('0628'), 300), kind: 'spawn', label: '東の間道への迂回',
         units: [
-          { id: 'E-F1', side: 'enemy', callsign: '敵歩兵3', type: 'infantry', x: 3760, y: 560,
+          { id: 'E-F1', side: 'enemy', callsign: '敵歩兵3', type: 'infantry', x: 3480, y: 520,
             ai: { task: 'flank', crossing: track, objective: { x: 3200, y: 2800 }, wave: 1 } },
         ] },
       { at: jit(parseClock('0652'), 240), kind: 'jamming', value: 0.3, label: '電子妨害' },
@@ -164,7 +165,7 @@ export const MISSION_PASS = Object.freeze({
         ] },
       { at: jit(parseClock('0722'), 240), kind: 'spawn', label: '第三梯団',
         units: [
-          { id: 'E-F2', side: 'enemy', callsign: '敵歩兵5', type: 'infantry', x: 3780, y: 640,
+          { id: 'E-F2', side: 'enemy', callsign: '敵歩兵5', type: 'infantry', x: 3520, y: 640,
             ai: { task: 'flank', crossing: track, objective: { x: 3000, y: 3000 }, wave: 3 } },
         ] },
       { at: parseClock('0730'), kind: 'message',
@@ -180,7 +181,9 @@ export const MISSION_PASS = Object.freeze({
 const TOWN_T0 = parseClock('1400');
 const TOWN_TEND = parseClock('1620');
 /** 奪回すべき目標 ─ 旧市街の交差点 */
-const OBJ = { x: 2300, y: 2350, radius: 340 };
+// 交差点そのもの。半径は市街の見通し（およそ170m）より内側に取る ─
+// 見えない敵まで排除しろという条件は、市街では誰にも満たせない。
+const OBJ = { x: 2300, y: 2350, radius: 190 };
 export const OBJ_GRID = toGrid(OBJ.x, OBJ.y);
 
 export const MISSION_TOWN = Object.freeze({
@@ -229,6 +232,10 @@ export const MISSION_TOWN = Object.freeze({
       '籠っている敵には曳火射撃が効く。着発では土を掘り返すだけである。',
       '敵は旧市街の南口に障害を敷いているとの情報がある。位置は不明。',
       '鉄道の築堤は、撃たれずに横へ動ける唯一の線である。',
+      '「攻撃」は止まらない ─ 撃たれても目標まで寄せ続ける。' +
+        '先に制圧し、煙を焚いてから出さなければ、その代償を全部払うことになる。',
+      '機械化歩兵「シールド」は装甲を持つ。先導させれば小銃弾は弾くが、' +
+        '敵の対戦車班に横腹を晒せば一撃で燃える。',
       '敵は増援を送ってくる。時間をかけるほど固くなる。',
     ],
   },
@@ -239,15 +246,19 @@ export const MISSION_TOWN = Object.freeze({
     { id: 'speed', text: '敵の増援が固まる前に決着をつける', primary: false },
   ],
 
+  // 攻める側には重みが要る。守る一個小隊に対して同数で当たっても、
+  // 厚い市街の遮蔽の前では一方的に削られるだけで終わる ─ 実際そうなっていた。
   support: {
-    artillery: { name: 'ソーン', rounds: 14 },
-    smoke: { name: 'ソーン', rounds: 10 },
+    artillery: { name: 'ソーン', rounds: 20 },
+    smoke: { name: 'ソーン', rounds: 12 },
   },
 
   rosterOrder: [
     { id: 'H1', callsign: 'ハンマー1', typeLabel: '歩兵分隊', role: '主攻 ─ 中央橋', icon: 'infantry', echelon: 1 },
     { id: 'H2', callsign: 'ハンマー2', typeLabel: '歩兵分隊', role: '主攻 ─ 中央橋', icon: 'infantry', echelon: 1 },
     { id: 'H3', callsign: 'ハンマー3', typeLabel: '歩兵分隊', role: '助攻 ─ 西橋', icon: 'infantry', echelon: 1 },
+    { id: 'H4', callsign: 'ハンマー4', typeLabel: '歩兵分隊', role: '予備 ─ 突破口へ投入', icon: 'infantry', echelon: 1 },
+    { id: 'SH', callsign: 'シールド', typeLabel: '機械化歩兵', role: '突撃の先導・掩護', icon: 'mech', echelon: 1 },
     { id: 'SW', callsign: 'ソード', typeLabel: '対戦車班', role: '対装甲・掩護', icon: 'antitank', echelon: 'Ø' },
     { id: 'EG', callsign: 'イーグル', typeLabel: '偵察ドローン', role: '偵察', icon: 'uav', echelon: null },
     { id: 'TH', callsign: 'ソーン', typeLabel: '支援砲兵', role: '火力支援', icon: 'artillery', echelon: 1 },
@@ -264,6 +275,12 @@ export const MISSION_TOWN = Object.freeze({
     { id: 'H3', side: 'friend', callsign: 'ハンマー3', type: 'infantry',
       x: 1420, y: 2900, posture: 'normal', state: 'holding', morale: 84,
       role: '助攻 ─ 西橋' },
+    { id: 'H4', side: 'friend', callsign: 'ハンマー4', type: 'infantry',
+      x: 2620, y: 3000, posture: 'normal', state: 'holding', morale: 86,
+      role: '予備 ─ 突破口へ投入' },
+    { id: 'SH', side: 'friend', callsign: 'シールド', type: 'mech',
+      x: 2360, y: 3160, posture: 'normal', state: 'holding', morale: 88,
+      role: '突撃の先導・掩護' },
     { id: 'SW', side: 'friend', callsign: 'ソード', type: 'at_team',
       x: 2100, y: 3120, posture: 'normal', state: 'holding', morale: 88,
       role: '対装甲・掩護' },
@@ -310,9 +327,9 @@ export const MISSION_TOWN = Object.freeze({
       { at: jit(parseClock('1516'), 300), kind: 'spawn', label: '敵の増援（第二次・装甲）',
         units: [
           { id: 'E-T1', side: 'enemy', callsign: '敵装甲車1', type: 'mech', x: 2450, y: 1200,
-            ai: { task: 'hold_ground', anchor: { x: 2320, y: 2180 } } },
+            ai: { task: 'hold_ground', anchor: { x: 2330, y: 1880 } } },
           { id: 'E-R2', side: 'enemy', callsign: '敵増援2', type: 'infantry', x: 3300, y: 1300,
-            ai: { task: 'hold_ground', anchor: { x: 2560, y: 2420 } } },
+            ai: { task: 'hold_ground', anchor: { x: 2810, y: 2640 } } },
         ] },
       { at: parseClock('1600'), kind: 'message',
         text: '大隊本部より: 残り20分。日没までに交差点を押さえられねば、この作戦は無意味になる。' },

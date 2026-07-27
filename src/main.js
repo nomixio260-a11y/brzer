@@ -25,7 +25,6 @@ import {
   isCreative,
   getCreative,
   creativeAction,
-  getRevealed,
   markUnit,
   getCallsigns,
 } from './state.js';
@@ -368,6 +367,10 @@ function loop(t) {
   draw(mapView);
 
   if (game.finished) {
+    hideMarkerEditor();
+    $('map-hint').hidden = true;
+    // 戦闘が終わっているのに、読みかけの無線が講評まで喋り続けるのはおかしい
+    audio.stopSpeaking();
     cancelAnimationFrame(rafId);
     rafId = null;
     setTimeout(() => {
@@ -590,12 +593,17 @@ function buildToolbox() {
     audio.click();
   });
 
+  // 記号が消えたり戻ったりしたあとで、ラベル欄が居なくなった記号を掴んだままにしない
   $('btn-undo').addEventListener('click', () => {
+    // 取り消すと記号が入れ替わる。開いたままのラベル欄は、もう無い記号を掴んでいる。
+    hideMarkerEditor();
+    if (mapView) mapView.selectedMarkId = null;
     if (undo(game)) audio.click();
   });
   $('btn-clear-markers').addEventListener('click', () => {
     clearMarkings(game);
     hideMarkerEditor();
+    if (mapView) mapView.selectedMarkId = null;
     audio.click();
   });
 
@@ -988,6 +996,11 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     hideMarkerEditor();
     if (mapView) mapView.selectedMarkId = null;
+    // 組みかけの命令も取りやめる。地図の「✕」と同じことをする。
+    if (orderPanel?.verb) {
+      cancelOrder(orderPanel);
+      syncMapHint();
+    }
     if (e.target instanceof HTMLInputElement) e.target.blur();
     return;
   }
@@ -997,6 +1010,8 @@ window.addEventListener('keydown', (e) => {
   // 取り消し
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
     e.preventDefault();
+    hideMarkerEditor();
+    if (mapView) mapView.selectedMarkId = null;
     undo(game);
     return;
   }

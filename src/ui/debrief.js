@@ -197,6 +197,32 @@ function outlined(ctx, text, x, y, color, size) {
 
 /* ------------------------------------------------------------------ */
 
+/**
+ * 装甲戦闘の戦果を、抜いた面ごとに出す。
+ *
+ * 側面と背面の数が多いほど、対戦車部隊の置き方が上手かったということである。
+ * 「命中したが効果なし」の回数も並べる ─ 正面から撃たせていた回数だから。
+ */
+function armorRow(a) {
+  if (!a) return [];
+  const k = a.kills ?? { front: 0, side: 0, rear: 0 };
+  const total = k.front + k.side + k.rear;
+  if (!total && !a.mobility && !a.bounces) return [];
+
+  const parts = [];
+  if (total) {
+    const flank = k.side + k.rear;
+    parts.push(
+      `${total} 両撃破（正面 ${k.front}・側面 ${k.side}・背面 ${k.rear}）` +
+      (flank > k.front ? ' ─ 横腹を取れていた' : k.front ? ' ─ 正面から押し切った' : '')
+    );
+  }
+  if (a.mobility) parts.push(`${a.mobility} 両を行動不能に`);
+  if (a.bounces) parts.push(`弾かれた射撃 ${a.bounces} 回`);
+
+  return [['装甲戦闘', parts.join('／'), total ? 'is-good' : a.bounces > 4 ? 'is-bad' : '']];
+}
+
 function renderStats(el, score, truth) {
   el.innerHTML = '';
   if (!score) return;
@@ -222,6 +248,12 @@ function renderStats(el, score, truth) {
     ['砲撃要請', score.registeredMissions
       ? `${score.fireMissions} 回（うち概定射点 ${score.registeredMissions} 回・残弾 ${score.artilleryLeft}）`
       : `${score.fireMissions} 回（残弾 ${score.artilleryLeft}）`, ''],
+    ...(score.dangerClose
+      ? [['危近弾', `${score.dangerClose} 回 ─ 味方の至近に落とすと告げられた上で撃った`, 'is-bad']]
+      : []),
+    ...(score.checkFires ? [['射撃中止', `${score.checkFires} 回`, '']] : []),
+    ...(score.illumUsed ? [['照明弾', `${score.illumUsed} 発（残 ${score.illumLeft}）`, 'is-good']] : []),
+    ...armorRow(score.armor),
     ['無線の占有率', `${Math.round(score.airtimeRatio * 100)} %`,
       score.airtimeRatio > 0.55 ? 'is-bad' : ''],
     ['届かなかった交信', `${score.droppedTransmissions} 回`,

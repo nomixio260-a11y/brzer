@@ -21,9 +21,17 @@ export function createEnemyCommand(world) {
     // 敵の最終目標。橋の南詰 ― ここを取れば敵の勝ちである。
     objective: { x: world.terrain.bridge.x, y: world.terrain.bridge.y + 380 },
     // 各軸の評価。progress は南へどれだけ食い込んだか。
+    // 軸の名も位置も図幅から採る。ヴォルネ川の座標を決め打ちにしていたので、
+    // 峠でも市街でも「東の浅瀬」を評価していた。
     axes: {
-      bridge: { label: '橋正面', x: 2200, base: null, progress: 0, losses: 0, stalledFor: 0 },
-      ford: { label: '東の浅瀬', x: 4180, base: null, progress: 0, losses: 0, stalledFor: 0 },
+      bridge: {
+        label: world.terrain.crossings[0]?.label ?? '主正面',
+        x: world.terrain.bridge.x, base: null, progress: 0, losses: 0, stalledFor: 0,
+      },
+      ford: {
+        label: world.terrain.crossings[1]?.label ?? '側面',
+        x: world.terrain.ford.x, base: null, progress: 0, losses: 0, stalledFor: 0,
+      },
     },
     smokeUsed: 0,
     // 波状攻撃の管理（長期戦のみ）。攻撃は永久には続かない ─

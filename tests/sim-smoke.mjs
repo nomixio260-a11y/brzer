@@ -7,8 +7,8 @@ import { issueOrder, crossedLine } from '../src/sim/orders.js';
 import { createFireMission, stepFireMissions } from '../src/sim/combat.js';
 import { supportGun, layingLeft, createFlare, stepFires } from '../src/sim/fires.js';
 import { aspectOf, penetrationRatio, canDefeat } from '../src/sim/armor.js';
-import { createUnit, currentSpeed } from '../src/sim/units.js';
-import { evaluate, missionList } from '../src/sim/scenario.js';
+import { createUnit, currentSpeed, UNIT_TYPES, effectiveCover } from '../src/sim/units.js';
+import { missionList, friendlyOrderOfBattle, timeline } from '../src/sim/scenario.js';
 import { WORLD, toGrid, fromGrid, formatClock, parseClock } from '../src/util.js';
 import {
   generateTerrain, lineOfSight, terrainAt, isPassable, landmarkAt, obstacleAt,
@@ -38,6 +38,12 @@ function check(name, cond, detail = '') {
 
 function section(title) {
   console.log(`\n== ${title} ==`);
+}
+
+/** その距離で撃たれたときに、目標の遮蔽が実際どれだけ効くか（検査用） */
+function coverOf(terrain, target, d) {
+  const base = effectiveCover(target, terrain);
+  return base * Math.min(1, Math.max(0.55, d / 160));
 }
 
 /* ------------------------------------------------------------------ */
@@ -849,6 +855,80 @@ section('装甲戦闘');
 
 /* ------------------------------------------------------------------ */
 
+section('市街の攻撃が成立するか');
+{
+  // 「攻撃」は接敵しても止まらない。止まっていたので、
+  // 市街に籠る敵には永久に届かず、奪回の任務は誰にも達成できなかった。
+  const w = createWorld({ missionId: 'zaren_counter' });
+  const obj = w.mission.victory.point;
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const h1 = w.unitsById.get('H1');
+  const startD = Math.hypot(h1.x - obj.x, h1.y - obj.y);
+  issueOrder(w, { unitId: 'H1', verb: 'attack', x: obj.x, y: obj.y });
+  for (let i = 0; i < 1800 && h1.alive; i++) tick(w, 1);
+  const endD = Math.hypot(h1.x - obj.x, h1.y - obj.y);
+  check('攻撃は接敵しても目標へ寄せ続ける', !h1.alive || endD < startD * 0.35,
+    `${Math.round(startD)}m → ${Math.round(endD)}m`);
+
+  // 近接では掩体の値打ちが落ちる（寄られた穴は、もう掩体ではない）
+  const t = generateTerrain(990117, 'zaren_town');
+  const dug = createUnit({ id: 'D', side: 'enemy', type: 'infantry', x: 2300, y: 2350, posture: 'dug_in' });
+  const far = coverOf(t, dug, 400);
+  const near = coverOf(t, dug, 50);
+  check('近接すると遮蔽が効かなくなる', near < far * 0.7, `${far.toFixed(2)} → ${near.toFixed(2)}`);
+
+  // 勝利判定は「まだ戦える敵」だけを見る
+  const w2 = createWorld({ missionId: 'zaren_counter' });
+  for (let i = 0; i < 120; i++) tick(w2, 1);
+  const holder = w2.units.find((u) => u.side === 'enemy' && u.type === 'infantry');
+  check('目標の円は市街の見通しより内側', obj.radius < 200, `${obj.radius}m`);
+  check('守備隊は目標の円の中にいる',
+    Math.hypot(holder.x - obj.x, holder.y - obj.y) < obj.radius + 260);
+}
+
+section('配置の座標');
+{
+  // 岩や水の上に置かれた部隊は、そこから一歩も動けない ─
+  // 座標がわずかにずれているだけで、その部隊は戦闘にまるごと参加しなくなる。
+  // 実際、コルプ峠の迂回部隊2個が東コルプ山の岩稜に立ったまま毎回終わっていた。
+  for (const m of missionList()) {
+    const t = generateTerrain(m.seed, m.mapId);
+    const defs = [...friendlyOrderOfBattle(m)];
+    for (const ev of timeline(null, { mission: m })) {
+      if (ev.kind === 'spawn') defs.push(...ev.units);
+    }
+    const bad = defs.filter((d) => !UNIT_TYPES[d.type].flying && !isPassable(t, d.x, d.y));
+    check(`${m.id}: 全部隊が通れる地面に配置されている`, bad.length === 0,
+      bad.map((d) => `${d.callsign}(${d.x},${d.y})`).join(' '));
+  }
+
+  // 万一ずれても、盤に置く時点で寄せる
+  const w = createWorld({ missionId: 'kolp_delay' });
+  const rock = { x: 4350, y: 800 }; // 東コルプ山の頂
+  check('岩稜は通れない', !isPassable(w.terrain, rock.x, rock.y));
+  const u = addUnit(w, {
+    id: 'ROCKTEST', side: 'enemy', callsign: '試験', type: 'infantry', x: rock.x, y: rock.y,
+  });
+  check('通れない場所に置いても、通れる場所へ寄る', isPassable(w.terrain, u.x, u.y),
+    `${Math.round(u.x)},${Math.round(u.y)}`);
+  check('寄せる距離は程々である', Math.hypot(u.x - rock.x, u.y - rock.y) < 1300);
+
+  // 迂回部隊がちゃんと南下する
+  const w2 = createWorld({ missionId: 'kolp_delay' });
+  let guard = 0;
+  const startY = new Map();
+  while (!w2.outcome && guard++ < 20000) {
+    tick(w2, 1);
+    for (const x of w2.units) {
+      if (x.ai?.task === 'flank' && !startY.has(x.id)) startY.set(x.id, x.y);
+    }
+  }
+  const flankers = w2.units.filter((x) => x.ai?.task === 'flank' || startY.has(x.id));
+  const moved = flankers.filter((x) => x.y - (startY.get(x.id) ?? x.y) > 400 || !x.alive);
+  check('迂回部隊は前進する（立ち往生しない）', flankers.length > 0 && moved.length > 0,
+    `${moved.length}/${flankers.length}`);
+}
+
 section('地名');
 {
   const t = generateTerrain(20260726, 'volne_river');
@@ -932,6 +1012,57 @@ section('障害');
   const zaren = generateTerrain(990117, 'zaren_town');
   check('敵の障害は地図に載っていない', zaren.obstacles.every((o) => !o.known));
   check('自軍の障害は地図に載っている', t.obstacles.every((o) => o.known));
+}
+
+section('徒歩の道と車輌の道');
+{
+  const t = generateTerrain(71104, 'kolp_pass');
+  const track = t.crossings.find((c) => c.kind === 'track');
+  const defile = t.crossings.find((c) => c.kind === 'defile');
+
+  check('東の間道は間道として敷かれている', terrainAt(t, track.x, track.y) === T.TRACK,
+    TERRAIN_NAME_JA[terrainAt(t, track.x, track.y)]);
+  check('間道は徒歩なら越えられる', isPassable(t, track.x, track.y, false));
+  check('間道は車輌が越えられない', !isPassable(t, track.x, track.y, true));
+  check('隘路は車輌が通れる', isPassable(t, defile.x, defile.y, true));
+
+  // 経路探索も同じ判断をする。徒歩は真っ直ぐ抜け、車輌は大回りになる。
+  const from = { x: track.x, y: track.y - 500 };
+  const to = { x: track.x - 200, y: track.y + 700 };
+  const walked = (pts) => {
+    let d = 0;
+    let prev = from;
+    for (const p of pts) { d += Math.hypot(p.x - prev.x, p.y - prev.y); prev = p; }
+    return d;
+  };
+  const straight = Math.hypot(to.x - from.x, to.y - from.y);
+  const foot = walked(findPath(t, from.x, from.y, to.x, to.y, false));
+  const heavy = walked(findPath(t, from.x, from.y, to.x, to.y, true));
+  check('徒歩は間道をそのまま抜ける', foot < straight * 1.4, `${Math.round(foot)}m / 直線${Math.round(straight)}m`);
+  // 車輌は間道の上を通らない。周りが開けていれば脇を回るので、
+  // 遠回りになるとは限らない ─ 保証するのは「間道を踏まない」ことである。
+  const heavyPts = findPath(t, from.x, from.y, to.x, to.y, true);
+  check('車輌の経路は間道を踏まない',
+    heavyPts.every((p) => terrainAt(t, p.x, p.y) !== T.TRACK),
+    `${Math.round(heavy)}m`);
+
+  // 車輌の判定は兵種で決まる
+  check('戦車・装甲車・車列・補給は車輌',
+    ['tank', 'mech', 'convoy', 'supply'].every((k) => UNIT_TYPES[k].vehicle));
+  check('歩兵・対戦車・偵察・迫は徒歩',
+    ['infantry', 'at_team', 'recon', 'mortar'].every((k) => !UNIT_TYPES[k].vehicle));
+
+  // 車輌に間道を割り当てても、通れる道へ回る
+  const w = createWorld({ missionId: 'kolp_delay' });
+  const tank = addUnit(w, {
+    id: 'TKTEST', side: 'enemy', callsign: '試験戦車', type: 'tank',
+    x: track.x, y: track.y - 700,
+    ai: { task: 'flank', crossing: { x: track.x, y: track.y }, objective: { x: 2300, y: 3300 } },
+  });
+  for (let i = 0; i < 3000 && tank.alive; i++) tick(w, 1);
+  check('車輌は間道の上に乗り上げない',
+    !tank.alive || terrainAt(w.terrain, tank.x, tank.y) !== T.TRACK,
+    `${Math.round(tank.x)},${Math.round(tank.y)}`);
 }
 
 section('鉄道');

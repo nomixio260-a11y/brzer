@@ -1,7 +1,7 @@
 // 無線報告の生成。観測の「質」に応じて位置をずらし、言い回しを濁す。
 // 指揮官が受け取る情報は全てこのファイルを通って歪む。
 
-import { clamp, toGrid, bearing, compassJa, dist, formatClock } from '../util.js';
+import { toGrid, bearing, compassJa, dist, formatClock } from '../util.js';
 import { enqueue, PRI } from './comms.js';
 import { moraleJa } from './units.js';
 import { localVisibilityJa } from './weather.js';

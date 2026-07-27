@@ -1,14 +1,14 @@
 // 命令の発令・伝達・受領・実行。
 // 命令は無線を占有し、遅れて届き、時に拒否される。
 
-import { clamp, toGrid, dist, formatClock } from '../util.js';
+import { toGrid, dist, formatClock } from '../util.js';
 import { enqueue, PRI } from './comms.js';
-import { setDestination, clearDestination, POSTURES } from './units.js';
+import { setDestination, clearDestination } from './units.js';
 import { createFireMission, checkFire } from './combat.js';
 import { composeSitrep, composeAmmoReport } from './reports.js';
-import { setRoe, ROE } from './friendlyAI.js';
+import { setRoe } from './friendlyAI.js';
 import { orderResupply } from './logistics.js';
-import { FIRE_MODES, FIRE_MODE_ORDER, fireMode, fireCheck, dangerClose, supportGun } from './fires.js';
+import { FIRE_MODES, fireMode, fireCheck, dangerClose } from './fires.js';
 
 /**
  * 命令。
@@ -599,10 +599,17 @@ function beginExecution(world, u, order) {
   // 「撃つな」と言われたまま突撃させられる部隊はいない。
   if (['advance', 'attack', 'defend'].includes(order.verb)) u.weaponsHold = false;
 
+  // 新しい任務が来た時点で、独断の後退も集結も終わりである。
+  //
+  // ここを畳んでいなかったので、一度でも独断で下がった部隊は、
+  // 次に何を命じられても着いた先で勝手に掩体を掘って「防御」に戻っていた。
+  // 集結の旗も立ちっぱなしになり、士気の戻りが速いままだった。
+  u._selfWithdrawing = false;
+  if (order.verb !== 'rally') u.rallying = false;
+
   // 交戦規定は「命令」ではなく「枠」。中身は部下が決める。
   if (VERBS[order.verb].roe) {
     setRoe(u, VERBS[order.verb].roe);
-    u._selfWithdrawing = false;
     return;
   }
 
@@ -871,9 +878,8 @@ function advanceExecution(world, u, order, dt) {
       if (!u.path.length && !advanceLeg(world, u)) completeOrder(world, u, order);
       break;
 
-    case 'advance':
-    case 'attack': {
-      // 敵が見えている間は前進を止めて撃ち合う
+    case 'advance': {
+      // 前進は「接敵したら止まって撃つ」。どこに敵がいるかを確かめる機動である。
       const engaged = [...u.contacts.values()].some(
         (c) => world.now - c.lastSeenAt < 12 && dist(u.x, u.y, c.x, c.y) < u.tpl.range * 1.05
       );
@@ -887,6 +893,25 @@ function advanceExecution(world, u, order, dt) {
         advanceLeg(world, u);
       } else if (!u.path.length && dist(u.x, u.y, order.x, order.y) < 120) {
         completeOrder(world, u, order);
+      }
+      break;
+    }
+
+    case 'attack': {
+      // 攻撃は止まらない。
+      //
+      // 前進と同じに扱っていたので、最初の一発を受けた地点で足が止まり、
+      // 市街に籠る敵には永久に届かなかった ─ 突撃距離まで詰めなければ、
+      // 厚い遮蔽の中の敵は減らない。撃たれながら寄せるのが攻撃であり、
+      // その代償を払わせないために、指揮官は先に制圧し、煙を焚く。
+      if (dist(u.x, u.y, order.x, order.y) < 130) {
+        completeOrder(world, u, order);
+        break;
+      }
+      if (!u.path.length && !advanceLeg(world, u)) {
+        // 押し戻されたり、経路を捨てさせられたりしても、目標へ引き直す
+        setDestination(u, world.terrain, order.x, order.y);
+        if (!u.path.length) completeOrder(world, u, order);
       }
       break;
     }

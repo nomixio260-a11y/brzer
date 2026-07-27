@@ -355,7 +355,10 @@ export function canUndo(game) {
 
 export function addMarker(
   game,
-  { x, y, type = 'enemy_inf', confidence = 'estimated', label = '', unitId = null }
+  {
+    x, y, type = 'enemy_inf', confidence = 'estimated', label = '',
+    unitId = null, icon = null, echelon = null,
+  }
 ) {
   snapshot(game);
   const marker = {
@@ -368,6 +371,9 @@ export function addMarker(
     // 自軍の記号は、どの部隊のものかを覚えておく。
     // 覚えていれば、次からは名前を打ち直さずに位置だけ付け替えられる。
     unitId,
+    // 兵科の絵と部隊規模。指定が無ければ記号の種別に従う。
+    icon,
+    echelon,
     createdAt: game.world.now,
     updatedAt: game.world.now,
   };
@@ -393,6 +399,9 @@ export function markUnit(game, unitId) {
   const age = game.world.now - (heard.observedAt ?? heard.heardAt);
   const confidence = age < 150 ? 'confirmed' : age < 480 ? 'estimated' : 'unconfirmed';
 
+  // 編成表に載っている兵科で描く。呼出符号だけでなく、絵でも見分けられる。
+  const def = getRosterOrder(game).find((r) => r.id === unitId);
+
   const existing = game.belief.markers.find((m) => m.unitId === unitId);
   if (existing) {
     snapshot(game);
@@ -411,6 +420,8 @@ export function markUnit(game, unitId) {
     confidence,
     label: heard.callsign,
     unitId,
+    icon: def?.icon ?? 'infantry',
+    echelon: def?.echelon ?? null,
   });
 }
 

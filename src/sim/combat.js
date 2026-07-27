@@ -68,6 +68,14 @@ export function stepDirectFire(world, dt) {
           x: target.x, y: target.y, result: shot.result, aspect: shot.aspect,
         });
         world.armorEvents.push({ ...shot, at: now, range: d });
+        // 講評で「どの面から抜いたか」を突きつけるために数えておく。
+        // 側面と背面の数が多いほど、部隊の置き方が上手かったということである。
+        if (u.side === 'friend') {
+          const t = world.stats.armor;
+          if (shot.result === 'kill') t.kills[shot.aspect]++;
+          else if (shot.result === 'mobility') t.mobility++;
+          else if (shot.result === 'bounce') t.bounces++;
+        }
       }
       continue;
     }
@@ -87,7 +95,15 @@ export function stepDirectFire(world, dt) {
     const suppressionFactor = 1 - clamp(u.suppression / 160, 0, resolve);
     // 移動しながらの射撃は当たらない。これが防者の最大の利点になる。
     const movingPenalty = u.path.length ? 0.5 : 1;
-    const cover = effectiveCover(target, terrain);
+
+    // 近接では掩体の値打ちが落ちる。
+    //
+    // 30mまで寄られた掩体は、もはや掩体ではなく、手榴弾を投げ込まれる穴である。
+    // これを見ていなかったので、市街に籠る分隊は誰にも減らせなかった ―
+    // どれだけ寄せても遮蔽0.92のままで、攻撃という機動が成立していなかった。
+    // 寄るのは高くつく（その間ずっと撃たれる）が、寄りさえすれば効く。
+    const closeIn = clamp(d / 160, 0.55, 1);
+    const cover = effectiveCover(target, terrain) * closeIn;
 
     // 装甲は小火器を弾く。対装甲火力だけが通る。
     const armor = target.tpl.armor;

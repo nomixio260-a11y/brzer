@@ -2,7 +2,7 @@
 // DOM非依存 ― node からそのまま import してテストできる。
 
 import { Rng, toGrid, dist } from '../util.js';
-import { generateTerrain, obstacleAt } from './terrain.js';
+import { generateTerrain, obstacleAt, nearestPassable } from './terrain.js';
 import { createUnit, stepMovement, stepMorale, setDestination, applyDamage, applySuppression } from './units.js';
 import { stepPerception } from './perception.js';
 import { stepDirectFire, stepFireMissions } from './combat.js';
@@ -80,6 +80,8 @@ export function createWorld(opts = {}) {
       ordersRefused: 0,
       fireMissions: 0,
       responseTimes: [],
+      // 装甲戦闘の戦果。どの面から抜いたかを面ごとに数える。
+      armor: { kills: { front: 0, side: 0, rear: 0 }, mobility: 0, bounces: 0 },
     },
   };
 
@@ -97,6 +99,12 @@ export function createWorld(opts = {}) {
 
 export function addUnit(world, def) {
   const u = createUnit(def);
+  // 岩や水の上には置かない。置いてしまうと、その部隊はそこから動けない。
+  if (!u.tpl.flying) {
+    const p = nearestPassable(world.terrain, u.x, u.y, 1200, !!u.tpl.vehicle);
+    u.x = p.x;
+    u.y = p.y;
+  }
   u.role = def.role;
   u.ai = def.ai ? structuredCloneSafe(def.ai) : null;
   // 演習では味方は倒れない。ここで一括して掛けておく ―

@@ -9,8 +9,9 @@ const NAV_COLS = Math.ceil(WORLD.width / NAV_CELL);
 const NAV_ROWS = Math.ceil(WORLD.height / NAV_CELL);
 
 /** ナビグリッドを構築して terrain にキャッシュする */
-function navGrid(terrain) {
-  if (terrain._nav) return terrain._nav;
+function navGrid(terrain, heavy = false) {
+  const key = heavy ? '_navHeavy' : '_nav';
+  if (terrain[key]) return terrain[key];
 
   const cost = new Float32Array(NAV_COLS * NAV_ROWS);
   for (let r = 0; r < NAV_ROWS; r++) {
@@ -28,7 +29,9 @@ function navGrid(terrain) {
         [-30, 30],
         [30, 30],
       ]) {
-        const m = mobilityAt(terrain, clamp(x + ox, 0, WORLD.width - 1), clamp(y + oy, 0, WORLD.height - 1));
+        const m = mobilityAt(
+          terrain, clamp(x + ox, 0, WORLD.width - 1), clamp(y + oy, 0, WORLD.height - 1), heavy
+        );
         worst = Math.min(worst, m);
         sum += m;
         count++;
@@ -44,8 +47,8 @@ function navGrid(terrain) {
     }
   }
 
-  terrain._nav = { cost, cols: NAV_COLS, rows: NAV_ROWS, cell: NAV_CELL };
-  return terrain._nav;
+  terrain[key] = { cost, cols: NAV_COLS, rows: NAV_ROWS, cell: NAV_CELL };
+  return terrain[key];
 }
 
 function navIndex(x, y) {
@@ -89,8 +92,8 @@ const NEIGHBORS = [
  * A* 経路探索。
  * @returns {Array<{x:number,y:number}>} 経由点の配列（目的地を含む）。到達不能なら空配列。
  */
-export function findPath(terrain, ax, ay, bx, by) {
-  const nav = navGrid(terrain);
+export function findPath(terrain, ax, ay, bx, by, heavy = false) {
+  const nav = navGrid(terrain, heavy);
   const start = nearestPassable(nav, navIndex(ax, ay));
   const goal = nearestPassable(nav, navIndex(bx, by));
   if (start < 0 || goal < 0) return [];
@@ -176,22 +179,22 @@ export function findPath(terrain, ax, ay, bx, by) {
   // 終点をそのまま足すと、目的地が水上や岩稜のときにそこへ歩き込んでしまう。
   // 通れる場所であることを確かめてから足す ─
   // 「そこへ行け」と言われても、行けない所には行けない。
-  if (mobilityAt(terrain, bx, by) > 0) {
+  if (mobilityAt(terrain, bx, by, heavy) > 0) {
     raw.push({ x: bx, y: by });
   } else if (raw.length <= 1) {
     return [];
   }
 
-  return simplify(terrain, raw);
+  return simplify(terrain, raw, heavy);
 }
 
 /** 直線で行ける区間はまとめて、経由点を減らす */
-function simplify(terrain, pts) {
+function simplify(terrain, pts, heavy = false) {
   if (pts.length <= 2) return pts;
   const out = [pts[0]];
   let anchor = 0;
   for (let i = 2; i < pts.length; i++) {
-    if (!walkable(terrain, pts[anchor], pts[i])) {
+    if (!walkable(terrain, pts[anchor], pts[i], heavy)) {
       out.push(pts[i - 1]);
       anchor = i - 1;
     }
@@ -201,14 +204,14 @@ function simplify(terrain, pts) {
   return out;
 }
 
-function walkable(terrain, a, b) {
+function walkable(terrain, a, b, heavy = false) {
   const d = Math.hypot(b.x - a.x, b.y - a.y);
   const steps = Math.ceil(d / 40);
   for (let k = 0; k <= steps; k++) {
     const t = k / steps;
     const x = a.x + (b.x - a.x) * t;
     const y = a.y + (b.y - a.y) * t;
-    if (mobilityAt(terrain, x, y) <= 0) return false;
+    if (mobilityAt(terrain, x, y, heavy) <= 0) return false;
   }
   return true;
 }
