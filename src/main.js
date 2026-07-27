@@ -27,6 +27,8 @@ import {
   creativeAction,
   markUnit,
   getCallsigns,
+  setAutoPlot,
+  plotContact,
 } from './state.js';
 
 import {
@@ -84,7 +86,52 @@ const tool = {
   sketchTool: 'arrow_enemy',
 };
 
-const options = { variable: false, voice: true, creative: false };
+const options = { variable: false, voice: true, creative: false, autoPlot: loadAutoPlot() };
+
+/* ------------------------------------------------------------------ */
+/* 自動記入の入切                                                       */
+/* ------------------------------------------------------------------ */
+//
+// 既定は入。無線を聞くたびに指で駒を置き直す作業は指揮ではない。
+// 切れば全て手書きに戻る ─ 自分の手で盤を作りたい向きのために残してある。
+
+const AUTOPLOT_KEY = 'brzer.autoplot';
+
+function loadAutoPlot() {
+  try {
+    return window.localStorage.getItem(AUTOPLOT_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+}
+
+function saveAutoPlot(on) {
+  try {
+    window.localStorage.setItem(AUTOPLOT_KEY, on ? 'on' : 'off');
+  } catch {
+    /* 保存できない環境でも動作そのものは変わらない */
+  }
+}
+
+function syncAutoPlotButton() {
+  $('btn-autoplot').classList.toggle('is-on', options.autoPlot);
+  $('opt-autoplot').checked = options.autoPlot;
+}
+
+function toggleAutoPlot() {
+  options.autoPlot = !options.autoPlot;
+  saveAutoPlot(options.autoPlot);
+  syncAutoPlotButton();
+  if (game) setAutoPlot(game, options.autoPlot);
+  showToast(
+    '指揮所',
+    options.autoPlot
+      ? '自動記入 入。無線で入った位置は、聞いたとおりに盤へ写す。'
+      : '自動記入 切。以後は自分の手で書き込むこと。',
+    false
+  );
+  audio.click();
+}
 
 const isNarrow = () =>
   window.matchMedia('(max-width: 900px), (pointer: coarse) and (max-width: 1100px)').matches;
@@ -211,6 +258,8 @@ function startMission() {
   options.variable = $('opt-variable').checked;
   options.voice = $('opt-voice').checked;
   options.creative = $('opt-creative').checked;
+  options.autoPlot = $('opt-autoplot').checked;
+  saveAutoPlot(options.autoPlot);
 
   // 敵の企図を変えるなら、下敷きに作った盤は捨てて作り直す
   game =
@@ -223,6 +272,8 @@ function startMission() {
         })
       : previewGame;
   previewGame = null;
+  setAutoPlot(game, options.autoPlot);
+  syncAutoPlotButton();
   document.body.classList.toggle('is-drill', options.creative);
 
   showView('view-game');
@@ -467,36 +518,18 @@ function citeReport(entry) {
   audio.click();
 }
 
-// 報告された兵種を、地図に置く記号に対応させる
-const CLASSIFIED_TO_MARKER = {
-  infantry: 'enemy_inf',
-  recon: 'enemy_inf',
-  at_team: 'enemy_at',
-  mech: 'enemy_mech',
-  tank: 'enemy_armor',
-  mortar: 'enemy_arty',
-  obstacle: 'obstacle',
-  convoy: 'unknown',
-  drone: 'unknown',
-};
-
 /**
  * 「聞いたとおりに」記号を置く。
  * 置かれるのは報告された位置であって、実際の位置ではない ─ そこが肝である。
  */
 function markFromReport(entry) {
-  const meta = entry.meta ?? {};
-  const p = meta.reportedX != null ? { x: meta.reportedX, y: meta.reportedY } : fromGrid(meta.grid);
-  if (!p) return;
+  // 自動記入と同じ道を通す。同じ敵の続報なら駒が増えず、その駒が動く。
+  const m = plotContact(game, entry, { manual: true });
+  if (!m) return;
 
-  const type = CLASSIFIED_TO_MARKER[meta.classified] ?? 'unknown';
-  const q = meta.quality ?? 0.4;
-  const confidence = q > 0.75 ? 'confirmed' : q > 0.45 ? 'estimated' : 'unconfirmed';
-
-  const m = addMarker(game, { x: p.x, y: p.y, type, confidence, label: `${entry.from}報` });
   mapView.selectedMarkId = m.id;
-  flashGrid(mapView, p.x, p.y);
-  if (!isWellVisible(mapView, p.x, p.y)) centerOn(mapView, p.x, p.y, Math.max(mapView.zoom, 1.8));
+  flashGrid(mapView, m.x, m.y);
+  if (!isWellVisible(mapView, m.x, m.y)) centerOn(mapView, m.x, m.y, Math.max(mapView.zoom, 1.8));
   if (isNarrow()) closeSheet();
   audio.click();
 }
@@ -1054,6 +1087,9 @@ window.addEventListener('keydown', (e) => {
       syncToolbox();
       break;
     }
+    case 'a': case 'A':
+      toggleAutoPlot();
+      break;
     default:
       break;
   }
@@ -1077,6 +1113,8 @@ $('btn-sound').addEventListener('click', () => {
   audio.resume();
 });
 
+$('btn-autoplot').addEventListener('click', toggleAutoPlot);
+
 // 演習の「真実の地図」。押した瞬間に霧が晴れる ─ 本編には無い釦である。
 $('btn-reveal').addEventListener('click', () => {
   if (!game || !isCreative(game)) return;
@@ -1086,4 +1124,5 @@ $('btn-reveal').addEventListener('click', () => {
   audio.click();
 });
 
+syncAutoPlotButton();
 fillBriefing();

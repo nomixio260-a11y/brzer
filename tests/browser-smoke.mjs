@@ -314,6 +314,8 @@ async function checkQuickMarking() {
   await p.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
   await p.waitForFunction(() => document.querySelectorAll('#mission-pick button').length > 0,
     null, { timeout: 10000 });
+  // ここで見るのは手で書く道具立てなので、書記には黙っていてもらう
+  await p.uncheck('#opt-autoplot');
   await p.click('#btn-start');
   await p.waitForTimeout(900);
 
@@ -404,6 +406,71 @@ async function checkQuickMarking() {
 }
 
 /**
+ * 自動記入。
+ * 無線が入れば書記が盤に写す ─ 指揮官が地図を叩き続けなくてよいこと。
+ */
+async function checkAutoPlot() {
+  const ctx = await browser.newContext({ viewport: { width: 1500, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message));
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+
+  await p.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+  await p.waitForFunction(() => document.querySelectorAll('#mission-pick button').length > 0,
+    null, { timeout: 10000 });
+  check('自動記入は既定で入っている', await p.isChecked('#opt-autoplot'));
+  await p.click('#btn-start');
+  await p.waitForTimeout(500);
+  check('入切の釦が出ている', await p.isVisible('#btn-autoplot'));
+
+  // 一度も地図を叩かないまま進める
+  await p.evaluate(() => { window.__brzer.game.speed = 30; window.__brzer.game.running = true; });
+  await p.waitForFunction(
+    () => window.__brzer.game.belief.markers.filter((m) => m.unitId).length >= 3,
+    null, { timeout: 120000 }
+  );
+  await p.evaluate(() => { window.__brzer.game.running = false; });
+
+  const state = await p.evaluate(() => {
+    const ms = window.__brzer.game.belief.markers;
+    return {
+      total: ms.length,
+      friends: ms.filter((m) => m.unitId).length,
+      labelled: ms.filter((m) => m.unitId && m.label).length,
+      noted: ms.filter((m) => m.note).length,
+      history: window.__brzer.game.history.length,
+    };
+  });
+  check('地図を叩かずに駒が並ぶ', state.friends >= 3, `${state.friends}`);
+  check('駒には呼出符号が入っている', state.labelled === state.friends, `${state.labelled}`);
+  check('駒には現況が添っている', state.noted > 0, `${state.noted}`);
+  check('取り消し履歴は汚れない', state.history === 0, `${state.history}`);
+
+  // 切れば止まる（釦でも鍵でも）
+  await p.click('#btn-autoplot');
+  await p.waitForTimeout(150);
+  check('釦を押すと消灯する',
+    !(await p.$eval('#btn-autoplot', (b) => b.classList.contains('is-on'))));
+  const frozen = await p.evaluate(() => window.__brzer.game.belief.markers.length);
+  await p.evaluate(() => { window.__brzer.game.speed = 30; window.__brzer.game.running = true; });
+  await p.waitForTimeout(2500);
+  await p.evaluate(() => { window.__brzer.game.running = false; });
+  check('切れば駒は増えない',
+    (await p.evaluate(() => window.__brzer.game.belief.markers.length)) === frozen,
+    `${frozen}`);
+
+  await p.keyboard.press('a');
+  await p.waitForTimeout(150);
+  check('A で入れ直せる',
+    await p.$eval('#btn-autoplot', (b) => b.classList.contains('is-on')));
+
+  check('自動記入でエラーが出ない', errs.length === 0, errs.slice(0, 3).join(' | '));
+  await p.screenshot({ path: `${SHOTS}/12-autoplot.png` });
+  await ctx.close();
+}
+
+/**
  * 演習モード。
  * 増援が呼べ、真実の地図が開き、そして本編ではそれが一切できないこと。
  */
@@ -488,6 +555,9 @@ try {
   check('任務文が地形から引かれている', /橋梁 [A-L]\d/.test(await page.textContent('#brief-mission')));
   await page.screenshot({ path: `${SHOTS}/01-briefing.png` });
 
+  // この通しでは手で書く道具立てを見る。書記が横から駒を並べると数が合わない。
+  // 自動記入そのものは checkAutoPlot と各ミッションの通しで見ている。
+  await page.uncheck('#opt-autoplot');
   await page.click('#btn-start');
   await page.waitForTimeout(900);
   check('戦闘画面へ移る', await page.isVisible('#view-game'));
@@ -746,7 +816,7 @@ try {
     (await page.evaluate(() => window.__brzer.game.belief.markers.length)) === marksBefore + 1);
   check('置かれた記号に発信元が記される', await page.evaluate(() => {
     const m = window.__brzer.game.belief.markers.at(-1);
-    return typeof m.label === 'string' && m.label.endsWith('報');
+    return typeof m.note === 'string' && m.note.length > 0;
   }));
 
   console.log('\n== 決着まで ==');
@@ -796,6 +866,7 @@ try {
   });
 
   await mp.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+  await mp.uncheck('#opt-autoplot'); // 指で置く手応えを見る回なので書記は下がらせる
   await mp.click('#btn-start');
   await mp.waitForTimeout(900);
 
@@ -900,6 +971,9 @@ try {
 
   section('記号を貼る手数');
   await checkQuickMarking();
+
+  section('自動記入');
+  await checkAutoPlot();
 
   section('演習モード');
   await checkCreative();

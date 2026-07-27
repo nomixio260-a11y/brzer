@@ -110,6 +110,17 @@
             </span>
           </label>
           <label class="setup__row">
+            <input type="checkbox" id="opt-autoplot" checked>
+            <span>
+              <b>自動記入</b>
+              <em>
+                指揮所の書記が、無線で入った位置をそのまま盤に写す。部隊の駒は報告のたびに動き、
+                名札と現況も書き替わる。写されるのは<b>報告された位置</b>であって実際の位置ではない ─
+                前線が見誤れば、盤も間違ったままになる。切れば全て手書きに戻る（戦闘中も「記」で入切）。
+              </em>
+            </span>
+          </label>
+          <label class="setup__row">
             <input type="checkbox" id="opt-voice" checked>
             <span>
               <b>無線を読み上げる</b>
@@ -173,6 +184,7 @@
     <div class="objective" id="objective-line"></div>
 
     <button id="btn-reveal" class="iconbtn iconbtn--drill" title="真実の地図（演習）" aria-label="真実の地図" hidden>真</button>
+    <button id="btn-autoplot" class="iconbtn is-on" title="自動記入 ─ 無線を聞いたとおりに地図へ写す (A)" aria-label="自動記入の入切">記</button>
     <button id="btn-sound" class="iconbtn is-on" title="音の入切" aria-label="音の入切">♪</button>
   </header>
 

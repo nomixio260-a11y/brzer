@@ -22,6 +22,10 @@ import { fatigueFactor, fatigueJa } from '../src/sim/logistics.js';
 import { applyDamage } from '../src/sim/units.js';
 import { composeSitrep } from '../src/sim/reports.js';
 import { findPath } from '../src/sim/pathfind.js';
+import {
+  createGame, advance, getMarkers, markUnit, updateMarker, removeMarker,
+  setAutoPlot, isAutoPlot, plotContact,
+} from '../src/state.js';
 
 let failures = 0;
 let checks = 0;
@@ -1130,6 +1134,84 @@ section('演習モード');
   let guard = 0;
   while (!w2.outcome && guard++ < 20000) tick(w2, 1);
   check('演習の盤も決着する', !!w2.outcome, `${w2.outcome}`);
+}
+
+/* ------------------------------------------------------------------ */
+
+section('自動記入');
+{
+  const runFor = (g, seconds) => {
+    g.running = true;
+    // advance() は実秒を受ける。1回 0.5 実秒 = 3 秒ぶん進む。
+    for (let i = 0; i < seconds / 3 && !g.finished; i++) advance(g, 0.5);
+  };
+
+  const g = createGame({ missionId: 'bridge' });
+  check('開戦時の盤は白紙', getMarkers(g).length === 0);
+
+  runFor(g, 300);
+  const friends = getMarkers(g).filter((m) => m.unitId);
+  check('交信した部隊の駒が立つ', friends.length >= 4, `${friends.length}`);
+  check('駒に呼出符号が入る', friends.every((m) => m.label));
+  check('駒に現況が添う', friends.some((m) => m.note));
+  check('自動記入は取り消し履歴を汚さない', g.history.length === 0, `${g.history.length}`);
+
+  // 同じ部隊の続報で駒が増えず、動く
+  const before = getMarkers(g).filter((m) => m.unitId === friends[0].unitId).length;
+  runFor(g, 3600); // 0800 ─ 敵が渡ってくるところまで進める
+  const after = getMarkers(g).filter((m) => m.unitId === friends[0].unitId).length;
+  check('続報で駒は増えない', before === 1 && after === 1, `${before}→${after}`);
+
+  const foes = getMarkers(g).filter((m) => m.src?.startsWith('c:'));
+  check('敵情も盤に写る', foes.length > 0, `${foes.length}`);
+  check('敵の駒に報告者が添う', foes.every((m) => m.note));
+
+  // 下ろした駒は、次の報告で勝手に立ち上がらない
+  const victim = getMarkers(g).find((m) => m.unitId);
+  removeMarker(g, victim.id);
+  runFor(g, 600);
+  check(
+    '下ろした駒は戻らない',
+    !getMarkers(g).some((m) => m.unitId === victim.unitId),
+    `${victim.unitId}`
+  );
+  // 指揮官が自分で置き直せば、また書記の担当に戻る
+  markUnit(g, victim.unitId);
+  const back = getMarkers(g).find((m) => m.unitId === victim.unitId);
+  check('置き直せば復帰する', !!back);
+  runFor(g, 300);
+  check('復帰後はまた追随する', getMarkers(g).some((m) => m.unitId === victim.unitId));
+
+  // 名前を書き入れた駒は、書記が上書きしない
+  const mine = getMarkers(g).find((m) => m.unitId);
+  updateMarker(g, mine.id, { label: '左翼の要' });
+  runFor(g, 600);
+  check(
+    '付けた名前は消されない',
+    getMarkers(g).find((m) => m.id === mine.id)?.label === '左翼の要'
+  );
+
+  // 切れば止まる
+  const g2 = createGame({ missionId: 'bridge', autoPlot: false });
+  check('切って始められる', !isAutoPlot(g2));
+  runFor(g2, 900);
+  check('切れば何も写らない', getMarkers(g2).length === 0, `${getMarkers(g2).length}`);
+  setAutoPlot(g2, true);
+  runFor(g2, 300);
+  check('入れ直せば写り始める', getMarkers(g2).length > 0);
+
+  // 届かなかった送信は盤に何も残さない
+  const g3 = createGame({ missionId: 'bridge' });
+  const lost = {
+    lost: true,
+    from: 'ハンマー1',
+    fromId: 'H1',
+    kind: 'contact',
+    at: g3.world.now,
+    meta: { reportedX: 2000, reportedY: 2000, classified: 'tank', quality: 0.9, contactId: 'X1' },
+  };
+  plotContact(g3, lost);
+  check('聞こえなかった報告は写らない', getMarkers(g3).length === 0);
 }
 
 /* ------------------------------------------------------------------ */

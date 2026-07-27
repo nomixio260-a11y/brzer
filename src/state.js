@@ -41,6 +41,20 @@ export const CONFIDENCE = Object.freeze({
   unconfirmed: { label: '未確認', short: '未確認', dash: [2, 3.5] },
 });
 
+// 報告された兵種を、地図に置く記号に対応させる。
+// 対応するのは「報告された正体」であって、実際の正体ではない。
+export const CLASSIFIED_TO_MARKER = Object.freeze({
+  infantry: 'enemy_inf',
+  recon: 'enemy_inf',
+  at_team: 'enemy_at',
+  mech: 'enemy_mech',
+  tank: 'enemy_armor',
+  mortar: 'enemy_arty',
+  obstacle: 'obstacle',
+  convoy: 'unknown',
+  drone: 'unknown',
+});
+
 // 記号だけでは書けないもの ― 敵の進出方向、部隊の境界、火力を集中させる範囲。
 // 指揮官は点ではなく線と面でも考えるので、その道具を用意する。
 export const SKETCH_TOOLS = Object.freeze({
@@ -74,7 +88,14 @@ export function createGame(opts = {}) {
       held: new Map(), // unitId -> 渡してある予令
       log: [],
       unread: 0,
+      // 指揮官が自分の手で盤から下ろした駒の出所。
+      // 一度下ろしたものを無線が勝手に載せ直しては、消した意味がない。
+      dropped: new Set(),
     },
+
+    // 無線を聞いたら書記が地図に写す（＝自動記入）。
+    // 切れば全て手書きに戻る ─ 何を写すかを自分で選ぶのも指揮である。
+    autoPlot: opts.autoPlot !== false,
 
     // アセテートの取り消し履歴（書き込みは小さいので丸ごと控える）
     history: [],
@@ -140,7 +161,10 @@ function absorb(game, entry) {
   }
 
   const self = entry.meta?.self;
-  if (!entry.fromId || !self || entry.lost) return;
+  if (!entry.fromId || !self || entry.lost) {
+    autoPlot(game, entry);
+    return;
+  }
 
   const prev = game.belief.roster.get(entry.fromId) ?? {};
   game.belief.roster.set(entry.fromId, {
@@ -161,6 +185,143 @@ function absorb(game, entry) {
     wounded: !!self.wounded,
     lastKind: entry.kind,
   });
+
+  autoPlot(game, entry);
+}
+
+/* ------------------------------------------------------------------ */
+/* 自動記入                                                            */
+/* ------------------------------------------------------------------ */
+//
+// 本来これは指揮官の仕事ではなく、指揮所の書記の仕事である。
+// 無線を聞き、聞こえたとおりに駒を置き、動いたと言われれば動かす。
+// 指揮官はその盤を見て考える ― 駒を置くために地図を叩き続けたりはしない。
+//
+// 大事なのは、写されるのが「報告された位置」だという一点。
+// 書記が几帳面でも、前線が見誤っていれば盤は間違ったままである。
+
+/** 同じ敵を指していると見なす距離。これより離れていれば別の駒を立てる。 */
+const SAME_TRACK = 620;
+/** 誰も何も言わなくなった敵の駒を、盤から下ろすまでの時間 */
+const TRACK_LIFE = 1500;
+
+export function setAutoPlot(game, on) {
+  game.autoPlot = !!on;
+  return game.autoPlot;
+}
+
+export function isAutoPlot(game) {
+  return !!game.autoPlot;
+}
+
+/** 自軍の駒に添える一言。今この部隊がどうなっているか。 */
+function selfNote(entry, self) {
+  if (entry.kind === 'broken') return '統制喪失';
+  // 敵情ではなく自分のことを言ってきた「contact」＝ 撃たれているという報告
+  if (entry.kind === 'contact' && !entry.meta?.classified) return '被射撃';
+  if (entry.kind === 'logistics') return '補給';
+  return self.state ?? null;
+}
+
+function autoPlot(game, entry) {
+  if (!game.autoPlot) return;
+  // 聞こえなかったものは書けない。届かなかった送信は盤に何も残さない。
+  if (entry.lost || entry.outbound) return;
+
+  const meta = entry.meta ?? {};
+
+  if (meta.reportedX != null && meta.classified) plotContact(game, entry);
+  if (entry.kind === 'kill' && meta.grid) strikeOff(game, meta.grid);
+
+  if (meta.self?.grid && entry.fromId) {
+    const m = markUnit(game, entry.fromId, { record: false, auto: true });
+    if (m) m.note = selfNote(entry, meta.self);
+  }
+
+  cullTracks(game);
+}
+
+/**
+ * 敵情報告を盤に写す。既にその敵の駒が立っていれば、動かす。
+ *
+ * 手で押した場合（manual）は指揮官の意思なので、一度下ろした駒でも立て直す。
+ * @returns {object|null} 置いた／動かした記号
+ */
+export function plotContact(game, entry, { manual = false } = {}) {
+  const meta = entry?.meta ?? {};
+  if (meta.reportedX == null || entry.lost) return null;
+
+  // 誰が何を報せてきたかで一本の航跡にする。
+  // 砲声の交会のように方眼が毎回ずれるものを、方眼で束ねてはいけない ―
+  // 束ねられずに駒だけが増えていく。近ければ同じもの、遠ければ別もの、で足りる。
+  const src = meta.contactId
+    ? `c:${meta.contactId}`
+    : `x:${meta.classified}:${entry.fromId ?? '?'}`;
+  if (manual) game.belief.dropped.delete(src);
+  else if (game.belief.dropped.has(src)) return null;
+
+  const type = CLASSIFIED_TO_MARKER[meta.classified] ?? 'unknown';
+  // 雑音で潰れた送信は、そのぶん確かさが落ちる。
+  // 「聞き取れなかったのに盤の上だけは正確」ということがあってはならない。
+  const q = (meta.quality ?? 0.4) * (entry.garbled ? 0.6 : 1);
+  const confidence = q > 0.75 ? 'confirmed' : q > 0.45 ? 'estimated' : 'unconfirmed';
+
+  // 同じ出所の駒のうち、報告位置にいちばん近いものを動かす。
+  // 遠く離れていれば別物 ― 指揮官にはそれが同じ敵かどうか分からない。
+  let best = null;
+  let bestD = SAME_TRACK;
+  for (const m of game.belief.markers) {
+    if (m.src !== src) continue;
+    const d = Math.hypot(m.x - meta.reportedX, m.y - meta.reportedY);
+    if (d < bestD) { best = m; bestD = d; }
+  }
+
+  if (best) {
+    if (manual) snapshot(game);
+    best.x = meta.reportedX;
+    best.y = meta.reportedY;
+    best.type = type;
+    best.confidence = confidence;
+    if (!best.labelLocked) best.note = entry.from;
+    best.updatedAt = game.world.now;
+    return best;
+  }
+
+  return addMarker(game, {
+    x: meta.reportedX,
+    y: meta.reportedY,
+    type,
+    confidence,
+    note: entry.from,
+    src,
+    auto: !manual,
+    record: manual,
+  });
+}
+
+/**
+ * 敵の航跡かどうか。
+ * 自軍の駒（unitId 持ち）と障害は動かないし、消えもしない ─ 下ろす対象ではない。
+ */
+function isTrack(m) {
+  return !!m.auto && !m.unitId && m.type !== 'obstacle';
+}
+
+/** 撃破の報告。そこに立っていた敵の駒を下ろす。 */
+function strikeOff(game, grid) {
+  const p = fromGrid(grid);
+  if (!p) return;
+  game.belief.markers = game.belief.markers.filter(
+    (m) => !(isTrack(m) && Math.hypot(m.x - p.x, m.y - p.y) < 260)
+  );
+}
+
+/** 誰も言わなくなって久しい敵の駒は、盤から下ろす（古い駒で判断させない）。 */
+function cullTracks(game) {
+  const now = game.world.now;
+  game.belief.markers = game.belief.markers.filter(
+    (m) => !(isTrack(m) && now - m.updatedAt > TRACK_LIFE)
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -344,6 +505,8 @@ export function undo(game) {
   if (!prev) return false;
   game.belief.markers = prev.markers;
   game.belief.sketches = prev.sketches;
+  // 消したのを取り消したのなら、その駒はまた書記の担当に戻る。
+  for (const m of prev.markers) if (m.src) game.belief.dropped.delete(m.src);
   return true;
 }
 
@@ -358,9 +521,12 @@ export function addMarker(
   {
     x, y, type = 'enemy_inf', confidence = 'estimated', label = '',
     unitId = null, icon = null, echelon = null,
+    note = null, src = null, auto = false, record = true,
   }
 ) {
-  snapshot(game);
+  // 書記が写した駒で取り消し履歴を埋めない。
+  // 「取消」は指揮官が自分で書いたものを消すための釦である。
+  if (record) snapshot(game);
   const marker = {
     id: `M${markerSeq++}`,
     x,
@@ -374,6 +540,11 @@ export function addMarker(
     // 兵科の絵と部隊規模。指定が無ければ記号の種別に従う。
     icon,
     echelon,
+    // 添え書き（誰の報告か、今どうしているか）と、その駒の出所。
+    note,
+    src,
+    auto,
+    labelLocked: false,
     createdAt: game.world.now,
     updatedAt: game.world.now,
   };
@@ -390,7 +561,12 @@ export function addMarker(
  *
  * @returns {object|null} 置いた／動かした記号。まだ交信が無ければ null。
  */
-export function markUnit(game, unitId) {
+export function markUnit(game, unitId, { record = true, auto = false } = {}) {
+  const src = `u:${unitId}`;
+  // 指揮官が自分の指で置き直したなら、それは「もう一度載せろ」という意思表示。
+  if (record) game.belief.dropped.delete(src);
+  else if (game.belief.dropped.has(src)) return null;
+
   const heard = game.belief.roster.get(unitId);
   if (!heard?.grid) return null;
   const p = fromGrid(heard.grid);
@@ -404,11 +580,13 @@ export function markUnit(game, unitId) {
 
   const existing = game.belief.markers.find((m) => m.unitId === unitId);
   if (existing) {
-    snapshot(game);
+    if (record) snapshot(game);
     existing.x = p.x;
     existing.y = p.y;
     existing.confidence = confidence;
-    existing.label = heard.callsign;
+    // 指揮官が付け直した名前は、書記が上書きしてよいものではない。
+    if (!existing.labelLocked) existing.label = heard.callsign;
+    existing.src ??= src;
     existing.updatedAt = game.world.now;
     return existing;
   }
@@ -422,6 +600,9 @@ export function markUnit(game, unitId) {
     unitId,
     icon: def?.icon ?? 'infantry',
     echelon: def?.echelon ?? null,
+    src,
+    auto,
+    record,
   });
 }
 
@@ -445,19 +626,26 @@ export function updateMarker(game, id, patch) {
   const m = game.belief.markers.find((m) => m.id === id);
   if (!m) return;
   Object.assign(m, patch);
+  // 名前を書き入れたら、その駒はもう指揮官のものである。以後は上書きしない。
+  if (patch.label !== undefined) m.labelLocked = true;
   m.updatedAt = game.world.now;
 }
 
 export function removeMarker(game, id) {
-  if (!game.belief.markers.some((m) => m.id === id)) return;
+  const m = game.belief.markers.find((x) => x.id === id);
+  if (!m) return;
   snapshot(game);
-  game.belief.markers = game.belief.markers.filter((m) => m.id !== id);
+  // 指揮官が下ろした駒は、次の報告でまた立ち上がってきてはいけない。
+  if (m.src) game.belief.dropped.add(m.src);
+  game.belief.markers = game.belief.markers.filter((x) => x.id !== id);
 }
 
 /** 全部消す */
 export function clearMarkings(game) {
   if (!game.belief.markers.length && !game.belief.sketches.length) return;
   snapshot(game);
+  // 盤を拭ったのだから、書記も最初からやり直す。
+  game.belief.dropped.clear();
   game.belief.markers = [];
   game.belief.sketches = [];
 }

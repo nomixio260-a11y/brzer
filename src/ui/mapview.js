@@ -804,6 +804,8 @@ function drawMarkers(ctx, view, game, px) {
     // 注記: ラベル ／ 確度 ／ 書き込んでからの経過
     const age = Math.round((now - m.updatedAt) / 60);
     const bits = [m.label || spec.label];
+    // 書記が添えた一言 ─ 誰の報告か／その部隊が今どうしているか
+    if (m.note) bits.push(m.note);
     if (m.confidence !== 'confirmed') bits.push(conf.short);
     if (age >= 1) bits.push(`${age}分`);
     penLabel(ctx, bits.join(' / '), m.x, m.y + r * 1.85, spec.color, px(9), alpha);

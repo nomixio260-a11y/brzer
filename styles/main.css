@@ -1076,8 +1076,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
   .topbar {
     height: 46px;
-    gap: 7px;
-    padding: 0 8px;
+    gap: 6px;
+    padding: 0 6px;
     padding-top: env(safe-area-inset-top);
     height: calc(46px + env(safe-area-inset-top));
   }
@@ -1244,6 +1244,15 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   .maphint { bottom: 74px; font-size: 11px; padding: 7px 12px; max-width: calc(100% - 68px); }
   .maphint__send { max-width: none; }
   .only-desktop { display: none; }
+}
+
+/* 幅の狭い機種。上部帯に入切の釦が並ぶと 360px では右端が落ちる。
+   触れる大きさは残したまま、詰められる隙間だけを詰める。 */
+@media (max-width: 380px) {
+  .topbar { gap: 4px; padding: 0 4px; }
+  .speed__btn { min-width: 29px; padding: 7px 2px; }
+  .iconbtn { width: 28px; }
+  .support { gap: 8px; }
 }
 
 /* 縦に短い端末（横持ち）ではパネルを浅くする */
