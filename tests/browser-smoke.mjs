@@ -797,6 +797,17 @@ async function checkNation() {
   check('戒厳令は恐怖を生む', st.fear > 0, `${st.fear}`);
   check('国の係数が盤に渡る', st.war && st.distortion.fear === st.fear);
 
+  // 恐怖の下で一日戦い、講評で突き合わせが出ること
+  await p.evaluate(() => { window.__brzer.campaign.nation.fear = 0.85; });
+  await p.click('#btn-hhour');
+  await runClock(p, 60);
+  await p.waitForSelector('#view-debrief.is-active', { timeout: 240000 });
+  await p.waitForTimeout(900);
+  check('講評に「聞いていたこと」の節が出る', await p.isVisible('#debrief-gap-block'));
+  check('二列が並ぶ', (await p.$$('#debrief-gap li')).length > 0);
+  check('報告の甘さが講評に出る',
+    (await p.textContent('#debrief-stats')).includes('貴官が受けていた報告'));
+
   check('国政でエラーが出ない', errs.length === 0, errs.slice(0, 3).join(' | '));
   await ctx.close();
 }

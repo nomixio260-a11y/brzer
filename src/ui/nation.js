@@ -63,7 +63,13 @@ function renderMeters(el, view) {
     val.textContent = String(m.value);
     if (m.value <= 22) val.classList.add('is-low');
 
-    row.append(label, track, val);
+    // 段階の語。造反や内乱の一歩手前に名前があると、帰結が突然でなくなる。
+    const stage = document.createElement('span');
+    stage.className = 'natmeter__stage';
+    stage.textContent = m.stage ?? '';
+    if (m.value <= 28) stage.classList.add('is-low');
+
+    row.append(label, track, val, stage);
     el.appendChild(row);
   }
 }
@@ -277,7 +283,12 @@ function renderRule(el, view) {
     list.className = 'purgelist';
     for (const p of view.purged) {
       const li = document.createElement('li');
-      li.textContent = `${p.name} ${p.rank}（${p.xp}戦）`;
+      // 何日目に、どういう者を除いたか。名前で数える。
+      li.textContent =
+        `${p.name} ${p.rank}` +
+        `（${p.callsign ?? ''}・${p.battles ?? 0}戦` +
+        `${p.traits?.length ? `・${p.traits.join('・')}` : ''}）` +
+        `${p.day ? ` ${p.day}日目` : ''}`;
       list.appendChild(li);
     }
     const cap = document.createElement('div');

@@ -879,6 +879,18 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .unitfate .is-dead { color: #e2685c; }
 .unitfate__who { display: block; font-style: normal; font-size: 10.5px; color: var(--ink-faint); margin-top: 2px; }
 
+/* 聞いていたこと ／ 起きていたこと */
+.reportgap { list-style: none; margin: 0; padding: 0; }
+.reportgap li {
+  display: grid; grid-template-columns: 6.5em minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--hair-soft);
+  font-size: 11.5px; line-height: 1.55; align-items: baseline;
+}
+.reportgap b { font-family: var(--mono); color: var(--lamp-blue); font-weight: 500; }
+.reportgap__said { color: #c09a48; }
+.reportgap__real { color: var(--ink); font-family: var(--mono); }
+.reportgap__real.is-dead { color: #e2685c; }
+
 .enemyintent { list-style: none; margin: 0; padding: 0; }
 .enemyintent li {
   display: grid;
@@ -1107,7 +1119,7 @@ body.is-planning .maphint { bottom: 108px; }
 #view-nation.is-active { display: block; overflow-y: auto; }
 
 .natmeters { display: grid; gap: 6px; margin-top: 18px; }
-.natmeter { display: grid; grid-template-columns: 3.4em 1fr 2.6em; align-items: center; gap: 10px; }
+.natmeter { display: grid; grid-template-columns: 3.4em 1fr 2.6em 3.4em; align-items: center; gap: 10px; }
 .natmeter__label { font-size: 10px; letter-spacing: 0.22em; color: var(--ink-faint); }
 .natmeter__track {
   height: 8px; background: #17130f; border: 1px solid #000; display: block;
@@ -1123,6 +1135,11 @@ body.is-planning .maphint { bottom: 108px; }
   text-align: right; font-variant-numeric: tabular-nums;
 }
 .natmeter__value.is-low { color: #e2685c; }
+.natmeter__stage {
+  font-size: 9.5px; letter-spacing: 0.18em; color: var(--ink-dim);
+  min-width: 2.6em; text-align: right;
+}
+.natmeter__stage.is-low { color: #e2685c; }
 
 .natline {
   display: flex; gap: 20px; flex-wrap: wrap; align-items: baseline;
@@ -1594,7 +1611,8 @@ body.is-planning .maphint { bottom: 108px; }
   .decrees { grid-template-columns: 1fr; }
   .corps { grid-template-columns: 1fr; gap: 7px; }
   .corps__acts { justify-content: flex-end; }
-  .natmeter { grid-template-columns: 3em 1fr 2.4em; }
+  .natmeter { grid-template-columns: 3em 1fr 2.2em 3.2em; }
+  .reportgap li { grid-template-columns: 1fr; gap: 2px; }
   .planbar { bottom: 74px; flex-direction: column; align-items: stretch; gap: 9px; padding: 11px 14px; }
   .planbar__go { padding: 9px 18px; }
   .maphint__send { max-width: none; }

@@ -21,6 +21,7 @@ import {
 import { fatigueFactor, fatigueJa } from '../src/sim/logistics.js';
 import { applyDamage } from '../src/sim/units.js';
 import { composeSitrep } from '../src/sim/reports.js';
+import { shownSelf } from '../src/sim/comms.js';
 import { findPath } from '../src/sim/pathfind.js';
 import {
   createGame, advance, getMarkers, markUnit, updateMarker, removeMarker,
@@ -28,10 +29,10 @@ import {
   newCampaign, startCampaignBattle, finishCampaignBattle, getCampaignView, getCompany,
   assignReplacement, allotRounds, setNightPlan, campaignList,
   getNationView, getOfficerCorps, pickDecree, unpickDecree, stopStanding,
-  purgeIn, decorateIn,
+  purgeIn, decorateIn, getReportGap,
 } from '../src/state.js';
 import {
-  createNation, canDecree, checkCollapse, ruleSummary, START,
+  createNation, canDecree, checkCollapse, ruleSummary, START, stageOf,
 } from '../src/sim/nation.js';
 import { enqueue as commsEnqueue } from '../src/sim/comms.js';
 import { endPlanning } from '../src/sim/world.js';
@@ -43,7 +44,7 @@ import {
 } from '../src/sim/attachments.js';
 import { isArmorDuel } from '../src/sim/armor.js';
 import {
-  replacementRoom, serializeCampaign, deserializeCampaign,
+  replacementRoom, serializeCampaign, deserializeCampaign, recordBattle, settleNight,
 } from '../src/sim/campaign.js';
 import { Rng } from '../src/util.js';
 
@@ -1515,6 +1516,17 @@ section('国政');
     `志願 民${Math.round(stV.nation.morale)}/兵${stV.pool.replacements} ` +
     `徴兵 民${Math.round(stC.nation.morale)}/兵${stC.pool.replacements}`);
 
+  // 一晩は一度しか明けない
+  const stN = newCampaign('volne_three_days', 6);
+  pickDecree(stN, 'tax');
+  startCampaignBattle(stN);
+  const once = { pool: stN.pool.replacements, treasury: stN.nation.treasury };
+  startCampaignBattle(stN);
+  startCampaignBattle(stN);
+  check('出撃し直しても決算は一度きり',
+    stN.pool.replacements === once.pool && stN.nation.treasury === once.treasury,
+    `補充 ${once.pool}→${stN.pool.replacements} 国庫 ${once.treasury}→${stN.nation.treasury}`);
+
   // 継続の令
   const st2 = newCampaign('volne_three_days', 4);
   pickDecree(st2, 'censorship');
@@ -1524,6 +1536,16 @@ section('国政');
   const fearAt = st2.nation.fear;
   stopStanding(st2, 'censorship');
   check('解けば施行中から消える', !st2.nation.standing.includes('censorship'));
+
+  // 底で詰まっている目盛りを、令の出し入れで増やせてはいけない
+  const stX = newCampaign('volne_three_days', 9);
+  stX.nation.morale = 2;
+  pickDecree(stX, 'martial_law');
+  startCampaignBattle(stX);
+  const bottomed = stX.nation.morale;
+  stopStanding(stX, 'martial_law');
+  check('令の出し入れで民心は湧かない', stX.nation.morale <= 2.01,
+    `2 → ${bottomed} → ${stX.nation.morale}`);
   check('恐怖は半分しか戻らない',
     st2.nation.fear > 0 && st2.nation.fear < fearAt, `${fearAt} → ${st2.nation.fear}`);
 }
@@ -1582,7 +1604,17 @@ section('忠誠と粛清');
   check('代わりが立つ', st.officers.get(target.unitId).name !== target.name);
   check('経歴は戻らない', st.officers.get(target.unitId).xp === 0);
   check('数えられている', st.nation.purged.length === 1);
-  check('除かれた者が記録に残る', getNationView(st).purged[0].name === target.name);
+  const rec = getNationView(st).purged[0];
+  check('除かれた者が記録に残る', rec.name === target.name);
+  check('何日目かも残る', rec.day === 1, `${rec.day}`);
+  check('呼出符号と戦数も残る', !!rec.callsign && typeof rec.battles === 'number');
+
+  // 指標には段階の語が付く
+  const meters = getNationView(st).meters;
+  check('指標に段階の語が付く', meters.every((m) => (m.stage ?? '').length > 0),
+    meters.map((m) => `${m.label}:${m.stage}`).join(' '));
+  check('崖の手前に名前がある', stageOf('loyalty', 20) === '造反' || stageOf('loyalty', 35) === '離心',
+    `${stageOf('loyalty', 35)}`);
 
   // 離れかけている者を除くほうが、士官団は揺れない
   const a = newCampaign('volne_three_days', 11);
@@ -1622,17 +1654,32 @@ section('国が保たなくなるとき');
   check('民心が尽きれば内乱', checkCollapse(n2, rng)?.id === 'uprising');
   check('健全なら何も起きない', checkCollapse(createNation(), rng) === null);
 
-  // 戦役の決着として出る
+  // 戦役の決着として出る。
+  // 一戦を回して確かめると勝敗次第で忠誠が戻ってしまうので、
+  // 帳簿への取り込みそのものを直接叩く。
   const st = newCampaign('volne_three_days', 616);
   st.nation.loyalty = 0;
-  const g = startCampaignBattle(st);
-  startClock(g);
-  let t = 0;
-  while (!g.finished && t++ < 8000) advance(g, 0.5);
-  finishCampaignBattle(g);
+  st.nation.morale = 40;
+  recordBattle(st, {
+    outcome: 'defeat',
+    units: [],
+    score: { losses: 0, enemyLosses: 0, civilianLosses: 0, friendlyFireUnits: 0 },
+  }, new Rng(3));
   check('造反は戦役の決着になる', st.finished && st.result === 'collapse', `${st.result}`);
   check('決着の理由が出る', (st.resultReason ?? '').length > 5);
   check('画面にも造反として出る', getCampaignView(st).collapse === 'coup');
+
+  // 民心が尽きれば内乱として決着する
+  const st2 = newCampaign('volne_three_days', 617);
+  st2.nation.morale = 0;
+  st2.nation.loyalty = 60;
+  recordBattle(st2, {
+    outcome: 'defeat',
+    units: [],
+    score: { losses: 0, enemyLosses: 0, civilianLosses: 0, friendlyFireUnits: 0 },
+  }, new Rng(3));
+  check('内乱も戦役の決着になる', st2.result === 'collapse' && st2.collapse === 'uprising',
+    `${st2.result}/${st2.collapse}`);
 }
 
 section('統治の評価');
@@ -1667,6 +1714,73 @@ section('統治の評価');
   const oldSave = JSON.parse(JSON.stringify(serializeCampaign(st)));
   delete oldSave.nation;
   check('国の無い古い保存も読める', !!deserializeCampaign(oldSave)?.nation);
+}
+
+/* ------------------------------------------------------------------ */
+
+section('恐怖は盤を動かさない');
+{
+  // ここが v3.0 でいちばん壊しやすい所である。
+  // 報告の文面が盤と同じ乱数列を引いていたので、「言い回しが一語変わる」だけで
+  // 以後の弾着点も敵の判断もずれていた ─ 情報統制を敷くと敵砲兵の落ちる場所が
+  // 変わる、という形で world/belief の分離が破れていた。
+  const sig = (w) =>
+    w.units.map((u) => `${u.id}:${u.x.toFixed(2)}:${u.y.toFixed(2)}:${u.strength.toFixed(3)}`).join('|');
+  const run = (fear) => {
+    const w = createWorld({
+      missionId: 'bridge_hold',
+      setup: {
+        units: {}, officers: new Map(),
+        // 恐怖以外は一切変えない（士気の下駄も練度も統制も並のまま）
+        war: { fear, honesty: 1 - fear, recruit: 1, startMorale: 0, hold: 1 },
+      },
+    });
+    for (let i = 0; i < 6500 && !w.outcome; i++) tick(w, 1);
+    return { sig: sig(w), outcome: w.outcome, now: w.now };
+  };
+  const plain = run(0);
+  const afraid = run(0.9);
+  check('恐怖を上げても盤は一致する', plain.sig === afraid.sig);
+  check('決着も一致する', plain.outcome === afraid.outcome && plain.now === afraid.now,
+    `${plain.outcome}@${plain.now} / ${afraid.outcome}@${afraid.now}`);
+
+  // 同じ電文の本文と、部隊一覧に流れる数字は一致していなければならない
+  const w = createWorld({
+    missionId: 'bridge_hold',
+    setup: { units: {}, officers: new Map(), war: { fear: 0.8, honesty: 0.2 } },
+  });
+  const u = w.unitsById.get('H1');
+  u.strength = 3;
+  u.morale = 30;
+  u.ammo = 10;
+  const said = shownSelf(w, u);
+  const body = composeSitrep(u, w);
+  check('状況報告の本文と一覧の数字が食い違わない', body.includes(said.strength),
+    `本文に「${said.strength}」が無い: ${body}`);
+  check('弾薬も食い違わない', !body.includes('ほぼ尽きた'), body);
+}
+
+/* ------------------------------------------------------------------ */
+
+section('聞いていたこと と 起きていたこと');
+{
+  // 恐怖の下で戦えば、講評で二列が食い違う。
+  const st = newCampaign('volne_three_days', 2024);
+  st.nation.fear = 0.85;
+  const g = startCampaignBattle(st);
+  startClock(g);
+  let t = 0;
+  while (!g.finished && t++ < 8000) advance(g, 0.5);
+  const gap = getReportGap(g);
+  check('講評で突き合わせが取れる', gap.length > 0, `${gap.length}`);
+  check('恐怖の下では食い違う', gap.some((r) => r.gap),
+    gap.map((r) => `${r.callsign} 言:${r.said} 実:${r.truth}`).join(' / '));
+  check('真実の側は truth に出る', gap.every((r) => typeof r.truth === 'string'));
+
+  // 戦闘中は返さない。真実を開くのは講評だけである。
+  const st2 = newCampaign('volne_three_days', 2025);
+  const g2 = startCampaignBattle(st2);
+  check('戦闘中は突き合わせを返さない', getReportGap(g2).length === 0);
 }
 
 /* ------------------------------------------------------------------ */

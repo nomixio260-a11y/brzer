@@ -30,6 +30,35 @@ export const METERS = Object.freeze({
   loyalty: { id: 'loyalty', label: '忠誠', note: '士官団が指導者に付いているか。尽きれば造反する。' },
 });
 
+/**
+ * 目盛りを言葉にする。
+ *
+ * 造反や内乱の一歩手前に名前があること ─ 「離心」「騒擾」 ─ が、
+ * 帰結を「突然」でなくする。数字を読まなくても、国の様子が分かる必要がある。
+ */
+export const STAGES = Object.freeze({
+  morale: [
+    { at: 0, label: '内乱' }, { at: 20, label: '騒擾' },
+    { at: 40, label: '不穏' }, { at: 62, label: '平穏' },
+  ],
+  control: [
+    { at: 0, label: '寛' }, { at: 34, label: '常' },
+    { at: 62, label: '厳' }, { at: 82, label: '苛' },
+  ],
+  loyalty: [
+    { at: 0, label: '造反' }, { at: 28, label: '離心' },
+    { at: 48, label: '動揺' }, { at: 70, label: '帰服' },
+  ],
+});
+
+export function stageOf(id, value) {
+  const steps = STAGES[id];
+  if (!steps) return '';
+  let out = steps[0].label;
+  for (const st of steps) if (value >= st.at) out = st.label;
+  return out;
+}
+
 export const START = Object.freeze({
   morale: 62,
   control: 55,
@@ -62,6 +91,8 @@ export function createNation() {
     decorated: [],
     // 出した政令の履歴（講評で「どう統治したか」を突きつけるために残す）
     ledger: [],
+    // 継続の令が「実際に動かした分」。解くときはこれを返す。
+    applied: {},
     // 帳簿の上の生産。前の手番の政令で決まる。
     output: { replacements: 6, rounds: 4 },
   };
@@ -132,7 +163,7 @@ export const DECREES = Object.freeze({
   },
   secret_police: {
     id: 'secret_police', group: 'order', label: '保安部の拡張',
-    note: '密告を制度にする。造反の芽は摘めるが、摘む手は誰も信じない。',
+    note: '密告を制度にする。造反の芽は摘める。摘んでいる側も、次は自分だと思っている。',
     cost: 10, effect: { control: +14, loyalty: -6, morale: -6 }, fear: +0.26, keep: true,
   },
 
@@ -206,12 +237,19 @@ export function liftStanding(nation, id) {
   const i = nation.standing.indexOf(id);
   if (i < 0) return false;
   nation.standing.splice(i, 1);
-  const d = DECREES[id];
-  // 敷いた時に得たものを、そのまま返す。恐怖だけは半分しか戻らない ―
-  // 一度密告された町は、令が解かれても隣人を信じない。
-  if (d) {
-    for (const [k, v] of Object.entries(d.effect ?? {})) nation[k] = clamp(nation[k] - v, 0, 100);
-    if (d.fear) nation.fear = clamp(nation.fear - d.fear * 0.5, 0, 1);
+
+  // 返すのは「表に書いてある値」ではなく「実際に動いた分」である。
+  //
+  // 表の値をそのまま引くと、目盛りが底や天井で詰まっていたときに
+  // 取られた以上が返ってきた ─ 民心2の国が戒厳令を敷いて解くだけで
+  // 民心が8ずつ増え、内乱がまるごと無効化されていた。
+  const applied = nation.applied?.[id];
+  if (applied) {
+    for (const [k, v] of Object.entries(applied)) {
+      if (k === 'fear') nation.fear = clamp(nation.fear - v * 0.5, 0, 1);
+      else nation[k] = clamp(nation[k] - v, 0, 100);
+    }
+    delete nation.applied[id];
   }
   return true;
 }
@@ -234,9 +272,17 @@ export function applyDecrees(nation, day = 1) {
   for (const id of nation.decrees) {
     const d = DECREES[id];
     if (!d) continue;
+    const before = { morale: nation.morale, control: nation.control, loyalty: nation.loyalty, fear: nation.fear };
     nation.treasury = Math.max(0, nation.treasury - d.cost);
     for (const [k, v] of Object.entries(d.effect ?? {})) nation[k] = clamp(nation[k] + v, 0, 100);
     if (d.fear) nation.fear = clamp(nation.fear + d.fear, 0, 1);
+    // 継続の令は、実際に動いた分を控えておく（解くときにそれを返す）
+    if (d.keep) {
+      const moved = {};
+      for (const k of Object.keys(d.effect ?? {})) moved[k] = nation[k] - (before[k] ?? nation[k]);
+      if (d.fear) moved.fear = nation.fear - (before.fear ?? nation.fear);
+      (nation.applied ??= {})[id] = moved;
+    }
     output.replacements += d.yields?.replacements ?? 0;
     output.rounds += d.yields?.rounds ?? 0;
     quality += d.quality ?? 0;
@@ -325,18 +371,24 @@ export function purgeCost(nation, officer) {
   };
 }
 
-export function purge(nation, officer) {
+export function purge(nation, officer, day = 0) {
   const c = purgeCost(nation, officer);
   nation.control = clamp(nation.control + c.control, 0, 100);
   nation.loyalty = clamp(nation.loyalty + c.loyalty, 0, 100);
   nation.morale = clamp(nation.morale + c.morale, 0, 100);
   nation.fear = clamp(nation.fear + c.fear, 0, 1);
+  // 何日目に、どういう者を除いたか。
+  // 粛清を真面目に扱うとは、それが名前入りの一覧で戻ってくることである。
   nation.purged.push({
     unitId: officer.unitId,
+    callsign: officer.callsign ?? officer.unitId,
     name: officer.name,
     rank: officer.rank,
     xp: officer.xp,
-    loyalty: officer.loyalty ?? 60,
+    battles: officer.battles ?? 0,
+    traits: [...(officer.traits ?? [])],
+    loyalty: Math.round(officer.loyalty ?? 60),
+    day,
   });
   return c;
 }

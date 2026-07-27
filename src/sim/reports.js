@@ -2,7 +2,7 @@
 // 指揮官が受け取る情報は全てこのファイルを通って歪む。
 
 import { toGrid, bearing, compassJa, dist, formatClock } from '../util.js';
-import { enqueue, PRI } from './comms.js';
+import { enqueue, PRI, shownSelf } from './comms.js';
 import { moraleJa } from './units.js';
 import { localVisibilityJa } from './weather.js';
 import { landmarkAt } from './terrain.js';
@@ -96,8 +96,9 @@ function movementPhrase(c, rng) {
   return `${dir}へ移動中`;
 }
 
-function ammoJa(u) {
-  const r = u.ammo / (u.tpl.maxAmmo || 100);
+/** 残弾の言い方。渡すのは比であって部隊ではない ─
+ *  「部下が何と言うか」は、部下が何を見ているかではなく何を言えるかで決まる。 */
+function ammoJa(r) {
   if (r > 0.6) return '十分';
   if (r > 0.3) return '半分を切った';
   if (r > 0.1) return '心細い';
@@ -115,7 +116,7 @@ function ammoJa(u) {
  * 規模・行動・位置・装備・時刻。初報はこの形で上げ、続報は簡略にする。
  */
 function contactText(u, c, world) {
-  const rng = world.rng;
+  const rng = world.textRng ?? world.rng;
   const pos = reportedPosition(c, rng, u.skill, u.mods?.accuracy ?? 1);
   const grid = toGrid(pos.x, pos.y);
   const type = TYPE_JA[c.classified] ?? '正体不明';
@@ -151,7 +152,7 @@ function contactText(u, c, world) {
 
 /** 続報。様式を繰り返すと無線が埋まるので、変わった所だけ言う。 */
 function contactUpdateText(u, c, world) {
-  const rng = world.rng;
+  const rng = world.textRng ?? world.rng;
   const pos = reportedPosition(c, rng, u.skill, u.mods?.accuracy ?? 1);
   const grid = toGrid(pos.x, pos.y);
   const type = TYPE_JA[c.classified] ?? '正体不明';
@@ -178,7 +179,9 @@ const REPORT_COOLDOWN = 55;
  * 各部隊が「今、何を報告するか」を決めて無線に流す。
  */
 export function stepReporting(world, dt) {
-  const { now, rng } = world;
+  const now = world.now;
+  // 文面は盤を回す乱数を消費しない。言い回しが変わっても、戦闘は変わらない。
+  const rng = world.textRng ?? world.rng;
 
   for (const u of world.units) {
     if (u.side !== 'friend') continue;
@@ -191,7 +194,10 @@ export function stepReporting(world, dt) {
     // --- 被弾報告（最優先） ---------------------------------------
     // 几帳面な者はよく喋り、寡黙な者は要点しか言わない。
     // 網は一本しかないので、口数の多さはそのまま他の部隊の待ち時間になる。
-    const chatter = officerFactors(u.officer).chatter;
+    // 恐怖の下では、そもそも喋る回数が減る。
+    // 網は空くが、空いた網には何も流れてこない ─
+    // 正直な軍は網が混み、恐怖の軍は静かである。静かさは情報ではない。
+    const chatter = officerFactors(u.officer).chatter / (1 + (world.distortion?.fear ?? 0) * 0.9);
     if (now - u.lastHitAt < 4 && now - (u.lastUnderFireReportAt ?? -Infinity) > REPORT_COOLDOWN / chatter) {
       u.lastUnderFireReportAt = now;
       const grid = toGrid(u.x, u.y);
@@ -317,7 +323,7 @@ export function stepReporting(world, dt) {
  * 部隊の消耗具合と時間帯で口ぶりが変わる。
  */
 function idleChatter(u, world) {
-  const rng = world.rng;
+  const rng = world.textRng ?? world.rng;
   const grid = toGrid(u.x, u.y);
   const hurt = u.strength < u.maxStrength * 0.7;
   const tired = u.fatigue > 140;
@@ -378,7 +384,7 @@ function pickFresh(world, rng, variants) {
 
 /** 状況報告要求への回答を作る */
 export function composeSitrep(u, world) {
-  const rng = world.rng;
+  const rng = world.textRng ?? world.rng;
   const grid = toGrid(u.x, u.y);
   const contacts = [...u.contacts.values()].filter((c) => world.now - c.lastSeenAt < 90);
 
@@ -391,10 +397,12 @@ export function composeSitrep(u, world) {
       `${countPhrase(c, rng, world.distortion?.fear ?? 0)}`;
   }
 
+  // 本文も、部隊一覧に流れる数字と同じものを言う。
+  const said = shownSelf(world, u);
   return (
     `こちら${u.callsign}。現在地${placePhrase(world, u.x, u.y, grid)}、` +
-    `兵力${Math.round(u.strength)}/${u.maxStrength}${u.tpl.unitJa}、` +
-    `弾薬${ammoJa(u)}、隊員の状態は${moraleJa(u.morale)}。${enemyPart}。以上。`
+    `兵力${said.strength}、弾薬${ammoJa(said.ammoRatio)}、` +
+    `隊員の状態は${said.morale}。${enemyPart}。以上。`
   );
 }
 
@@ -405,13 +413,14 @@ export function composeSitrep(u, world) {
  * 数値ではなく、前線が口にする言い方で返す。
  */
 export function composeAmmoReport(u, world) {
-  const ratio = u.ammo / (u.tpl.maxAmmo || 100);
+  const said = shownSelf(world, u);
+  const ratio = said.ammoRatio;
   const holdout =
     ratio > 0.6 ? '当分は保つ' : ratio > 0.3 ? '激しい撃ち合いなら20分といったところだ' :
     ratio > 0.1 ? '長くは撃てない。補給が要る' : '次の攻撃は凌げない';
   return (
-    `こちら${u.callsign}、弾薬照会に回答する。残弾${ammoJa(u)}。${holdout}。` +
-    `兵力${Math.round(u.strength)}/${u.maxStrength}${u.tpl.unitJa}。以上。`
+    `こちら${u.callsign}、弾薬照会に回答する。残弾${ammoJa(ratio)}。${holdout}。` +
+    `兵力${said.strength}。以上。`
   );
 }
 
@@ -423,7 +432,7 @@ export function composeAmmoReport(u, world) {
  * @returns {{text:string, correction?:{x:number,y:number,grid:string,phrase:string}}}
  */
 export function composeSpotReport(u, mission, world) {
-  const rng = world.rng;
+  const rng = world.textRng ?? world.rng;
   const grid = toGrid(mission.x, mission.y);
 
   if (mission.friendlyCasualties > 0) {
@@ -487,7 +496,7 @@ function findCorrection(u, mission, world) {
   if (!best) return null;
 
   // 観測にも誤差はある。修正しても一発では当たらない。
-  const pos = reportedPosition(best.c, world.rng, u.skill);
+  const pos = reportedPosition(best.c, world.textRng ?? world.rng, u.skill);
   const dx = pos.x - mission.x;
   const dy = pos.y - mission.y;
 

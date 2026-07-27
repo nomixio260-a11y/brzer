@@ -17,7 +17,7 @@ import {
   scoreMission, missionList, battleReport, friendlyOrderOfBattle,
   getMission as simGetMission,
 } from './sim/scenario.js';
-import { UNIT_TYPES } from './sim/units.js';
+import { UNIT_TYPES, moraleJa } from './sim/units.js';
 import {
   CAMPAIGNS, getCampaign, createCampaign, currentStage, battleSetup, recordBattle,
   replacementRoom, assignedTotal, allottedTotal, poolLeft,
@@ -27,7 +27,7 @@ import {
 } from './sim/campaign.js';
 import {
   NATION, METERS, DECREES, DECREE_GROUPS, DECREE_IDS, DECREE_LIMIT,
-  canDecree, decree, revokeDecree, liftStanding, ruleSummary,
+  canDecree, decree, revokeDecree, liftStanding, ruleSummary, stageOf,
 } from './sim/nation.js';
 import { ATTACHMENTS, attachmentShort, attachmentLabels } from './sim/attachments.js';
 import { TEMPERAMENTS, TRAITS, gradeOf, officerLine } from './sim/officers.js';
@@ -1342,7 +1342,10 @@ export function getNationView(state) {
     eyebrow: NATION.eyebrow,
     blurb: NATION.blurb,
     meters: Object.values(METERS).map((m) => ({
-      id: m.id, label: m.label, note: m.note, value: Math.round(n[m.id]),
+      id: m.id, label: m.label, note: m.note,
+      value: Math.round(n[m.id]),
+      // 数字より段階のほうが早く読める。造反の一歩手前に名前があることが大事。
+      stage: stageOf(m.id, n[m.id]),
     })),
     treasury: Math.round(n.treasury),
     fear: n.fear,
@@ -1370,10 +1373,48 @@ export function getNationView(state) {
         };
       }),
     })),
-    purged: n.purged.map((p) => ({ ...p })),
+    purged: n.purged.map((p) => ({
+      ...p,
+      traits: (p.traits ?? []).map((id) => TRAITS[id]?.label).filter(Boolean),
+    })),
     decorated: n.decorated.map((p) => ({ ...p })),
     rule: ruleSummary(n),
   };
+}
+
+/**
+ * 何を聞かされていたか、と、何が起きていたか。
+ *
+ * 恐怖の下で戦った戦闘では、この二列が食い違う。
+ * 並べるだけでよい ─ 矢印も「だから」も要らない。因果は指揮官が結ぶ。
+ *
+ * 戦闘が終わるまでは返さない。真実を開くのは講評だけである。
+ */
+export function getReportGap(game) {
+  if (!game.finished) return [];
+  const out = [];
+  for (const def of getRosterOrder(game)) {
+    if (def.virtual) continue;
+    const u = game.world.unitsById.get(def.id);
+    if (!u || u.tpl.civilian || u.tpl.flying) continue;
+    const heard = game.belief.roster.get(def.id);
+    if (!heard?.strength) continue;
+
+    const truth = `${Math.round(u.strength)}/${u.maxStrength}${u.tpl.unitJa}`;
+    out.push({
+      callsign: def.callsign,
+      at: heard.heardAt,
+      said: heard.strength,
+      saidMorale: heard.morale,
+      truth: u.alive ? truth : '戦闘不能',
+      truthMorale: u.alive ? moraleJa(u.morale) : '─',
+      alive: !!u.alive,
+      deathAt: u.deathAt,
+      // 食い違っているか。数字が同じなら並べる意味がない。
+      gap: heard.strength !== truth || heard.morale !== moraleJa(u.morale),
+    });
+  }
+  return out;
 }
 
 /** 恐怖の言語化。数値は出さない ─ 指導者は自分の国の恐怖を数字で知らない。 */

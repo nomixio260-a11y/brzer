@@ -167,6 +167,9 @@ export function createCampaign(campaign, rng, roster) {
     carry: {},
     officers: rollOfficers(rng, roster),
 
+    // どの手番まで夜が明けたか。二度決算しないための札。
+    settledStage: -1,
+
     // 一戦ごとの記録
     history: [],
 
@@ -452,10 +455,15 @@ export function poolLeft(state) {
  */
 export function settleNight(state) {
   if (!state.nation) return null;
+  // 一晩は一度しか明けない。
+  // 戦闘中に読み込み直して出撃し直すと、その晩の決算が何度でも走っていた ─
+  // 押すだけで国庫も補充も無限に湧く穴になっていた。
+  if (state.settledStage === state.stage) return null;
   const res = applyDecrees(state.nation, state.stage + 1);
   // 政令で出てきた人と弾は、そのまま手持ちに積まれる。
   state.pool.replacements += res.output.replacements;
   state.pool.rounds += res.output.rounds;
+  state.settledStage = state.stage;
   return res;
 }
 
@@ -463,7 +471,7 @@ export function settleNight(state) {
 export function purgeOfficer(state, unitId, rng) {
   const officer = state.officers.get(unitId);
   if (!officer || !state.nation) return null;
-  const cost = purge(state.nation, officer);
+  const cost = purge(state.nation, officer, state.stage + 1);
   const taken = new Set([...state.officers.values()].map((o) => o.name));
   const next = replaceOfficer(officer, rng, taken);
   // 代わりに来るのは、忠誠だけは高い者である。腕は無い。
@@ -517,6 +525,7 @@ export function serializeCampaign(state) {
     history: JSON.parse(JSON.stringify(state.history)),
     nation: state.nation ? serializeNation(state.nation) : null,
     collapse: state.collapse ?? null,
+    settledStage: state.settledStage ?? -1,
   };
 }
 
@@ -544,5 +553,6 @@ export function deserializeCampaign(raw) {
     // v2.0 で保存された戦役には国が無い。読めるようにしておく。
     nation: deserializeNation(raw.nation),
     collapse: raw.collapse ?? null,
+    settledStage: raw.settledStage ?? -1,
   };
 }

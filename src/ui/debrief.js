@@ -3,6 +3,7 @@
 
 import { WORLD, toGrid, gridLetter, formatClock } from '../util.js';
 import {
+  getReportGap,
   getOutcome,
   getMarkers,
   getTerrain,
@@ -24,6 +25,7 @@ export function showDebrief(dom, game) {
   const outcome = getOutcome(game);
   const truth = revealTruth(game);
   if (!outcome || !truth) return;
+  const gap = getReportGap(game);
 
   const v = VERDICT[outcome.status] ?? VERDICT.defeat;
   dom.verdict.textContent = isCreative(game) ? `${v.label}（演習）` : v.label;
@@ -35,6 +37,7 @@ export function showDebrief(dom, game) {
   drawTruthMap(dom.canvas, game, truth);
   renderStats(dom.stats, outcome.score, truth);
   renderUnitFates(dom.units, truth);
+  renderReportGap(dom.gap, dom.gapBlock, gap);
   renderEnemyIntent(dom.enemy, truth);
 }
 
@@ -221,6 +224,40 @@ function armorRow(a) {
   if (a.bounces) parts.push(`弾かれた射撃 ${a.bounces} 回`);
 
   return [['装甲戦闘', parts.join('／'), total ? 'is-good' : a.bounces > 4 ? 'is-bad' : '']];
+}
+
+/**
+ * 聞いていたことと、起きていたこと。
+ *
+ * 二列を並べるだけにしてある。矢印も、「だから」も、評価も置かない ─
+ * 因果は指揮官が結ぶ。結ばせることが講評の仕事である。
+ */
+function renderReportGap(el, block, rows) {
+  if (!el || !block) return;
+  const shown = rows.filter((r) => r.gap);
+  block.hidden = shown.length === 0;
+  if (!shown.length) return;
+
+  el.innerHTML = '';
+  for (const r of shown) {
+    const li = document.createElement('li');
+    const name = document.createElement('b');
+    name.textContent = r.callsign;
+
+    const said = document.createElement('span');
+    said.className = 'reportgap__said';
+    said.textContent = `${formatClock(r.at)}「${r.said}・${r.saidMorale}」`;
+
+    const real = document.createElement('span');
+    real.className = 'reportgap__real';
+    real.textContent = r.alive
+      ? `${r.truth}・${r.truthMorale}`
+      : `戦闘不能（${formatClock(r.deathAt)}）`;
+    if (!r.alive) real.classList.add('is-dead');
+
+    li.append(name, said, real);
+    el.appendChild(li);
+  }
 }
 
 /** 報告がどれだけ甘かったか。数字ではなく、何が起きていたかで言う。 */

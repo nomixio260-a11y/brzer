@@ -85,6 +85,12 @@ export function createWorld(opts = {}) {
   const seed = opts.seed ?? mission.seed;
   const terrain = generateTerrain(seed, mission.mapId);
   const rng = new Rng(seed ^ 0x2f6e2b1);
+  // 文面を組み立てるための乱数を、盤を回す乱数から分ける。
+  //
+  // 同じ列を使っていたので、「報告の言い回しが一語変わる」だけで
+  // 以後の弾着点も敵の判断もずれていた ─ つまり情報統制を敷くと
+  // 敵砲兵の落ちる場所が変わっていた。真実は belief の設定で動いてはならない。
+  const textRng = new Rng((seed ^ 0x7a11c3) >>> 0);
   // 敵の企図を振る場合だけ、盤ごとに違う目を使う（地形は常に同じ）
   const planRng = opts.variable ? new Rng((Math.floor(opts.planSeed ?? 0) || 1) >>> 0) : null;
 
@@ -92,6 +98,7 @@ export function createWorld(opts = {}) {
     mission,
     terrain,
     rng,
+    textRng,
     now: mission.startTime,
     tickCount: 0,
 

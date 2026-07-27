@@ -671,6 +671,8 @@ function loop(t) {
           canvas: $('truthmap'),
           stats: $('debrief-stats'),
           units: $('debrief-units'),
+          gap: $('debrief-gap'),
+          gapBlock: $('debrief-gap-block'),
           enemy: $('debrief-enemy'),
         },
         game

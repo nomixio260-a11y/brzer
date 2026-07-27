@@ -27,6 +27,41 @@ export function createRadio() {
 }
 
 /**
+ * その部隊が「自分について言うこと」。
+ *
+ * 恐怖で統治された軍では、部下は自分の損害を小さく言う。
+ * 嘘をつくのではない ─ 「まだ保っている」と言い続けるだけである。
+ * そして本当に保たなくなった日、その部隊は前触れもなく消える。
+ *
+ * 部隊一覧に流れる meta も、状況報告の本文も、必ずここを通す ─
+ * 通していなかったので、同じ電文が本文で「3/9名」と言いながら
+ * 一覧を「7/9名」に書き替えるという、画面上で矛盾する状態になっていた。
+ */
+export function shownSelf(world, u) {
+  const fear = world.distortion?.fear ?? 0;
+  const strength = Math.min(
+    u.maxStrength,
+    u.strength + (u.maxStrength - u.strength) * fear * 0.7
+  );
+  const morale = Math.min(100, u.morale + fear * 26);
+
+  return {
+    grid: toGrid(u.x, u.y),
+    strength: `${Math.round(strength)}/${u.maxStrength}${u.tpl.unitJa}`,
+    strengthRatio: strength / u.maxStrength,
+    morale: moraleJa(morale),
+    state: stateJa(u),
+    posture: u.posture,
+    ammoRatio: Math.min(1, u.ammo / (u.tpl.maxAmmo || 100) + fear * 0.3),
+    // 長期戦で効いてくるもの。これも「最後に聞いた時点」の話でしかない。
+    fatigue: fatigueJa(u),
+    resting: !!u.resting,
+    // 負傷者の数は、いちばん言いにくい数字である。
+    wounded: u.walkingWounded > 0.4 && fear < 0.55,
+  };
+}
+
+/**
  * 送信を待ち行列に入れる。
  * @param {object} tx {from, kind, text, priority, meta, composedAt}
  */
@@ -38,33 +73,7 @@ export function enqueue(world, tx) {
   // ＝ 黙っている部隊の情報は、黙った時点で止まったままになる。
   const sender = tx.fromId ? world.unitsById.get(tx.fromId) : null;
   const meta = { ...(tx.meta ?? {}) };
-  if (sender && sender.side === 'friend') {
-    // 恐怖で統治された軍では、部下は自分の損害を小さく言う。
-    // 嘘をつくのではない ─ 「まだ保っている」と言い続けるだけである。
-    // そして本当に保たなくなった日、その部隊は前触れもなく消える。
-    const fear = world.distortion?.fear ?? 0;
-    const shown = Math.min(
-      sender.maxStrength,
-      sender.strength + (sender.maxStrength - sender.strength) * fear * 0.7
-    );
-    const ratio = shown / sender.maxStrength;
-    const shownMorale = Math.min(100, sender.morale + fear * 26);
-
-    meta.self = {
-      grid: toGrid(sender.x, sender.y),
-      strength: `${Math.round(shown)}/${sender.maxStrength}${sender.tpl.unitJa}`,
-      strengthRatio: ratio,
-      morale: moraleJa(shownMorale),
-      state: stateJa(sender),
-      posture: sender.posture,
-      ammoRatio: Math.min(1, sender.ammo / (sender.tpl.maxAmmo || 100) + fear * 0.3),
-      // 長期戦で効いてくるもの。これも「最後に聞いた時点」の話でしかない。
-      fatigue: fatigueJa(sender),
-      resting: !!sender.resting,
-      // 負傷者の数は、いちばん言いにくい数字である。
-      wounded: sender.walkingWounded > 0.4 && fear < 0.55,
-    };
-  }
+  if (sender && sender.side === 'friend') meta.self = shownSelf(world, sender);
 
   const entry = {
     id: `TX${txSeq++}`,
@@ -173,7 +182,7 @@ function finishTransmission(world, tx, delivered) {
   let text = tx.text;
   let garbled = false;
   if (quality < 0.62 && !tx.outbound) {
-    text = garble(text, world.rng, 1 - quality);
+    text = garble(text, world.textRng ?? world.rng, 1 - quality);
     garbled = true;
   }
 
