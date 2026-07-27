@@ -746,6 +746,28 @@ async function checkNation() {
 
   await p.screenshot({ path: `${SHOTS}/15-nation.png`, fullPage: true });
 
+  // 政令の札に、遅れと維持費が出ること
+  const volunteer = await p.$$eval('[data-decree="volunteer"] .dtag', (e) => e.map((x) => x.textContent));
+  check('善政の札に「明晩から」が出る', volunteer.some((t) => t.includes('明晩')), volunteer.join(','));
+  const martial = await p.$$eval('[data-decree="martial_law"] .dtag', (e) => e.map((x) => x.textContent));
+  check('継続の令に維持費が出る', martial.some((t) => t.includes('維持')), martial.join(','));
+
+  // 通告 ─ 見えない賽ではなく、期限であること
+  check('通告は出ていない', await p.$eval('#nat-warnings', (e) => e.hidden));
+  await p.evaluate(() => {
+    window.__brzer.campaign.nation.loyalty = 8;
+    window.__brzer.campaign.nation.warned = { coup: true, uprising: false };
+  });
+  await p.click('#btn-nat-back');
+  await p.click('#btn-govern');
+  await p.waitForTimeout(300);
+  check('線を割れば通告が出る', !(await p.$eval('#nat-warnings', (e) => e.hidden)));
+  check('通告に期限が書いてある', (await p.textContent('#nat-warnings')).includes('翌朝'));
+  await p.evaluate(() => {
+    window.__brzer.campaign.nation.loyalty = 70;
+    window.__brzer.campaign.nation.warned = { coup: false, uprising: false };
+  });
+
   // 粛清には一手が挟まる
   const purged0 = await p.evaluate(() => window.__brzer.campaign.nation.purged.length);
   await p.click('#nat-corps button[data-purge]');

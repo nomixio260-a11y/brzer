@@ -27,18 +27,41 @@ export function createRadio() {
 }
 
 /**
+ * この一人が、どれだけ甘く言うか。
+ *
+ * 恐怖が決めるのは「歪みの大きさ」ではなく「歪む者の割合」である ─
+ * 全員が同じ係数で嘘をつくなら、遊び手は二戦で0.6を掛けて読むことを覚え、
+ * 以後この機構はただの読み替え作業になる。
+ * 三個分隊のうち一個だけが嘘をつくから、疑いようが生まれる。
+ *
+ * 誰が黙るかは性分と忠誠で決まる。一徹な者は自分の目を信じるので言うし、
+ * 几帳面な者は様式どおりに、上が聞きたい形で書く。
+ */
+function fearFor(world, u) {
+  const fear = world.distortion?.fear ?? 0;
+  if (fear <= 0) return 0;
+  const o = u.officer;
+  if (!o) return fear;
+  // 心服している者は、悪い報せも上げる。付いていない者ほど口をつぐむ。
+  const loyal = (o.loyalty ?? 68) / 100;
+  const bold = o.temperament === 'headstrong' || o.temperament === 'aggressive';
+  const meek = o.temperament === 'meticulous' || o.temperament === 'cautious';
+  const threshold = 0.28 + loyal * 0.5 + (bold ? 0.3 : 0) - (meek ? 0.18 : 0);
+  // 敷居を越えた者だけが黙る。越えていない者は見たとおりを言う。
+  return fear > threshold ? Math.min(1, fear * 1.2) : 0;
+}
+
+/**
  * その部隊が「自分について言うこと」。
  *
  * 恐怖で統治された軍では、部下は自分の損害を小さく言う。
  * 嘘をつくのではない ─ 「まだ保っている」と言い続けるだけである。
  * そして本当に保たなくなった日、その部隊は前触れもなく消える。
  *
- * 部隊一覧に流れる meta も、状況報告の本文も、必ずここを通す ─
- * 通していなかったので、同じ電文が本文で「3/9名」と言いながら
- * 一覧を「7/9名」に書き替えるという、画面上で矛盾する状態になっていた。
+ * 部隊一覧に流れる meta も、状況報告の本文も、必ずここを通す。
  */
 export function shownSelf(world, u) {
-  const fear = world.distortion?.fear ?? 0;
+  const fear = fearFor(world, u);
   const strength = Math.min(
     u.maxStrength,
     u.strength + (u.maxStrength - u.strength) * fear * 0.7

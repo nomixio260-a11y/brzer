@@ -217,7 +217,11 @@ export function battleSetup(state) {
       morale: clamp((c.morale ?? 80) + night.morale + (filled > 0 ? 4 : 0), 25, 96),
       fatigue: Math.max(0, (c.fatigue ?? 0) * night.fatigueKeep),
       // 補充で薄まる。新兵は昨日の戦訓を持っていない。
-      skillBias: filled > 0 ? -0.02 * Math.min(3, filled) : 0,
+      // どこから来た新兵かも効く（志願か、名簿か、総動員か）。
+      // 除かれた将校の穴も、ここに出る ─ 経歴は腕である。
+      skillBias:
+        (filled > 0 ? -0.02 * Math.min(3, filled) + (state.recruitQuality ?? 0) : 0) +
+        (state.purgedUnits?.[unitId] ? -0.06 : 0),
       dead: !!c.dead,
       attach: [...(state.attach[unitId] ?? [])],
     };
@@ -313,7 +317,7 @@ export function recordBattle(state, report, rng, campaign = getCampaign(state.ca
     for (const o of state.officers.values()) {
       driftLoyalty(o, state.nation.loyalty, { won: outcome === 'victory' });
     }
-    collapse = checkCollapse(state.nation, rng);
+    collapse = checkCollapse(state.nation);
   }
 
   const y = YIELD[outcome];
@@ -460,6 +464,9 @@ export function settleNight(state) {
   // 押すだけで国庫も補充も無限に湧く穴になっていた。
   if (state.settledStage === state.stage) return null;
   const res = applyDecrees(state.nation, state.stage + 1);
+  // 補充兵の質。志願で来た者と、名簿で引かれた者は違う。
+  // 計算しておきながら捨てていたので、この差はゲームの中に存在していなかった。
+  state.recruitQuality = res.quality ?? 0;
   // 政令で出てきた人と弾は、そのまま手持ちに積まれる。
   state.pool.replacements += res.output.replacements;
   state.pool.rounds += res.output.rounds;
@@ -477,7 +484,9 @@ export function purgeOfficer(state, unitId, rng) {
   // 代わりに来るのは、忠誠だけは高い者である。腕は無い。
   next.loyalty = Math.min(92, state.nation.loyalty + 18);
   state.officers.set(unitId, next);
-  // 除かれた部隊は、しばらく士気が戻らない。
+  // 除かれた部隊は、しばらく士気が戻らず、腕も落ちる ─
+  // 経歴のある指揮官を失うとはそういうことである。
+  (state.purgedUnits ??= {})[unitId] = true;
   if (state.carry[unitId]) {
     state.carry[unitId].morale = Math.max(28, (state.carry[unitId].morale ?? 70) - 16);
   }
@@ -526,6 +535,8 @@ export function serializeCampaign(state) {
     nation: state.nation ? serializeNation(state.nation) : null,
     collapse: state.collapse ?? null,
     settledStage: state.settledStage ?? -1,
+    recruitQuality: state.recruitQuality ?? 0,
+    purgedUnits: { ...(state.purgedUnits ?? {}) },
   };
 }
 
@@ -554,5 +565,7 @@ export function deserializeCampaign(raw) {
     nation: deserializeNation(raw.nation),
     collapse: raw.collapse ?? null,
     settledStage: raw.settledStage ?? -1,
+    recruitQuality: raw.recruitQuality ?? 0,
+    purgedUnits: raw.purgedUnits ?? {},
   };
 }

@@ -28,6 +28,7 @@ import {
 import {
   NATION, METERS, DECREES, DECREE_GROUPS, DECREE_IDS, DECREE_LIMIT,
   canDecree, decree, revokeDecree, liftStanding, ruleSummary, stageOf,
+  warnings, moraleCeiling,
 } from './sim/nation.js';
 import { ATTACHMENTS, attachmentShort, attachmentLabels } from './sim/attachments.js';
 import { TEMPERAMENTS, TRAITS, gradeOf, officerLine } from './sim/officers.js';
@@ -1350,6 +1351,14 @@ export function getNationView(state) {
     treasury: Math.round(n.treasury),
     fear: n.fear,
     fearJa: fearJa(n.fear),
+    // 線を割ったことの通告。期限であって、賽ではない。
+    warnings: warnings(n),
+    notices: [...(n.notices ?? [])],
+    // 民心の天井。焼いた郡の数だけ下がり、救済しても元へは戻らない。
+    ceiling: moraleCeiling(n),
+    scars: Math.round(n.scars ?? 0),
+    // 明日の晩に届くもの（志願兵・増産）。今夜の戦闘には間に合わない。
+    pending: { ...(n.pending ?? { replacements: 0, rounds: 0 }) },
     output: { ...n.output },
     decrees: n.decrees.map((id) => ({ id, ...DECREES[id] })),
     standing: n.standing.map((id) => ({ id, ...DECREES[id] })),
@@ -1366,6 +1375,9 @@ export function getNationView(state) {
           yields: { ...(d.yields ?? {}) },
           fear: d.fear ?? 0,
           keep: !!d.keep,
+          slow: !!d.slow,
+          scar: d.scar ?? 0,
+          upkeep: d.upkeep ?? 0,
           picked: n.decrees.includes(id),
           active: n.standing.includes(id),
           can: chk.ok,

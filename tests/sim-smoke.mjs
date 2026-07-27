@@ -32,7 +32,8 @@ import {
   purgeIn, decorateIn, getReportGap,
 } from '../src/state.js';
 import {
-  createNation, canDecree, checkCollapse, ruleSummary, START, stageOf,
+  createNation, canDecree, checkCollapse, ruleSummary, START, stageOf, warnings,
+  moraleCeiling, decree, applyDecrees, warFactors,
 } from '../src/sim/nation.js';
 import { enqueue as commsEnqueue } from '../src/sim/comms.js';
 import { endPlanning } from '../src/sim/world.js';
@@ -1645,21 +1646,38 @@ section('忠誠と粛清');
 
 section('国が保たなくなるとき');
 {
-  const rng = new Rng(5);
+  // 見えない賽ではなく、期限である。線を割った晩に通告が出て、
+  // 次の朝までに戻せなければ終わる ─ だから一手番ぶんの猶予がある。
   const n = createNation();
-  n.loyalty = 0;
-  check('忠誠が尽きれば造反', checkCollapse(n, rng)?.id === 'coup');
+  n.loyalty = 5;
+  check('線を割ると通告が出る', checkCollapse(n) === null && n.warned.coup === true);
+  check('通告に文言がある', (n.notices ?? []).some((t) => t.includes('命令を受けない')),
+    (n.notices ?? []).join('/'));
+  check('戻せていなければ次の朝に造反', checkCollapse(n)?.id === 'coup');
+
+  // 猶予のうちに戻せば、何も起きない
+  const n1 = createNation();
+  n1.loyalty = 5;
+  checkCollapse(n1);
+  n1.loyalty = 55;
+  check('戻せば踏みとどまる', checkCollapse(n1) === null && !n1.warned.coup);
+  check('踏みとどまったことも伝わる',
+    (n1.notices ?? []).some((t) => t.includes('踏みとどまった')), (n1.notices ?? []).join('/'));
+
   const n2 = createNation();
-  n2.morale = 0;
-  check('民心が尽きれば内乱', checkCollapse(n2, rng)?.id === 'uprising');
-  check('健全なら何も起きない', checkCollapse(createNation(), rng) === null);
+  n2.morale = 3;
+  check('民心でも同じ手順', checkCollapse(n2) === null && n2.warned.uprising);
+  check('戻せなければ内乱', checkCollapse(n2)?.id === 'uprising');
+  check('健全なら何も起きない', checkCollapse(createNation()) === null);
+  check('通告は画面に出せる', warnings(n2).some((w) => w.id === 'uprising'));
 
   // 戦役の決着として出る。
   // 一戦を回して確かめると勝敗次第で忠誠が戻ってしまうので、
   // 帳簿への取り込みそのものを直接叩く。
   const st = newCampaign('volne_three_days', 616);
-  st.nation.loyalty = 0;
+  st.nation.loyalty = 5;
   st.nation.morale = 40;
+  st.nation.warned = { coup: true, uprising: false }; // 前の晩に通告が出ている
   recordBattle(st, {
     outcome: 'defeat',
     units: [],
@@ -1671,8 +1689,9 @@ section('国が保たなくなるとき');
 
   // 民心が尽きれば内乱として決着する
   const st2 = newCampaign('volne_three_days', 617);
-  st2.nation.morale = 0;
+  st2.nation.morale = 3;
   st2.nation.loyalty = 60;
+  st2.nation.warned = { coup: false, uprising: true };
   recordBattle(st2, {
     outcome: 'defeat',
     units: [],
@@ -1714,6 +1733,98 @@ section('統治の評価');
   const oldSave = JSON.parse(JSON.stringify(serializeCampaign(st)));
   delete oldSave.nation;
   check('国の無い古い保存も読める', !!deserializeCampaign(oldSave)?.nation);
+}
+
+/* ------------------------------------------------------------------ */
+
+section('統治に支配戦略が無いこと');
+{
+  // 増税して救済すれば毎晩ただで国が富む、という穴があった。
+  const n = createNation();
+  const start = n.morale;
+  let peak = start;
+  for (let i = 0; i < 6; i++) {
+    decree(n, 'tax');
+    decree(n, 'relief');
+    applyDecrees(n, i + 1);
+    peak = Math.max(peak, n.morale);
+  }
+  check('増税と救済を繰り返しても民心は伸び続けない', n.morale <= peak - 5,
+    `頂 ${peak.toFixed(0)} → ${n.morale.toFixed(0)}`);
+  check('取られた側は覚えている（天井が下がる）', moraleCeiling(n) < 100, `${moraleCeiling(n)}`);
+
+  // 情報統制を敷いて報道を解禁すれば恐怖だけ洗い流せる、という穴があった。
+  const m = createNation();
+  decree(m, 'censorship');
+  applyDecrees(m, 1);
+  const got = { control: m.control, morale: m.morale };
+  decree(m, 'free_press');
+  applyDecrees(m, 2);
+  check('恐怖の洗浄で統制は残らない', m.control < got.control, `${got.control} → ${m.control}`);
+  check('民心も返る', m.morale < got.morale, `${got.morale} → ${m.morale}`);
+
+  // 継続の令は毎晩の費用がかかる（敷きっぱなしがただではない）
+  const k = createNation();
+  decree(k, 'martial_law');
+  applyDecrees(k, 1);
+  const t1 = k.treasury;
+  applyDecrees(k, 2);
+  const gain = k.treasury - t1;
+  const bare = createNation();
+  const t0 = bare.treasury;
+  applyDecrees(bare, 1);
+  check('継続の令には毎晩の維持費がかかる', gain < bare.treasury - t0,
+    `戒厳あり +${gain} / なし +${bare.treasury - t0}`);
+  // 恐怖を生むのは保安部であって、戒厳令ではない ─ 秩序と恐怖は別の道具である。
+  check('戒厳令は秩序を買う令であって、恐怖の令ではない', k.fear < 0.05, `${k.fear.toFixed(2)}`);
+  const sp = createNation();
+  decree(sp, 'secret_police');
+  applyDecrees(sp, 1);
+  const f1 = sp.fear;
+  applyDecrees(sp, 2);
+  applyDecrees(sp, 3);
+  check('保安部は敷いている限り恐怖を積む', sp.fear >= f1, `${f1.toFixed(2)} → ${sp.fear.toFixed(2)}`);
+  check('二つは別の軸である', sp.control < k.control && sp.fear > k.fear,
+    `戒厳 統制${k.control.toFixed(0)}/恐怖${k.fear.toFixed(2)} ` +
+    `保安 統制${sp.control.toFixed(0)}/恐怖${sp.fear.toFixed(2)}`);
+
+  // 遅れ ─ 善政は翌晩に届く
+  const slow = createNation();
+  decree(slow, 'volunteer');
+  const r1 = applyDecrees(slow, 1);
+  check('志願兵は今夜には来ない', (r1.pending?.replacements ?? 0) > 0);
+  const r2 = applyDecrees(slow, 2);
+  check('翌晩に届く', r2.output.replacements > 0);
+}
+
+section('恐怖の見返り');
+{
+  // 罰しかない機構は選ばれない。恐怖には見返りがある ─ 命令が通る。
+  const calm = warFactors({ morale: 60, control: 50, loyalty: 60, fear: 0 });
+  const afraid = warFactors({ morale: 60, control: 50, loyalty: 60, fear: 0.8 });
+  const beloved = warFactors({ morale: 60, control: 50, loyalty: 98, fear: 0 });
+  check('恐怖で命令は通りやすくなる', afraid.obey > calm.obey,
+    `${calm.obey.toFixed(2)} → ${afraid.obey.toFixed(2)}`);
+  check('心服でも命令は通る', beloved.obey > calm.obey,
+    `${calm.obey.toFixed(2)} → ${beloved.obey.toFixed(2)}`);
+  check('どちらも極端には振れない',
+    afraid.obey <= 1.45 && beloved.obey <= 1.45 && calm.obey >= 0.6);
+
+  // 嘘をつくのは全員ではない
+  const w = createWorld({
+    missionId: 'bridge_hold',
+    setup: { units: {}, officers: new Map(), war: { fear: 0.55, obey: 1 } },
+  });
+  const mk = (id, temperament, loyalty) => {
+    const u = w.unitsById.get(id);
+    u.officer = createOfficer({ unitId: id, temperament, loyalty });
+    u.strength = 3;
+    return shownSelf(w, u).strength;
+  };
+  const bold = mk('H1', 'headstrong', 85);
+  const meek = mk('H2', 'meticulous', 20);
+  check('心服した一徹な者は、恐怖の下でも見たとおりを言う', bold === '3/9名', bold);
+  check('付いていない几帳面な者は甘く言う', meek !== '3/9名', meek);
 }
 
 /* ------------------------------------------------------------------ */

@@ -51,6 +51,17 @@ export const STAGES = Object.freeze({
   ],
 });
 
+/**
+ * 民心の天井。
+ *
+ * 焼いた郡と引いた名簿の数だけ、戻れる高さが下がる。
+ * 救済で民心そのものは戻るが、戻る先は元の高さではない ─
+ * これが無かったので「増税して救済する」を毎晩繰り返すだけで国が富んでいた。
+ */
+export function moraleCeiling(nation) {
+  return clamp(100 - (nation.scars ?? 0) * 4, 35, 100);
+}
+
 export function stageOf(id, value) {
   const steps = STAGES[id];
   if (!steps) return '';
@@ -91,8 +102,18 @@ export function createNation() {
     decorated: [],
     // 出した政令の履歴（講評で「どう統治したか」を突きつけるために残す）
     ledger: [],
+    // 線を割ったことの通告。出た翌朝が期限である。
+    warned: { coup: false, uprising: false },
+    notices: [],
     // 継続の令が「実際に動かした分」。解くときはこれを返す。
     applied: {},
+    // 焼けた郡・徴発された倉・引かれた名簿。
+    // 救済で民心は戻るが、戻る先の天井は戻らない ─
+    // 「取られた側は覚えている」と書いておきながら、何も覚えていなかった。
+    scars: 0,
+    // 前の晩の政令のうち、今夜になって届くもの。
+    // 悪政は即日、善政は翌晩に効く ─ だから政令は精算ではなく決断になる。
+    pending: { replacements: 0, rounds: 0, quality: 0 },
     // 帳簿の上の生産。前の手番の政令で決まる。
     output: { replacements: 6, rounds: 4 },
   };
@@ -116,62 +137,67 @@ export const DECREES = Object.freeze({
   /* --- 動員 ------------------------------------------------------ */
   volunteer: {
     id: 'volunteer', group: 'mobilize', label: '志願兵の募集',
-    note: '町に募兵所を置く。集まる数は多くないが、来る者は自分の意思で来る。',
-    cost: 6, effect: { morale: +1 }, yields: { replacements: 4 }, quality: +0.02,
+    note: '町に募兵所を置く。集まるのは明日の晩になるが、来る者は自分の意思で来る。',
+    cost: 6, effect: { morale: +1 }, yields: { replacements: 5 }, quality: +0.05, slow: true,
   },
   conscript: {
     id: 'conscript', group: 'mobilize', label: '徴兵の実施',
-    note: '名簿から引く。数は揃うが、揃うだけである。',
-    cost: 4, effect: { morale: -6 }, yields: { replacements: 8 }, quality: -0.02,
+    note: '名簿から引く。今夜のうちに揃う。揃うだけである。',
+    cost: 4, effect: { morale: -6 }, yields: { replacements: 8 }, quality: -0.04, scar: 1,
   },
   total_war: {
     id: 'total_war', group: 'mobilize', label: '総動員令',
-    note: '年齢の上下を広げ、工場から人を抜く。国が一度に痩せる。',
-    cost: 8, effect: { morale: -14, control: +4 }, yields: { replacements: 14 }, quality: -0.05,
-    keep: false,
+    note: '年齢の上下を広げ、工場から人を抜く。国が一度に痩せる ─ そして元には戻らない。',
+    cost: 8, effect: { morale: -14, control: +4 }, yields: { replacements: 14 }, quality: -0.09,
+    scar: 4,
   },
 
   /* --- 経済 ------------------------------------------------------ */
   tax: {
     id: 'tax', group: 'economy', label: '戦時増税',
-    note: '取れるところから取る。取られた側は覚えている。',
-    cost: -18, effect: { morale: -7 },
+    note: '取れるところから取る。取られた側は覚えている ─ 施しても、忘れない。',
+    cost: -18, effect: { morale: -7 }, scar: 2,
   },
   requisition: {
     id: 'requisition', group: 'economy', label: '物資の徴発',
-    note: '倉から出させる。弾は前線に届き、麦は町から消える。',
-    cost: 2, effect: { morale: -9 }, yields: { rounds: 7 },
+    note: '倉から出させる。弾は今夜のうちに前線へ届き、麦は町から消える。',
+    cost: 2, effect: { morale: -9 }, yields: { rounds: 7 }, scar: 2,
   },
   factory: {
     id: 'factory', group: 'economy', label: '増産計画',
-    note: '工場を二交代にする。今夜は何も増えないが、明日から効く。',
-    cost: 14, effect: { morale: -2 }, yields: { rounds: 4 }, keep: true,
+    note: '工場を二交代にする。今夜は何も増えないが、以後は毎晩ここから弾が出る。',
+    cost: 14, effect: { morale: -2 }, yields: { rounds: 6 }, keep: true, slow: true,
   },
 
   /* --- 秩序 ------------------------------------------------------ */
   martial_law: {
     id: 'martial_law', group: 'order', label: '戒厳令',
-    note: '夜間の外出を禁じ、憲兵に権限を与える。脱走は減る。町は静かになる。',
-    cost: 5, effect: { control: +12, morale: -8 }, fear: +0.12, keep: true,
+    note:
+      '夜間の外出を禁じ、憲兵に権限を与える。脱走は減り、部隊は崩れにくくなる。' +
+      '町は静かになるが、口を塞ぐ令ではない。',
+    // 統制を買う令。恐怖はさほど生まない ─ 秩序と恐怖は別の道具である。
+    cost: 5, effect: { control: +16, morale: -8 }, fear: +0.05, keep: true, upkeep: 3,
   },
   censorship: {
     id: 'censorship', group: 'order', label: '情報統制',
     note:
       '新聞と無線を検める。悪い報せは国民に届かない ─ ' +
       'そして、しばらくすると貴官にも届かなくなる。',
-    cost: 4, effect: { control: +8, morale: +4 }, fear: +0.18, keep: true,
+    cost: 4, effect: { control: +6, morale: +4 }, fear: +0.16, keep: true, upkeep: 2,
   },
   secret_police: {
     id: 'secret_police', group: 'order', label: '保安部の拡張',
     note: '密告を制度にする。造反の芽は摘める。摘んでいる側も、次は自分だと思っている。',
-    cost: 10, effect: { control: +14, loyalty: -6, morale: -6 }, fear: +0.26, keep: true,
+    // 恐怖を買う令。統制はあまり上がらない ─ 密告は秩序ではない。
+    cost: 10, effect: { control: +5, loyalty: -6, morale: -6 }, fear: +0.30,
+    keep: true, upkeep: 5, scar: 1,
   },
 
   /* --- 恩恤 ------------------------------------------------------ */
   relief: {
     id: 'relief', group: 'mercy', label: '罹災民の救済',
-    note: '焼けた町に配給を回す。前線には何も増えない。',
-    cost: 16, effect: { morale: +13 }, fear: -0.06,
+    note: '焼けた町に配給を回す。前線には何も増えない。傷は塞がるが、痕は残る。',
+    cost: 16, effect: { morale: +13 }, fear: -0.06, heal: 1,
   },
   amnesty: {
     id: 'amnesty', group: 'mercy', label: '恩赦',
@@ -266,8 +292,11 @@ export function liftStanding(nation, id) {
  */
 export function applyDecrees(nation, day = 1) {
   const notes = [];
-  const output = { replacements: 0, rounds: 0 };
-  let quality = 0;
+  // 前の晩に仕込んだものが、今夜になって届く。
+  const pending = nation.pending ?? { replacements: 0, rounds: 0, quality: 0 };
+  const output = { replacements: pending.replacements, rounds: pending.rounds };
+  let quality = pending.quality ?? 0;
+  const next = { replacements: 0, rounds: 0, quality: 0 };
 
   for (const id of nation.decrees) {
     const d = DECREES[id];
@@ -283,23 +312,39 @@ export function applyDecrees(nation, day = 1) {
       if (d.fear) moved.fear = nation.fear - (before.fear ?? nation.fear);
       (nation.applied ??= {})[id] = moved;
     }
-    output.replacements += d.yields?.replacements ?? 0;
-    output.rounds += d.yields?.rounds ?? 0;
-    quality += d.quality ?? 0;
+    // 悪政は今夜のうちに届き、善政は明日の晩に届く。
+    // 結果を知る前に決めさせるための遅れであって、罰ではない。
+    const bin = d.slow ? next : output;
+    bin.replacements += d.yields?.replacements ?? 0;
+    bin.rounds += d.yields?.rounds ?? 0;
+    if (d.slow) next.quality += d.quality ?? 0;
+    else quality += d.quality ?? 0;
+
+    // 傷跡と、その手当て。塞がっても痕は残る。
+    if (d.scar) nation.scars = (nation.scars ?? 0) + d.scar;
+    if (d.heal) nation.scars = Math.max(0, (nation.scars ?? 0) - d.heal * 0.5);
+
     if (d.keep) nation.standing.push(id);
-    for (const c of d.clears ?? []) {
-      const i = nation.standing.indexOf(c);
-      if (i >= 0) nation.standing.splice(i, 1);
-    }
+    // 解く令は、必ず liftStanding を通す ─
+    // 通さずに配列から抜いていたので、情報統制で得た統制と民心を返さないまま
+    // 恐怖だけを洗い流せた。「一度密告された町は…」が嘘になっていた。
+    for (const c of d.clears ?? []) liftStanding(nation, c);
     notes.push({ day, id, label: d.label });
   }
 
-  // 継続施策は毎晩効き続ける。敷いた翌日からが本番である。
+  // 継続施策は毎晩効き続ける。敷いた翌日からが本番であり、
+  // 敷きっぱなしには毎晩の費用が付く ─ 憲兵も密告者も、ただでは働かない。
   for (const id of nation.standing) {
     const d = DECREES[id];
     if (!d) continue;
     output.rounds += Math.round((d.yields?.rounds ?? 0) * 0.5);
+    nation.treasury = Math.max(0, nation.treasury - (d.upkeep ?? 0));
+    // 恐怖は敷いている限り毎晩積む。敷いた晩だけの話ではない。
+    if (d.fear) nation.fear = clamp(nation.fear + d.fear * 0.35, 0, 1);
   }
+
+  // 民心は、焼いた郡の数だけ天井が下がる。
+  nation.morale = Math.min(nation.morale, moraleCeiling(nation));
 
   // 国の地力。民心が高ければ工場も畑も回る。統制だけでは何も生まれない。
   const base = 3 + Math.round(nation.morale / 22);
@@ -314,9 +359,10 @@ export function applyDecrees(nation, day = 1) {
 
   nation.ledger.push(...notes);
   nation.decrees = [];
+  nation.pending = next;
   nation.output = { ...output };
 
-  return { output, quality, notes };
+  return { output, quality, notes, pending: next };
 }
 
 /* ------------------------------------------------------------------ */
@@ -422,12 +468,15 @@ export function warFactors(nation) {
     startMorale: Math.round(-8 + morale * 18),
     // 統制。崩れにくくなるが、崩れ方は同じである。
     hold: 0.88 + control * 0.24,
-    // 士官団の忠誠。低ければ命令が通らない。
-    obey: 0.72 + loyalty * 0.42,
+    // 命令が通るか。
+    //
+    // 恐怖には見返りがある ─ 恐怖の高い軍は、命令を拒まない。
+    // これを配線していなかったので、悪政には代償しか無く、
+    // 「罰しかない機構」を遊び手が選ぶ理由がどこにも無かった。
+    // 忠誠で心服させるか、恐怖で黙らせるか。通し方が二つあるだけである。
+    obey: clamp(0.78 + loyalty * 0.30 + nation.fear * 0.34, 0.6, 1.45),
     // 恐怖。前線から上がる報告が、どれだけ甘くなるか。
     fear: nation.fear,
-    // 正直さ。1 なら見たとおりを言う。
-    honesty: clamp(1 - nation.fear * 0.85, 0.15, 1),
   };
 }
 
@@ -447,20 +496,55 @@ export const COLLAPSE = Object.freeze({
 });
 
 /**
- * 国が保っているか。保っていなければ、その理由を返す。
+ * 国が保っているか。
  *
- * 目盛りが 0 になった瞬間に終わるのではない ─
- * 低いまま日が過ぎると、ある朝それが起きる。国とはそういうものである。
+ * 見えない賽を振って、ある朝いきなり終わらせることはしない ─
+ * それは遊び手に「その領域に近づくな」としか教えず、
+ * 悪政を選ばせておいて選んだ罰だけを与えることになる。
+ *
+ * かわりに期限を切る。目盛りが線を割った晩に警告が出て、
+ * 次の朝までに戻せなければ、そこで終わる。
+ * 一手番の猶予があるから、粛清と叙勲と恩赦に意味が出る。
  */
-export function checkCollapse(nation, rng) {
-  if (nation.loyalty <= 0) return COLLAPSE.coup;
-  if (nation.morale <= 0) return COLLAPSE.uprising;
+export const COUP_LINE = 20;
+export const RIOT_LINE = 18;
 
-  // 崖の手前でも足は滑る。低いほど滑りやすい ─
-  // 目盛りが一桁まで落ちた国は、たいてい翌朝まで保たない。
-  if (nation.loyalty < 22 && rng.chance((22 - nation.loyalty) / 28)) return COLLAPSE.coup;
-  if (nation.morale < 20 && rng.chance((20 - nation.morale) / 26)) return COLLAPSE.uprising;
+export function checkCollapse(nation) {
+  const notices = [];
+
+  // すでに通告が出ている ─ 戻せていなければ、朝が来る。
+  if (nation.warned?.coup) {
+    if (nation.loyalty <= COUP_LINE) return COLLAPSE.coup;
+    nation.warned.coup = false;
+    notices.push('士官団は踏みとどまった。忠誠は線の上に戻っている。');
+  }
+  if (nation.warned?.uprising) {
+    if (nation.morale <= RIOT_LINE) return COLLAPSE.uprising;
+    nation.warned.uprising = false;
+    notices.push('町は静まった。民心は線の上に戻っている。');
+  }
+
+  // 新たに線を割ったなら、通告する。終わるのは次の朝である。
+  nation.warned ??= {};
+  if (nation.loyalty <= COUP_LINE && !nation.warned.coup) {
+    nation.warned.coup = true;
+    notices.push('士官団の忠誠が線を割った。次の戦闘の翌朝、彼らは貴官の命令を受けない。');
+  }
+  if (nation.morale <= RIOT_LINE && !nation.warned.uprising) {
+    nation.warned.uprising = true;
+    notices.push('民心が線を割った。次の戦闘の翌朝、町は政府に背く。');
+  }
+
+  nation.notices = notices;
   return null;
+}
+
+/** 今、通告が出ているか（画面に赤く出すため） */
+export function warnings(nation) {
+  const out = [];
+  if (nation?.warned?.coup) out.push({ id: 'coup', label: '造反の通告', note: COLLAPSE.coup.reason });
+  if (nation?.warned?.uprising) out.push({ id: 'uprising', label: '内乱の通告', note: COLLAPSE.uprising.reason });
+  return out;
 }
 
 /* ------------------------------------------------------------------ */

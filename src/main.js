@@ -342,6 +342,7 @@ const natDom = () => ({
   fear: $('nat-fear'),
   output: $('nat-output'),
   left: $('nat-left'),
+  warnings: $('nat-warnings'),
   decrees: $('nat-decrees'),
   standing: $('nat-standing'),
   corps: $('nat-corps'),

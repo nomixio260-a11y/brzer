@@ -1,7 +1,7 @@
 // 命令の発令・伝達・受領・実行。
 // 命令は無線を占有し、遅れて届き、時に拒否される。
 
-import { toGrid, dist, formatClock } from '../util.js';
+import { toGrid, dist, formatClock, clamp } from '../util.js';
 import { enqueue, PRI } from './comms.js';
 import { setDestination, clearDestination } from './units.js';
 import { createFireMission, checkFire } from './combat.js';
@@ -333,6 +333,19 @@ export function issueOrder(
   return order;
 }
 
+/**
+ * 命令の通り方。
+ *
+ * その人の性分と忠誠（officerFactors）に、国の側の掛かりを重ねる。
+ * 掛け算にしたうえで床と天井を置く ─ どちらか一方で決まってしまっては、
+ * 士官を選ぶ意味も、統治を選ぶ意味も無くなる。
+ */
+function obeyOf(world, u) {
+  const own = officerFactors(u.officer).obey;
+  const nation = world.setup?.war?.obey ?? 1;
+  return clamp(own * nation, 0.55, 1.6);
+}
+
 /** 命令書に書く条件句（予令なら「敵を認めしだい」等） */
 function cond0(order) {
   const t = TRIGGERS[order.trigger] ?? TRIGGERS.now;
@@ -365,7 +378,8 @@ export function deliverOrders(world, delivered) {
     // 受領して応答するまでの間（部隊が状況を見て判断する時間）。
     // 演習では待たせない ─ 手順を試すための盤だからである。
     // 呑み込みの早い者は復唱が速い。一徹な者は、まず自分の目で状況を見てから返す。
-    const obey = officerFactors(u.officer).obey;
+    // 国の側でも命令の通り方は変わる ─ 心服させるか、黙らせるか。
+    const obey = obeyOf(world, u);
     order.ackDueAt = world.creative?.instantRadio
       ? world.now + 1
       : world.now + 3 + ((1 - u.skill) * 14 + world.rng.range(0, 8)) / obey;
@@ -554,7 +568,7 @@ function refusalReason(u, order, world) {
   const rng = world.rng;
   const movement = ['move', 'advance', 'attack', 'recon', 'withdraw'].includes(order.verb);
   // 従順な者ほど渋らない。一徹な者は、納得しない命令を返事だけで済ませる。
-  const obey = officerFactors(u.officer).obey;
+  const obey = obeyOf(world, u);
 
   if (u.state === 'broken') {
     return {

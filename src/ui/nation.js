@@ -25,13 +25,38 @@ export function renderNation(dom, view, corps, api) {
   dom.fear.textContent = view.fearJa;
   dom.fear.className = `fearline is-f${Math.min(4, Math.floor(view.fear * 5))}`;
   dom.output.textContent =
-    `見込み ─ 補充 ${view.output.replacements}名 ／ 砲弾 ${view.output.rounds}発`;
+    `見込み ─ 補充 ${view.output.replacements}名 ／ 砲弾 ${view.output.rounds}発` +
+    (view.pending.replacements || view.pending.rounds
+      ? `（明晩 補充 ${view.pending.replacements}名・砲弾 ${view.pending.rounds}発）`
+      : '');
   dom.left.textContent = `今夜あと ${view.left} 件`;
+  renderWarnings(dom.warnings, view);
 
   renderDecrees(dom.decrees, view, api);
   renderStanding(dom.standing, view, api);
   renderCorps(dom.corps, corps, api);
   renderRule(dom.rule, view);
+}
+
+/* ------------------------------------------------------------------ */
+/* 通告                                                                */
+/* ------------------------------------------------------------------ */
+//
+// 見えない賽で終わらせない。線を割った晩に、はっきりそう告げる。
+// 期限を示されて初めて、粛清にも叙勲にも恩赦にも意味が出る。
+
+function renderWarnings(el, view) {
+  if (!el) return;
+  el.innerHTML = '';
+  el.hidden = !view.warnings.length;
+  for (const w of view.warnings) {
+    const div = document.createElement('div');
+    div.className = 'natwarn';
+    div.dataset.warn = w.id;
+    div.innerHTML = `<b>${w.label}</b><span>${w.note}</span>` +
+      '<em>次の戦闘の翌朝が期限である。それまでに戻せ。</em>';
+    el.appendChild(div);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -57,6 +82,15 @@ function renderMeters(el, view) {
     fill.style.width = `${Math.max(0, Math.min(100, m.value))}%`;
     if (m.value <= 22) fill.classList.add('is-low');
     track.appendChild(fill);
+
+    // 民心には天井がある。焼いた郡の数だけ下がり、救済しても元へは戻らない。
+    if (m.id === 'morale' && view.ceiling < 100) {
+      const cap = document.createElement('i');
+      cap.className = 'natmeter__cap';
+      cap.style.left = `${view.ceiling}%`;
+      cap.title = `民心の天井 ${view.ceiling}（傷跡 ${view.scars}）─ 救済しても、ここより上へは戻らない`;
+      track.appendChild(cap);
+    }
 
     const val = document.createElement('b');
     val.className = 'natmeter__value';
@@ -153,7 +187,28 @@ function decreeCard(d, view, api) {
     const s = document.createElement('span');
     s.className = `dtag ${d.fear > 0 ? 'is-fear' : 'is-up'}`;
     s.textContent = d.fear > 0 ? '恐怖 増' : '恐怖 減';
-    s.title = '恐怖が高いほど、前線から上がってくる報告が甘くなる';
+    s.title = '恐怖が高いほど、前線から上がってくる報告が甘くなる。かわりに命令は通る。';
+    tags.appendChild(s);
+  }
+  if (d.slow) {
+    const s = document.createElement('span');
+    s.className = 'dtag is-slow';
+    s.textContent = '明晩から';
+    s.title = '今夜の戦闘には間に合わない。結果を知る前に決めるということである。';
+    tags.appendChild(s);
+  }
+  if (d.scar) {
+    const s = document.createElement('span');
+    s.className = 'dtag is-down';
+    s.textContent = '傷跡';
+    s.title = '民心の天井が下がる。救済しても、そこより上へは戻らない。';
+    tags.appendChild(s);
+  }
+  if (d.upkeep) {
+    const s = document.createElement('span');
+    s.className = 'dtag is-down';
+    s.textContent = `維持 ${d.upkeep}`;
+    s.title = '敷いている限り毎晩かかる。憲兵も密告者も、ただでは働かない。';
     tags.appendChild(s);
   }
   b.appendChild(tags);

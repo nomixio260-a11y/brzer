@@ -1154,6 +1154,25 @@ body.is-planning .maphint { bottom: 108px; }
 .fearline.is-f3 { color: #d07a48; }
 .fearline.is-f4 { color: #e2685c; }
 
+/* 通告。期限であって、賽ではない。 */
+.natwarns { display: grid; gap: 8px; margin-top: 14px; }
+.natwarn {
+  border: 1px solid #7a3a34; border-left: 3px solid var(--lamp-red);
+  background: linear-gradient(rgba(50, 22, 18, 0.55), rgba(26, 14, 12, 0.55));
+  padding: 9px 13px;
+}
+.natwarn b { display: block; font-size: 12px; letter-spacing: 0.2em; color: #e2685c; margin-bottom: 4px; }
+.natwarn span { display: block; font-size: 11.5px; color: var(--ink-dim); line-height: 1.8; }
+.natwarn em { display: block; font-style: normal; font-size: 10.5px; color: #d08a80; margin-top: 4px; }
+
+/* 民心の天井 */
+.natmeter__track { position: relative; }
+.natmeter__cap {
+  position: absolute; top: -2px; bottom: -2px; width: 2px;
+  background: repeating-linear-gradient(180deg, #d08a80 0 2px, transparent 2px 4px);
+}
+.dtag.is-slow { border-color: #3d5a72; color: #8fb6d0; }
+
 .h2note { float: right; font-style: normal; font-size: 10px; color: var(--ink-faint); letter-spacing: 0.16em; }
 
 /* 政令 */
