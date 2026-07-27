@@ -182,6 +182,7 @@ export function rollOfficers(rng, roster) {
 export function createOfficer({
   unitId, callsign, name, rank, temperament = 'steady',
   traits = [], xp = 0, battles = 0, kills = 0, losses = 0, wounded = false,
+  loyalty = 68,
 }) {
   return {
     unitId,
@@ -194,6 +195,9 @@ export function createOfficer({
     battles,
     kills,
     losses,
+    // この一人が指導者に付いているか。士官団全体の忠誠とは別に、一人ずつ違う ─
+    // 誰を粛清し、誰に叙勲するかは、これで決める。
+    loyalty,
     // 一度でも部隊を半分にされた者は、それを覚えている。
     wounded,
     // 戦死・後送。空席になった部隊には代わりが来る。
@@ -246,10 +250,14 @@ export function officerFactors(officer) {
     if (!tr) continue;
     for (const k of Object.keys(f)) if (tr[k]) f[k] += tr[k];
   }
-  // 熟練は腕（aim）と腰（nerve）に出る。命令の呑み込みは性分の問題なので動かさない。
+  // 熟練は腕（aim）と腰（nerve）に出る。
   const g = gradeOf(officer);
   f.aim += g.skill * 0.5;
   f.nerve += g.skill;
+
+  // 忠誠は呑み込みに出る。付いていない者は返事も遅いし、渋る。
+  // 気質とは別の話である ─ 一徹な者でも、心服していれば早く動く。
+  f.obey *= loyaltyFactor(officer);
 
   for (const k of Object.keys(f)) f[k] = clamp(f[k], 0.6, 1.6);
   officer._factors = Object.freeze(f);
@@ -323,6 +331,39 @@ export function debriefOfficer(officer, record) {
 }
 
 /**
+ * 一晩ぶんの忠誠の推移。
+ *
+ * 士官団の空気（国全体の忠誠）に引かれつつ、その人の性分で寄り方が変わる。
+ * 一徹・果敢な者は自分の目で見るので流されにくく、
+ * 沈着・几帳面な者は組織を見るので流されやすい。
+ */
+export function driftLoyalty(officer, national, { won = false, decorated = false } = {}) {
+  if (!officer) return;
+  const t = TEMPERAMENTS[officer.temperament] ?? TEMPERAMENTS.steady;
+  const pull = t.initiative > 1.1 ? 0.18 : 0.34;
+  let next = officer.loyalty + (national - officer.loyalty) * pull;
+  // 勝った戦は忠誠を戻す。勝てば士官は付いてくる。
+  if (won) next += 4;
+  // 叙勲された者は、しばらく誰よりも付いている。
+  if (decorated) next += 12;
+  // 歴戦の者ほど、指導者より自分の部隊を見るようになる。
+  next -= Math.min(4, (officer.xp ?? 0) * 0.6);
+  officer.loyalty = clamp(next, 0, 100);
+  invalidate(officer);
+}
+
+/** 忠誠は係数にも出る。付いていない者は、命令の呑み込みが悪い。 */
+function loyaltyFactor(officer) {
+  const l = officer?.loyalty ?? 68;
+  return clamp(0.72 + (l / 100) * 0.42, 0.6, 1.16);
+}
+
+/** 造反の危険。この部隊は、いつ命令を聞かなくなってもおかしくない。 */
+export function isWavering(officer) {
+  return (officer?.loyalty ?? 68) < 28;
+}
+
+/**
  * 戦死・後送。空席には代わりが来るが、経歴は引き継がれない。
  * @param {Set<string>} taken 今この中隊に居る者の姓（同姓が並ぶと点呼で困る）
  */
@@ -350,7 +391,7 @@ export function serializeOfficer(o) {
     unitId: o.unitId, callsign: o.callsign, name: o.name, rank: o.rank,
     temperament: o.temperament, traits: [...o.traits],
     xp: o.xp, battles: o.battles, kills: o.kills, losses: o.losses,
-    wounded: !!o.wounded, fallen: !!o.fallen,
+    wounded: !!o.wounded, fallen: !!o.fallen, loyalty: o.loyalty ?? 68,
   };
 }
 

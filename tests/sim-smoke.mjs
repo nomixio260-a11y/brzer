@@ -27,10 +27,16 @@ import {
   setAutoPlot, isAutoPlot, plotContact, startClock, isPlanning,
   newCampaign, startCampaignBattle, finishCampaignBattle, getCampaignView, getCompany,
   assignReplacement, allotRounds, setNightPlan, campaignList,
+  getNationView, getOfficerCorps, pickDecree, unpickDecree, stopStanding,
+  purgeIn, decorateIn,
 } from '../src/state.js';
+import {
+  createNation, canDecree, checkCollapse, ruleSummary, START,
+} from '../src/sim/nation.js';
+import { enqueue as commsEnqueue } from '../src/sim/comms.js';
 import { endPlanning } from '../src/sim/world.js';
 import {
-  rollOfficers, createOfficer, officerFactors, debriefOfficer, TEMPERAMENTS,
+  rollOfficers, createOfficer, officerFactors, debriefOfficer, TEMPERAMENTS, isWavering,
 } from '../src/sim/officers.js';
 import {
   attachmentMods, fits, canBreach, SLOTS_PER_UNIT,
@@ -1462,6 +1468,205 @@ section('戦役');
   check('戦役が決着する', st3.finished && !!st3.result, `${st3.result}`);
   check('戦役の結果に理由がある', (st3.resultReason ?? '').length > 5);
   check('日数は三日を超えない', st3.history.length <= 3, `${st3.history.length}`);
+}
+
+/* ------------------------------------------------------------------ */
+
+section('国政');
+{
+  const st = newCampaign('volne_three_days', 31337);
+  const v0 = getNationView(st);
+  check('国が起きている', !!v0 && v0.meters.length === 3, `${v0?.meters.length}`);
+  check('架空国家である', v0.name.includes('ヴォルネ'));
+  check('最初は恐怖がない', v0.fear === 0);
+
+  // 一晩に出せるのは二つまで
+  check('政令が出せる', pickDecree(st, 'conscript').ok);
+  check('二つ目も出せる', pickDecree(st, 'martial_law').ok);
+  check('三つ目は出せない', !pickDecree(st, 'relief').ok, pickDecree(st, 'relief').why);
+  check('取り消せる', unpickDecree(st, 'martial_law'));
+  check('取り消せば出せる', pickDecree(st, 'relief').ok);
+
+  // 国庫が足りなければ出せない
+  st.nation.treasury = 0;
+  check('国庫が空なら出せない', !canDecree(st.nation, 'honors').ok);
+  st.nation.treasury = 60;
+
+  // 出撃の直前に実施される
+  const beforePool = st.pool.replacements;
+  const g = startCampaignBattle(st);
+  check('政令で補充が増える', st.pool.replacements > beforePool,
+    `${beforePool} → ${st.pool.replacements}`);
+  check('政令は帳簿に残る', st.nation.ledger.length === 2, `${st.nation.ledger.length}`);
+  check('出したものは白紙に戻る', st.nation.decrees.length === 0);
+  check('国の係数が盤に渡る', !!g.world.setup.war && !!g.world.distortion);
+
+  // 徴兵は数を揃えるが、民心を削る
+  const stC = newCampaign('volne_three_days', 5);
+  pickDecree(stC, 'conscript');
+  startCampaignBattle(stC);
+  check('徴兵は民心を下げる', stC.nation.morale < START.morale, `${stC.nation.morale}`);
+  const stV = newCampaign('volne_three_days', 5);
+  pickDecree(stV, 'volunteer');
+  startCampaignBattle(stV);
+  check('志願は数が少ない代わりに民心を削らない',
+    stV.nation.morale > stC.nation.morale &&
+    stV.pool.replacements < stC.pool.replacements,
+    `志願 民${Math.round(stV.nation.morale)}/兵${stV.pool.replacements} ` +
+    `徴兵 民${Math.round(stC.nation.morale)}/兵${stC.pool.replacements}`);
+
+  // 継続の令
+  const st2 = newCampaign('volne_three_days', 4);
+  pickDecree(st2, 'censorship');
+  startCampaignBattle(st2);
+  check('継続の令は施行中に残る', st2.nation.standing.includes('censorship'));
+  check('情報統制は恐怖を生む', st2.nation.fear > 0.1, `${st2.nation.fear}`);
+  const fearAt = st2.nation.fear;
+  stopStanding(st2, 'censorship');
+  check('解けば施行中から消える', !st2.nation.standing.includes('censorship'));
+  check('恐怖は半分しか戻らない',
+    st2.nation.fear > 0 && st2.nation.fear < fearAt, `${fearAt} → ${st2.nation.fear}`);
+}
+
+section('恐怖と報告');
+{
+  // 恐怖で統治された軍では、部下は自分の損害を小さく言う。
+  const mk = (fear) => {
+    const w = createWorld({
+      missionId: 'bridge_hold',
+      setup: { units: {}, officers: new Map(), war: { fear, honesty: 1 - fear } },
+    });
+    const u = w.unitsById.get('H1');
+    u.strength = 3;
+    u.morale = 30;
+    u.ammo = 10;
+    u.walkingWounded = 2;
+    commsEnqueue(w, { from: u.callsign, fromId: 'H1', kind: 'sitrep', text: 'x', composedAt: w.now });
+    return w.radio.queue.at(-1).meta.self;
+  };
+  const honest = mk(0);
+  const afraid = mk(0.8);
+  check('恐怖がなければ見たとおりを言う', honest.strength === '3/9名', honest.strength);
+  check('恐怖の下では損害を小さく言う',
+    afraid.strengthRatio > honest.strengthRatio, `${honest.strength} → ${afraid.strength}`);
+  check('士気も良く言う', afraid.morale !== honest.morale, `${honest.morale} → ${afraid.morale}`);
+  check('弾も多めに言う', afraid.ammoRatio > honest.ammoRatio);
+  check('負傷者は言わなくなる', honest.wounded && !afraid.wounded);
+  check('位置は歪まない', afraid.grid === honest.grid);
+
+  // 講評は真実を出す。ここは歪ませない。
+  const w = createWorld({
+    missionId: 'bridge_hold',
+    setup: { units: {}, officers: new Map(), war: { fear: 0.9, honesty: 0.1 } },
+  });
+  const u = w.unitsById.get('H1');
+  u.strength = 2;
+  check('真実の兵力は歪まない', u.strength === 2);
+}
+
+section('忠誠と粛清');
+{
+  const st = newCampaign('volne_three_days', 909);
+  const corps0 = getOfficerCorps(st);
+  check('士官団が読める', corps0.length >= 6, `${corps0.length}`);
+  check('忠誠が一人ずつ出る', corps0.every((o) => typeof o.loyalty === 'number'));
+  check('粛清の代価が先に分かる', corps0.every((o) => o.cost && o.cost.loyalty < 0));
+
+  const target = corps0[0];
+  const before = { loyalty: st.nation.loyalty, control: st.nation.control };
+  const res = purgeIn(st, target.unitId);
+  check('粛清できる', !!res && res.removed.name === target.name);
+  check('統制は上がる', st.nation.control > before.control, `${before.control} → ${st.nation.control}`);
+  check('忠誠は下がる', st.nation.loyalty < before.loyalty, `${before.loyalty} → ${st.nation.loyalty}`);
+  check('恐怖が増える', st.nation.fear > 0);
+  check('代わりが立つ', st.officers.get(target.unitId).name !== target.name);
+  check('経歴は戻らない', st.officers.get(target.unitId).xp === 0);
+  check('数えられている', st.nation.purged.length === 1);
+  check('除かれた者が記録に残る', getNationView(st).purged[0].name === target.name);
+
+  // 離れかけている者を除くほうが、士官団は揺れない
+  const a = newCampaign('volne_three_days', 11);
+  const b = newCampaign('volne_three_days', 11);
+  const id = getOfficerCorps(a)[0].unitId;
+  a.officers.get(id).loyalty = 10;
+  b.officers.get(id).loyalty = 95;
+  purgeIn(a, id);
+  purgeIn(b, id);
+  check('離反者を除くほうが安く済む', a.nation.loyalty > b.nation.loyalty,
+    `離反者 ${a.nation.loyalty} / 忠臣 ${b.nation.loyalty}`);
+
+  // 忠誠は命令の呑み込みに効く
+  const loyal = officerFactors(createOfficer({ unitId: 'X', temperament: 'steady', loyalty: 92 }));
+  const sullen = officerFactors(createOfficer({ unitId: 'Y', temperament: 'steady', loyalty: 8 }));
+  check('心服している者は呑み込みが早い', loyal.obey > sullen.obey,
+    `${loyal.obey.toFixed(2)} / ${sullen.obey.toFixed(2)}`);
+  check('離反寸前は動揺として出る', isWavering(createOfficer({ unitId: 'Z', loyalty: 10 })));
+
+  // 叙勲
+  const st3 = newCampaign('volne_three_days', 77);
+  const who = getOfficerCorps(st3)[0].unitId;
+  const l0 = st3.officers.get(who).loyalty;
+  decorateIn(st3, who);
+  check('叙勲で忠誠が上がる', st3.officers.get(who).loyalty > l0,
+    `${l0} → ${st3.officers.get(who).loyalty}`);
+}
+
+section('国が保たなくなるとき');
+{
+  const rng = new Rng(5);
+  const n = createNation();
+  n.loyalty = 0;
+  check('忠誠が尽きれば造反', checkCollapse(n, rng)?.id === 'coup');
+  const n2 = createNation();
+  n2.morale = 0;
+  check('民心が尽きれば内乱', checkCollapse(n2, rng)?.id === 'uprising');
+  check('健全なら何も起きない', checkCollapse(createNation(), rng) === null);
+
+  // 戦役の決着として出る
+  const st = newCampaign('volne_three_days', 616);
+  st.nation.loyalty = 0;
+  const g = startCampaignBattle(st);
+  startClock(g);
+  let t = 0;
+  while (!g.finished && t++ < 8000) advance(g, 0.5);
+  finishCampaignBattle(g);
+  check('造反は戦役の決着になる', st.finished && st.result === 'collapse', `${st.result}`);
+  check('決着の理由が出る', (st.resultReason ?? '').length > 5);
+  check('画面にも造反として出る', getCampaignView(st).collapse === 'coup');
+}
+
+section('統治の評価');
+{
+  const harsh = createNation();
+  for (const id of ['martial_law', 'censorship', 'secret_police', 'conscript', 'requisition']) {
+    harsh.ledger.push({ day: 1, id, label: id });
+  }
+  check('苛政と評される', ruleSummary(harsh).label === '苛政', ruleSummary(harsh).label);
+
+  const mild = createNation();
+  for (const id of ['relief', 'amnesty', 'honors', 'free_press', 'volunteer']) {
+    mild.ledger.push({ day: 1, id, label: id });
+  }
+  check('寛政と評される', ruleSummary(mild).label === '寛政', ruleSummary(mild).label);
+  check('何もしなければ中庸', ruleSummary(createNation()).label === '中庸');
+  check('評価に説教が付かない', ruleSummary(harsh).note.length > 5);
+
+  // 保存
+  const st = newCampaign('volne_three_days', 8);
+  pickDecree(st, 'censorship');
+  startCampaignBattle(st);
+  purgeIn(st, getOfficerCorps(st)[0].unitId);
+  const back = deserializeCampaign(JSON.parse(JSON.stringify(serializeCampaign(st))));
+  check('国も書き出して読み戻せる',
+    back.nation.fear === st.nation.fear &&
+    back.nation.purged.length === 1 &&
+    back.nation.standing.includes('censorship'));
+  check('忠誠も読み戻せる',
+    [...back.officers.values()].every((o) => typeof o.loyalty === 'number'));
+  // v2.0 の保存（国が無い）も読める
+  const oldSave = JSON.parse(JSON.stringify(serializeCampaign(st)));
+  delete oldSave.nation;
+  check('国の無い古い保存も読める', !!deserializeCampaign(oldSave)?.nation);
 }
 
 /* ------------------------------------------------------------------ */

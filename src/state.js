@@ -23,7 +23,12 @@ import {
   replacementRoom, assignedTotal, allottedTotal, poolLeft,
   NIGHT_PLANS, NIGHT_PLAN_IDS, serializeCampaign, deserializeCampaign,
   attachAsset, detachAsset, assetsLeft, canAttach, campaignList,
+  settleNight, purgeOfficer, decorateOfficer, waveringUnits, purgeCost,
 } from './sim/campaign.js';
+import {
+  NATION, METERS, DECREES, DECREE_GROUPS, DECREE_IDS, DECREE_LIMIT,
+  canDecree, decree, revokeDecree, liftStanding, ruleSummary,
+} from './sim/nation.js';
 import { ATTACHMENTS, attachmentShort, attachmentLabels } from './sim/attachments.js';
 import { TEMPERAMENTS, TRAITS, gradeOf, officerLine } from './sim/officers.js';
 import { Rng, toGrid, fromGrid, formatClock } from './util.js';
@@ -1096,6 +1101,9 @@ export function startCampaignBattle(campaignState, opts = {}) {
   const stage = currentStage(campaignState, campaign);
   if (!stage) return null;
 
+  // 出撃の直前に、その晩の政令を実施する。
+  // 出したものは翌日ではなく、今日の戦闘から効く。
+  settleNight(campaignState);
   const setup = battleSetup(campaignState);
   const game = createGame({
     missionId: stage.missionId,
@@ -1173,6 +1181,17 @@ export function getCampaignView(state) {
     finished: !!state.finished,
     result: state.result,
     resultReason: state.resultReason,
+    collapse: state.collapse ?? null,
+    // 国政の要点。戦役の画面にも出す ─ 前線と国は別の話ではない。
+    nation: state.nation && {
+      morale: Math.round(state.nation.morale),
+      control: Math.round(state.nation.control),
+      loyalty: Math.round(state.nation.loyalty),
+      treasury: Math.round(state.nation.treasury),
+      fear: state.nation.fear,
+      decrees: state.nation.decrees.length,
+      limit: DECREE_LIMIT,
+    },
     history: state.history.map((h) => ({ ...h })),
     pool: { ...state.pool },
     left: poolLeft(state),
@@ -1303,4 +1322,124 @@ export function getOfficerOf(game, unitId) {
     temperamentLabel: TEMPERAMENTS[o.temperament]?.label ?? '',
     traits: o.traits.map((id) => TRAITS[id]?.label).filter(Boolean),
   };
+}
+
+/* ================================================================== */
+/* 国政                                                               */
+/* ================================================================== */
+//
+// 前線は見えない。だが自分の国のことは分かる ─
+// 国庫に幾ら残っているかも、どの町が焼けたかも、指揮所の机の上にある。
+// 見えないのは、その決定が前線で何を起こすかだけである。
+
+export function getNationView(state) {
+  const n = state?.nation;
+  if (!n) return null;
+  const left = DECREE_LIMIT - n.decrees.length;
+
+  return {
+    name: NATION.name,
+    eyebrow: NATION.eyebrow,
+    blurb: NATION.blurb,
+    meters: Object.values(METERS).map((m) => ({
+      id: m.id, label: m.label, note: m.note, value: Math.round(n[m.id]),
+    })),
+    treasury: Math.round(n.treasury),
+    fear: n.fear,
+    fearJa: fearJa(n.fear),
+    output: { ...n.output },
+    decrees: n.decrees.map((id) => ({ id, ...DECREES[id] })),
+    standing: n.standing.map((id) => ({ id, ...DECREES[id] })),
+    left,
+    limit: DECREE_LIMIT,
+    groups: Object.values(DECREE_GROUPS).map((g) => ({
+      ...g,
+      items: DECREE_IDS.filter((id) => DECREES[id].group === g.id).map((id) => {
+        const d = DECREES[id];
+        const chk = canDecree(n, id);
+        return {
+          id: d.id, label: d.label, note: d.note, cost: d.cost,
+          effect: { ...(d.effect ?? {}) },
+          yields: { ...(d.yields ?? {}) },
+          fear: d.fear ?? 0,
+          keep: !!d.keep,
+          picked: n.decrees.includes(id),
+          active: n.standing.includes(id),
+          can: chk.ok,
+          why: chk.why,
+        };
+      }),
+    })),
+    purged: n.purged.map((p) => ({ ...p })),
+    decorated: n.decorated.map((p) => ({ ...p })),
+    rule: ruleSummary(n),
+  };
+}
+
+/** 恐怖の言語化。数値は出さない ─ 指導者は自分の国の恐怖を数字で知らない。 */
+function fearJa(f) {
+  if (f < 0.12) return '町は普通に喋っている';
+  if (f < 0.3) return '人前では政府の話をしない';
+  if (f < 0.5) return '隣人を疑う者が出てきた';
+  if (f < 0.72) return '誰も本当のことを言わない';
+  return '誰も口を開かない';
+}
+
+/** 士官団。粛清と叙勲の対象を選ぶための一覧。 */
+export function getOfficerCorps(state) {
+  if (!state) return [];
+  const wavering = new Set(waveringUnits(state));
+  const rows = [];
+  for (const [unitId, o] of state.officers) {
+    rows.push({
+      unitId,
+      callsign: o.callsign ?? unitId,
+      name: o.name,
+      rank: o.rank,
+      temperament: o.temperament,
+      temperamentLabel: TEMPERAMENTS[o.temperament]?.label ?? '',
+      traits: o.traits.map((id) => TRAITS[id]?.label).filter(Boolean),
+      grade: gradeOf(o).label,
+      battles: o.battles,
+      kills: o.kills,
+      loyalty: Math.round(o.loyalty ?? 68),
+      loyaltyJa: loyaltyJa(o.loyalty ?? 68),
+      wavering: wavering.has(unitId),
+      cost: state.nation ? purgeCost(state.nation, o) : null,
+    });
+  }
+  return rows;
+}
+
+function loyaltyJa(l) {
+  if (l >= 80) return '心服';
+  if (l >= 62) return '従順';
+  if (l >= 44) return '面従';
+  if (l >= 28) return '不満';
+  return '離反寸前';
+}
+
+export function pickDecree(state, id) {
+  return decree(state.nation, id);
+}
+
+export function unpickDecree(state, id) {
+  return revokeDecree(state.nation, id);
+}
+
+export function stopStanding(state, id) {
+  return liftStanding(state.nation, id);
+}
+
+/**
+ * 粛清。取り返しはつかない ─ 呼ぶ前に、UI で一度確かめること。
+ */
+export function purgeIn(state, unitId) {
+  const rng = new Rng(((state.nation.purged.length + 1) * 7919 + (state.stage + 1) * 104729) | 1);
+  const res = purgeOfficer(state, unitId, rng);
+  return res;
+}
+
+export function decorateIn(state, unitId) {
+  return decorateOfficer(state, unitId);
 }

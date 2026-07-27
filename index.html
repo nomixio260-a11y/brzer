@@ -351,6 +351,7 @@
       <div class="briefing__eyebrow">機密 ─ 第3中隊戦闘団 指揮所</div>
       <h1 class="campaign__title" id="camp-title">ヴォルネ三日間</h1>
       <div class="campaign__sub" id="camp-sub">連続作戦</div>
+      <div class="natstrip" id="camp-nation" hidden></div>
       <div class="frontbar" id="camp-frontbar">
         <div class="frontbar__label">戦線</div>
         <div class="frontbar__track"><i class="frontbar__fill" id="camp-frontfill"></i></div>
@@ -393,7 +394,65 @@
     <footer class="campaign__foot">
       <div id="camp-result" class="campaign__result" hidden></div>
       <button id="btn-sortie" class="btn btn--primary">配置につく</button>
+      <button id="btn-govern" class="btn">国政</button>
       <button id="btn-abandon" class="btn">戦役をやめる</button>
+    </footer>
+  </div>
+</section>
+
+<!-- ================================ 国政 ================================ -->
+<section id="view-nation" class="view">
+  <div class="campaign">
+    <header class="campaign__head">
+      <div class="briefing__eyebrow" id="nat-eyebrow">国家評議会 議長府</div>
+      <h1 class="campaign__title" id="nat-name">ヴォルネ共和国</h1>
+      <div class="campaign__sub" id="nat-blurb"></div>
+      <div class="natmeters" id="nat-meters"></div>
+      <div class="natline">
+        <span>国庫 <b id="nat-treasury">40</b></span>
+        <span id="nat-output" class="natline__out"></span>
+        <span id="nat-fear" class="fearline">町は普通に喋っている</span>
+      </div>
+    </header>
+
+    <div class="campaign__body">
+      <section class="brief-block">
+        <h2>今夜の政令 <em class="h2note" id="nat-left">今夜あと 2 件</em></h2>
+        <p class="brief-note">
+          一晩に出せるのは二つまで。全部やれるなら、それは統治ではなく願望である。
+          出したものは翌日ではなく、<b>今日の戦闘から効く</b>。
+        </p>
+        <div class="decrees" id="nat-decrees"></div>
+      </section>
+
+      <section class="brief-block">
+        <h2>施行中の令</h2>
+        <p class="brief-note">
+          継続の令は、解くまで毎晩効き続ける。解けば得たものは返るが、
+          <b>恐怖だけは半分しか戻らない</b> ─ 一度密告された町は、令が解かれても隣人を信じない。
+        </p>
+        <div class="standings" id="nat-standing"></div>
+      </section>
+
+      <section class="brief-block">
+        <h2>士官団</h2>
+        <p class="brief-note">
+          忠誠は一人ずつ違う。付いていない者は命令の呑み込みが遅く、渋る。
+          <b>粛清</b>は取り返しがつかない ─ 経歴も特性も戻らず、代わりに来るのは
+          忠誠だけは高い者である。離れかけている者を除くなら士官団は揺れないが、
+          よく戦っている者を除けば、その日から誰も貴官を信じない。
+        </p>
+        <div class="corpslist" id="nat-corps"></div>
+      </section>
+
+      <section class="brief-block">
+        <h2>統治の記録</h2>
+        <div class="rule" id="nat-rule"></div>
+      </section>
+    </div>
+
+    <footer class="campaign__foot">
+      <button id="btn-nat-back" class="btn btn--primary">前線へ戻る</button>
     </footer>
   </div>
 </section>
@@ -403,13 +462,74 @@
   <div class="notes">
     <header class="notes__head">
       <div class="briefing__eyebrow">更新記録</div>
-      <h1 class="notes__title">v2.0「継戦」</h1>
-      <div class="notes__sub">一日の戦闘を、三日の戦争にする</div>
+      <h1 class="notes__title">v3.0「統治」</h1>
+      <div class="notes__sub">前線の指揮も、国の運営も、同じ一人が背負う</div>
     </header>
 
     <div class="notes__body">
       <section class="brief-block">
-        <h2>戦役 ─ 継戦</h2>
+        <h2>国政 ─ 貴官は議長である</h2>
+        <p class="brief-lead">
+          戦争は前線だけで行われるものではない。弾を作るのは工場であり、兵を出すのは町であり、
+          その町を保たせるのは統治である。<b>できないのは、代償を払わずに済ませることだけ</b>である。
+          ─ 扱うのは架空国家の統治であり、実在の国も民族も史実も、ここには無い。
+        </p>
+        <ul>
+          <li><b>指標は四つ。</b><b>民心</b>（兵の質と、内乱までの余裕）／
+            <b>統制</b>（動揺は抑えるが、恐怖を生む）／
+            <b>忠誠</b>（尽きれば士官団が造反する）／<b>国庫</b>（政令はすべてここから出る）。</li>
+          <li><b>政令は一晩に二つまで。</b>徴兵・徴発・戒厳令・情報統制・保安部の拡張・増産・増税・
+            志願兵募集・救済・恩赦・叙勲・報道の解禁 ─ 十三種。
+            出したものは翌日ではなく<b>今日の戦闘から効く</b>。</li>
+          <li><b>継続の令</b>は解くまで毎晩効き続ける。解けば得たものは返るが、
+            <b>恐怖だけは半分しか戻らない</b> ─ 一度密告された町は、令が解かれても隣人を信じない。</li>
+          <li>善政も悪政も選べる。どちらにも帰結がある ─
+            <b>忠誠が尽きれば造反、民心が尽きれば内乱</b>。どちらでも、その場で失脚する。</li>
+          <li>講評は説教をしない。何をしたかを数え、何が起きたかを並べるだけである
+            （<b>苛政</b>／<b>寛政</b>／<b>硬軟</b>／<b>中庸</b>）。</li>
+        </ul>
+      </section>
+
+      <section class="brief-block">
+        <h2>恐怖は、貴官の目を潰す</h2>
+        <p class="brief-lead">
+          この更新の肝はここにある。
+          <b>恐怖で統治された軍では、部下は悪い報せを上げない。</b>
+        </p>
+        <ul>
+          <li>戒厳令・情報統制・保安部・粛清は<b>恐怖</b>を生む。恐怖が高いほど、
+            前線から上がってくる報告が甘くなる。</li>
+          <li>三分の一まで削られた分隊が「<b>六割は残っている</b>」と報告する。
+            弾が尽きかけていても「まだある」と言う。負傷者の数は、いちばん言いにくい数字である。</li>
+          <li>敵も小さく報告される ─ 「大部隊が来ている」と言えば、
+            なぜ止められないのかを問われるからである。</li>
+          <li>嘘をつくのではない。<b>「まだ保っている」と言い続けるだけ</b>である。
+            そして本当に保たなくなった日、その部隊は前触れもなく消える。</li>
+          <li>歪むのは<b>報告だけ</b>で、真実は歪まない。講評で開く地図には、
+            何が本当に起きていたかがそのまま出る。</li>
+          <li><b>報道の解禁</b>で恐怖は下がる。損害が国民に知れる代わりに、
+            前線からの報告は正直になる。</li>
+        </ul>
+      </section>
+
+      <section class="brief-block">
+        <h2>士官団 ─ 粛清と叙勲</h2>
+        <ul>
+          <li>将校一人ひとりに<b>忠誠</b>が付いた。心服／従順／面従／不満／離反寸前。
+            付いていない者は命令の呑み込みが遅く、渋る。</li>
+          <li><b>粛清</b>できる。統制は上がり、忠誠と民心は下がる。
+            <b>取り返しはつかない</b> ─ 経歴も特性も戻らず、代わりに来るのは
+            忠誠だけは高い、腕の無い者である。</li>
+          <li>ただし<b>代価は相手による</b>。離れかけている者を除くなら士官団は揺れない。
+            よく戦っている者を除けば、その日から誰も貴官を信じない。
+            代価は押す前に画面に出る。</li>
+          <li><b>叙勲</b>で忠誠は買える。買えるうちは安い。</li>
+          <li>取り返しのつかない決定には、一手が挟まる。</li>
+        </ul>
+      </section>
+
+      <section class="brief-block">
+        <h2>戦役 ─ 継戦（v2.0）</h2>
         <ul>
           <li><b>三日を続けて戦う。</b>峠で時間を稼ぎ、橋で敵を止め、奪われた町を取り返す。
             部隊は一つしかない ─ 損害・弾薬・疲労・士気・経歴は、そのまま翌日へ持ち越される。</li>
@@ -478,6 +598,18 @@
     </footer>
   </div>
 </section>
+
+<!-- 取り返しのつかない決定には、一手を挟む -->
+<div id="confirm" class="confirm" hidden>
+  <div class="confirm__box">
+    <b id="confirm-title">確認</b>
+    <p id="confirm-text"></p>
+    <div class="confirm__acts">
+      <button id="confirm-no" class="btn">やめる</button>
+      <button id="confirm-yes" class="btn btn--danger">実行する</button>
+    </div>
+  </div>
+</div>
 
 <script type="module" src="src/main.js"></script>
 </body>

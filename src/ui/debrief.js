@@ -223,6 +223,14 @@ function armorRow(a) {
   return [['装甲戦闘', parts.join('／'), total ? 'is-good' : a.bounces > 4 ? 'is-bad' : '']];
 }
 
+/** 報告がどれだけ甘かったか。数字ではなく、何が起きていたかで言う。 */
+function fearJa(f) {
+  if (f < 0.2) return 'おおむね正直だった';
+  if (f < 0.4) return '損害がやや小さく上がっていた';
+  if (f < 0.62) return '損害は実際の半分ほどで報告されていた';
+  return '誰も本当のことを言っていなかった';
+}
+
 function renderStats(el, score, truth) {
   el.innerHTML = '';
   if (!score) return;
@@ -243,6 +251,11 @@ function renderStats(el, score, truth) {
       ? `${score.heldOrders} 件（うち ${score.heldOrdersFired} 件が発動）`
       : 'なし', score.heldOrdersFired > 0 ? 'is-good' : ''],
     ['部下の独断後退', score.selfWithdrawals ? `${score.selfWithdrawals} 個部隊` : 'なし', ''],
+    // 恐怖の下では、この盤に届いていた数字が甘かった。
+    // それを知るのは、真実が開いたこの画面だけである。
+    ...(score.fear > 0.08
+      ? [['貴官が受けていた報告', fearJa(score.fear), score.fear > 0.4 ? 'is-bad' : '']]
+      : []),
     ['平均応答時間', score.avgResponse ? `${Math.round(score.avgResponse)} 秒` : '─',
       score.avgResponse > 60 ? 'is-bad' : ''],
     ['砲撃要請', score.registeredMissions

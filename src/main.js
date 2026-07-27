@@ -46,6 +46,13 @@ import {
   attachTo,
   detachFrom,
   campaignList,
+  getNationView,
+  getOfficerCorps,
+  pickDecree,
+  unpickDecree,
+  stopStanding,
+  purgeIn,
+  decorateIn,
 } from './state.js';
 
 import {
@@ -79,6 +86,7 @@ import {
 import { createHud, renderHud, rebindHud } from './ui/hud.js';
 import { showDebrief } from './ui/debrief.js';
 import { renderCampaign } from './ui/campaign.js';
+import { renderNation } from './ui/nation.js';
 import { fromGrid, formatClock, WORLD } from './util.js';
 // 検査用の窓口。?debug=1 のときだけ window に出す（本番の遊びには一切関わらない）。
 import * as stateApi from './state.js';
@@ -290,6 +298,7 @@ const campDom = () => ({
   night: $('camp-night'),
   history: $('camp-history'),
   historyBlock: $('camp-history-block'),
+  nation: $('camp-nation'),
 });
 
 function drawCampaign() {
@@ -316,10 +325,86 @@ function drawCampaign() {
     res.innerHTML = '';
     const b = document.createElement('b');
     b.className = `is-${view.result}`;
-    b.textContent = { victory: '戦役 ─ 勝利', narrow: '戦役 ─ 辛勝', defeat: '戦役 ─ 敗北' }[view.result] ?? '終わり';
+    b.textContent = {
+      victory: '戦役 ─ 勝利', narrow: '戦役 ─ 辛勝', defeat: '戦役 ─ 敗北',
+      collapse: view.collapse === 'coup' ? '造反 ─ 失脚' : '内乱 ─ 失脚',
+    }[view.result] ?? '終わり';
     res.append(b, document.createTextNode(view.resultReason ?? ''));
   }
   document.title = `BRZER ─ ${view.title}`;
+}
+
+/* --- 国政 --------------------------------------------------------- */
+
+const natDom = () => ({
+  meters: $('nat-meters'),
+  treasury: $('nat-treasury'),
+  fear: $('nat-fear'),
+  output: $('nat-output'),
+  left: $('nat-left'),
+  decrees: $('nat-decrees'),
+  standing: $('nat-standing'),
+  corps: $('nat-corps'),
+  rule: $('nat-rule'),
+});
+
+function drawNation() {
+  if (!campaign?.nation) return;
+  const view = getNationView(campaign);
+  $('nat-name').textContent = view.name;
+  $('nat-eyebrow').textContent = view.eyebrow;
+  $('nat-blurb').textContent = view.blurb;
+
+  renderNation(natDom(), view, getOfficerCorps(campaign), {
+    onPick: (id) => { pickDecree(campaign, id); saveCampaign(campaign); drawNation(); audio.click(); },
+    onUnpick: (id) => { unpickDecree(campaign, id); saveCampaign(campaign); drawNation(); audio.click(); },
+    onLift: (id) => { stopStanding(campaign, id); saveCampaign(campaign); drawNation(); audio.click(); },
+    onDecorate: (id) => { decorateIn(campaign, id); saveCampaign(campaign); drawNation(); audio.click(); },
+    onPurge: (id, o) => askPurge(id, o),
+  });
+}
+
+function openNation() {
+  if (!campaign) return;
+  drawNation();
+  showView('view-nation');
+}
+
+/**
+ * 粛清には一手を挟む。
+ * 取り返しがつかないものを、指が滑って実行できてはいけない。
+ */
+function askPurge(unitId, o) {
+  confirmAction(
+    '粛清',
+    `${o.name} ${o.rank}（${o.callsign}）を除く。
+` +
+      `${o.battles}戦を戦い、${o.traits.length ? `「${o.traits.join('・')}」を持つ` : '特性は無い'}。
+` +
+      `統制 +${o.cost.control} ／ 忠誠 ${o.cost.loyalty} ／ 民心 ${o.cost.morale}。
+` +
+      '経歴も特性も戻らない。代わりに来るのは、忠誠だけは高い者である。',
+    () => {
+      purgeIn(campaign, unitId);
+      saveCampaign(campaign);
+      drawNation();
+      drawCampaign();
+    }
+  );
+}
+
+let confirmFn = null;
+
+function confirmAction(title, text, fn) {
+  $('confirm-title').textContent = title;
+  $('confirm-text').textContent = text;
+  confirmFn = fn;
+  $('confirm').hidden = false;
+}
+
+function closeConfirm() {
+  $('confirm').hidden = true;
+  confirmFn = null;
 }
 
 function openCampaign() {
@@ -509,16 +594,6 @@ function finishBattleWiring(creative) {
   $('btn-reveal').hidden = !isCreative(game);
   $('btn-reveal').classList.toggle('is-on', !!getCreative(game)?.reveal);
   document.body.classList.toggle('is-drill', creative);
-
-  if (new URLSearchParams(location.search).has('debug')) {
-    window.__brzer = {
-      get game() { return game; },
-      get mapView() { return mapView; },
-      get campaign() { return campaign; },
-      tool,
-      state: stateApi,
-    };
-  }
 
   // 半日の戦闘では、静穏を飛ばすための x8 を出す
   $('speed-8').hidden = !isLongBattle(game);
@@ -1324,7 +1399,7 @@ function buildCampaignPicker() {
   const nb = document.createElement('button');
   nb.className = 'btn notesbtn';
   nb.id = 'btn-notes';
-  nb.textContent = '更新内容 v2.0「継戦」';
+  nb.textContent = '更新内容 v3.0「統治」';
   wrap.appendChild(nb);
 }
 
@@ -1374,6 +1449,29 @@ $('btn-abandon').addEventListener('click', () => {
   audio.click();
 });
 
+$('btn-govern').addEventListener('click', () => {
+  openNation();
+  audio.click();
+});
+
+$('btn-nat-back').addEventListener('click', () => {
+  drawCampaign();
+  showView('view-campaign');
+  audio.click();
+});
+
+$('confirm-no').addEventListener('click', () => {
+  closeConfirm();
+  audio.click();
+});
+
+$('confirm-yes').addEventListener('click', () => {
+  const fn = confirmFn;
+  closeConfirm();
+  fn?.();
+  audio.click();
+});
+
 $('btn-nextday').addEventListener('click', () => {
   audio.stopSpeaking();
   openCampaign();
@@ -1381,6 +1479,18 @@ $('btn-nextday').addEventListener('click', () => {
 });
 
 $('btn-hhour').addEventListener('click', declareHHour);
+
+// 検査用の窓口。?debug=1 のときだけ出す（本番の遊びには一切関わらない）。
+// 盤も戦役も getter で覗く ─ 戦闘に入る前の画面でも見えている必要がある。
+if (new URLSearchParams(location.search).has('debug')) {
+  window.__brzer = {
+    get game() { return game; },
+    get mapView() { return mapView; },
+    get campaign() { return campaign; },
+    tool,
+    state: stateApi,
+  };
+}
 
 syncAutoPlotButton();
 buildCampaignPicker();

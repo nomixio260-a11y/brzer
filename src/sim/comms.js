@@ -3,7 +3,7 @@
 
 import { clamp, dist, toGrid } from '../util.js';
 import { lineOfSight } from './terrain.js';
-import { moraleJa, stateJa, strengthJa } from './units.js';
+import { moraleJa, stateJa } from './units.js';
 import { fatigueJa } from './logistics.js';
 
 export const PRI = Object.freeze({
@@ -39,18 +39,30 @@ export function enqueue(world, tx) {
   const sender = tx.fromId ? world.unitsById.get(tx.fromId) : null;
   const meta = { ...(tx.meta ?? {}) };
   if (sender && sender.side === 'friend') {
+    // 恐怖で統治された軍では、部下は自分の損害を小さく言う。
+    // 嘘をつくのではない ─ 「まだ保っている」と言い続けるだけである。
+    // そして本当に保たなくなった日、その部隊は前触れもなく消える。
+    const fear = world.distortion?.fear ?? 0;
+    const shown = Math.min(
+      sender.maxStrength,
+      sender.strength + (sender.maxStrength - sender.strength) * fear * 0.7
+    );
+    const ratio = shown / sender.maxStrength;
+    const shownMorale = Math.min(100, sender.morale + fear * 26);
+
     meta.self = {
       grid: toGrid(sender.x, sender.y),
-      strength: strengthJa(sender),
-      strengthRatio: sender.strength / sender.maxStrength,
-      morale: moraleJa(sender.morale),
+      strength: `${Math.round(shown)}/${sender.maxStrength}${sender.tpl.unitJa}`,
+      strengthRatio: ratio,
+      morale: moraleJa(shownMorale),
       state: stateJa(sender),
       posture: sender.posture,
-      ammoRatio: sender.ammo / (sender.tpl.maxAmmo || 100),
+      ammoRatio: Math.min(1, sender.ammo / (sender.tpl.maxAmmo || 100) + fear * 0.3),
       // 長期戦で効いてくるもの。これも「最後に聞いた時点」の話でしかない。
       fatigue: fatigueJa(sender),
       resting: !!sender.resting,
-      wounded: sender.walkingWounded > 0.4,
+      // 負傷者の数は、いちばん言いにくい数字である。
+      wounded: sender.walkingWounded > 0.4 && fear < 0.55,
     };
   }
 

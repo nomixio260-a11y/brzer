@@ -76,9 +76,11 @@ function confidencePhrase(quality, rng) {
   return rng.pick(['何かいる、判別できない', '断定できない', 'はっきりしない']);
 }
 
-function countPhrase(c, rng) {
+function countPhrase(c, rng, fear = 0) {
   const unit = UNIT_JA[c.classified] ?? '';
-  const n = Math.max(1, Math.round(c.classifiedStrength));
+  // 恐怖で統治された軍では、敵も小さく報告される。
+  // 「大部隊が来ている」と言えば、なぜ止められないのかを問われるからである。
+  const n = Math.max(1, Math.round(c.classifiedStrength * (1 - fear * 0.4)));
   if (c.quality > 0.75) return `${n}${unit}`;
   if (c.quality > 0.45) return `約${n}${unit}`;
   if (n <= 2) return `少数`;
@@ -117,7 +119,7 @@ function contactText(u, c, world) {
   const pos = reportedPosition(c, rng, u.skill, u.mods?.accuracy ?? 1);
   const grid = toGrid(pos.x, pos.y);
   const type = TYPE_JA[c.classified] ?? '正体不明';
-  const count = countPhrase(c, rng);
+  const count = countPhrase(c, rng, world.distortion?.fear ?? 0);
   const conf = confidencePhrase(c.quality, rng);
   const move = movementPhrase(c, rng) ?? '行動不明';
   const equip = EQUIPMENT_JA[c.classified] ?? '装備不明';
@@ -193,7 +195,10 @@ export function stepReporting(world, dt) {
     if (now - u.lastHitAt < 4 && now - (u.lastUnderFireReportAt ?? -Infinity) > REPORT_COOLDOWN / chatter) {
       u.lastUnderFireReportAt = now;
       const grid = toGrid(u.x, u.y);
-      const dire = u.strength / u.maxStrength < 0.55;
+      // 「損害大」と言えるかどうかは、言ったあとに何が起きるかで決まる。
+      // 恐怖の下では、半分に削られていても「軽微」と言い続ける者が出る。
+      const fear = world.distortion?.fear ?? 0;
+      const dire = u.strength / u.maxStrength < 0.55 * (1 - fear * 0.75);
       // 同じ文句を繰り返させない。撃たれ続けている部隊ほど言葉が短く、荒くなる。
       const text = dire
         ? pickFreshFor(u, 'dire', rng, [
@@ -381,7 +386,9 @@ export function composeSitrep(u, world) {
   if (contacts.length) {
     const c = contacts.sort((a, b) => b.quality - a.quality)[0];
     const pos = reportedPosition(c, rng, u.skill, u.mods?.accuracy ?? 1);
-    enemyPart = `${toGrid(pos.x, pos.y)}に${TYPE_JA[c.classified] ?? '正体不明'}${countPhrase(c, rng)}`;
+    enemyPart =
+      `${toGrid(pos.x, pos.y)}に${TYPE_JA[c.classified] ?? '正体不明'}` +
+      `${countPhrase(c, rng, world.distortion?.fear ?? 0)}`;
   }
 
   return (

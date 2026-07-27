@@ -846,6 +846,9 @@ export function scoreMission(world, outcome) {
     dangerClose: world.stats.dangerClose ?? 0,
     checkFires: world.stats.checkFires ?? 0,
     armor: world.stats.armor,
+    // 国政が報告をどれだけ甘くしていたか。
+    // 講評は真実を出す場所なので、ここだけは正直に出す。
+    fear: world.distortion?.fear ?? 0,
     avgResponse,
     airtimeRatio: world.radio.airtimeUsed / Math.max(1, world.now - world.mission.startTime),
     droppedTransmissions: world.radio.droppedCount,

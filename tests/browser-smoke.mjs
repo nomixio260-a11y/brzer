@@ -699,6 +699,109 @@ async function checkCampaign() {
 }
 
 /**
+ * 国政。
+ * 政令が出せ、粛清には一手が挟まり、統治が前線に返ってくること。
+ */
+async function checkNation() {
+  const ctx = await browser.newContext({ viewport: { width: 1500, height: 950 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message));
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+
+  await p.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+  await p.waitForFunction(() => document.querySelectorAll('#campaign-pick button').length > 0,
+    null, { timeout: 10000 });
+  await p.click('#campaign-pick button[data-campaign]');
+  await p.waitForTimeout(400);
+
+  check('前線の画面に国の帯が出る', await p.isVisible('#camp-nation'));
+  check('国政への入口がある', await p.isVisible('#btn-govern'));
+  await p.click('#btn-govern');
+  await p.waitForTimeout(350);
+
+  check('国政の画面が開く', await p.isVisible('#view-nation'));
+  check('架空国家である', (await p.textContent('#nat-name')).includes('ヴォルネ'));
+  check('指標が三つ出る', (await p.$$('#nat-meters .natmeter')).length === 3);
+  check('政令が並ぶ', (await p.$$('#nat-decrees .decree')).length >= 10);
+  check('士官団が並ぶ', (await p.$$('#nat-corps .corps')).length >= 6);
+  check('恐怖は言葉で出る', (await p.textContent('#nat-fear')).length > 3);
+
+  // 一晩に二つまで
+  await p.click('#nat-decrees button[data-decree="conscript"]');
+  await p.waitForTimeout(150);
+  check('政令が選べる',
+    await p.$eval('[data-decree="conscript"]', (b) => b.classList.contains('is-on')));
+  await p.click('#nat-decrees button[data-decree="martial_law"]');
+  await p.waitForTimeout(150);
+  check('二つ目も選べる',
+    await p.$eval('[data-decree="martial_law"]', (b) => b.classList.contains('is-on')));
+  check('三つ目は押せない',
+    await p.$eval('[data-decree="relief"]', (b) => b.disabled));
+  check('残り件数が出る', (await p.textContent('#nat-left')).includes('0'));
+  await p.click('#nat-decrees button[data-decree="conscript"]');
+  await p.waitForTimeout(150);
+  check('取り消せば押せるようになる',
+    !(await p.$eval('[data-decree="relief"]', (b) => b.disabled)));
+
+  await p.screenshot({ path: `${SHOTS}/15-nation.png`, fullPage: true });
+
+  // 粛清には一手が挟まる
+  const purged0 = await p.evaluate(() => window.__brzer.campaign.nation.purged.length);
+  await p.click('#nat-corps button[data-purge]');
+  await p.waitForTimeout(250);
+  check('粛清には確認が挟まる', await p.isVisible('#confirm'));
+  check('確認に代価が書いてある', (await p.textContent('#confirm-text')).includes('忠誠'));
+  await p.click('#confirm-no');
+  await p.waitForTimeout(200);
+  check('やめれば何も起きない',
+    !(await p.isVisible('#confirm')) &&
+    (await p.evaluate(() => window.__brzer.campaign.nation.purged.length)) === purged0);
+
+  const loyal0 = await p.evaluate(() => window.__brzer.campaign.nation.loyalty);
+  await p.click('#nat-corps button[data-purge]');
+  await p.waitForTimeout(200);
+  await p.click('#confirm-yes');
+  await p.waitForTimeout(300);
+  const after = await p.evaluate(() => ({
+    purged: window.__brzer.campaign.nation.purged.length,
+    loyalty: window.__brzer.campaign.nation.loyalty,
+    control: window.__brzer.campaign.nation.control,
+  }));
+  check('実行すれば除かれる', after.purged === purged0 + 1);
+  check('忠誠が下がる', after.loyalty < loyal0, `${loyal0} → ${after.loyalty}`);
+  check('除かれた者が記録に残る', (await p.$$('#nat-rule .purgelist li')).length >= 1);
+
+  // 叙勲
+  await p.click('#nat-corps button[data-decorate]');
+  await p.waitForTimeout(250);
+  check('叙勲でエラーが出ない', errs.length === 0, errs.slice(0, 2).join(' | '));
+
+  await p.click('#btn-nat-back');
+  await p.waitForTimeout(300);
+  check('前線へ戻れる', await p.isVisible('#view-campaign'));
+
+  // 政令は出撃の直前に効く
+  const pool0 = await p.evaluate(() => window.__brzer.campaign.pool.replacements);
+  await p.click('#btn-sortie');
+  await p.waitForTimeout(1200);
+  const st = await p.evaluate(() => ({
+    pool: window.__brzer.campaign.pool.replacements,
+    fear: window.__brzer.campaign.nation.fear,
+    standing: window.__brzer.campaign.nation.standing,
+    distortion: window.__brzer.game.world.distortion,
+    war: !!window.__brzer.game.world.setup.war,
+  }));
+  check('政令で補充が増える', st.pool > pool0, `${pool0} → ${st.pool}`);
+  check('継続の令が施行中になる', st.standing.includes('martial_law'), JSON.stringify(st.standing));
+  check('戒厳令は恐怖を生む', st.fear > 0, `${st.fear}`);
+  check('国の係数が盤に渡る', st.war && st.distortion.fear === st.fear);
+
+  check('国政でエラーが出ない', errs.length === 0, errs.slice(0, 3).join(' | '));
+  await ctx.close();
+}
+
+/**
  * 演習モード。
  * 増援が呼べ、真実の地図が開き、そして本編ではそれが一切できないこと。
  */
@@ -1214,6 +1317,9 @@ try {
 
   section('戦役');
   await checkCampaign();
+
+  section('国政');
+  await checkNation();
 
   section('演習モード');
   await checkCreative();

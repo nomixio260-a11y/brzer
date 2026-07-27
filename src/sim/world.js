@@ -65,6 +65,15 @@ function applyCarry(world, u) {
     u.skill = Math.min(0.97, u.skill * (0.94 + f.aim * 0.06));
   }
 
+  // 国の状態。民心が高ければ士気の下駄が付き、低ければ最初から重い。
+  // 統制は崩れにくさに効く ─ 崩れ方が変わるわけではない。
+  const war = setup.war;
+  if (war) {
+    u.morale = Math.max(12, Math.min(100, u.morale + (war.startMorale ?? 0)));
+    u.skill = Math.max(0.4, Math.min(0.97, u.skill * (war.recruit ?? 1)));
+    u.stateHold = war.hold ?? 1;
+  }
+
   // 夜通し掘った陣地。防御を命じられている部隊にだけ意味がある。
   if (setup.fortify && (u.posture === 'dug_in' || u.state === 'defending') && !u.tpl.flying) {
     u.posture = 'fortified';
@@ -112,6 +121,13 @@ export function createWorld(opts = {}) {
     // H時前。作戦命令を下達し、火力計画を立てている間。
     // この間は時計が止まっており、命令は無線ではなく口頭で渡る。
     planning: !!opts.planning,
+
+    // 国政が前線に返してくるもの。
+    // fear が高いほど、部下は悪い報せを上げなくなる ─
+    // 指揮官が見る盤そのものが、統治の仕方で歪む。
+    distortion: opts.setup?.war
+      ? { fear: opts.setup.war.fear ?? 0, honesty: opts.setup.war.honesty ?? 1 }
+      : { fear: 0, honesty: 1 },
 
     support: {
       // 戦役では、前の晩に段列から回してきたぶんが積み増しになる。

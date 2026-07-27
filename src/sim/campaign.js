@@ -15,6 +15,11 @@ import {
   serializeOfficer, deserializeOfficer, officerFactors,
 } from './officers.js';
 import { ATTACHMENTS, SLOTS_PER_UNIT, fits } from './attachments.js';
+import {
+  createNation, applyDecrees, absorbBattle, warFactors, checkCollapse,
+  serializeNation, deserializeNation, purge, decorate, purgeCost,
+} from './nation.js';
+import { driftLoyalty, isWavering } from './officers.js';
 
 /* ------------------------------------------------------------------ */
 /* 戦役の定義                                                           */
@@ -164,6 +169,9 @@ export function createCampaign(campaign, rng, roster) {
 
     // 一戦ごとの記録
     history: [],
+
+    // 国。戦役の上に載る層 ─ 弾も兵も、ここから出てくる。
+    nation: createNation(),
   };
 }
 
@@ -219,6 +227,8 @@ export function battleSetup(state) {
     support: { ...state.allot },
     officers: state.officers,
     attach: { ...state.attach },
+    // 国の状態を戦場の係数に翻訳したもの。単発の戦闘には付かない。
+    war: state.nation ? warFactors(state.nation) : null,
   };
 }
 
@@ -292,6 +302,17 @@ export function recordBattle(state, report, rng, campaign = getCampaign(state.ca
   state.carry = carry;
   state.front = clamp(state.front + FRONT_SHIFT[outcome], campaign.front.min, campaign.front.max);
 
+  // --- 国が受け取るもの -------------------------------------------
+  let collapse = null;
+  if (state.nation) {
+    absorbBattle(state.nation, outcome, report.score);
+    // 士官団の一人ひとりが、国全体の空気に引かれて動く。
+    for (const o of state.officers.values()) {
+      driftLoyalty(o, state.nation.loyalty, { won: outcome === 'victory' });
+    }
+    collapse = checkCollapse(state.nation, rng);
+  }
+
   const y = YIELD[outcome];
   state.pool = {
     replacements: state.pool.replacements + y.replacements,
@@ -327,7 +348,13 @@ export function recordBattle(state, report, rng, campaign = getCampaign(state.ca
   state.stage++;
 
   // --- 戦役の決着 -------------------------------------------------
-  if (state.front <= campaign.front.min) {
+  // 国が保たなくなれば、戦線がどうであろうと戦争はそこで終わる。
+  if (collapse) {
+    state.finished = true;
+    state.result = 'collapse';
+    state.collapse = collapse.id;
+    state.resultReason = collapse.reason;
+  } else if (state.front <= campaign.front.min) {
     state.finished = true;
     state.result = 'defeat';
     state.resultReason = '戦線を保てなかった。戦役はここで終わる。';
@@ -416,6 +443,56 @@ export function poolLeft(state) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 国政                                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 出撃の直前に、その晩の政令を実施する。
+ * 出したものが効くのは翌日からではなく、今日の戦闘からである。
+ */
+export function settleNight(state) {
+  if (!state.nation) return null;
+  const res = applyDecrees(state.nation, state.stage + 1);
+  // 政令で出てきた人と弾は、そのまま手持ちに積まれる。
+  state.pool.replacements += res.output.replacements;
+  state.pool.rounds += res.output.rounds;
+  return res;
+}
+
+/** 粛清。将校を除き、代わりを立てる。 */
+export function purgeOfficer(state, unitId, rng) {
+  const officer = state.officers.get(unitId);
+  if (!officer || !state.nation) return null;
+  const cost = purge(state.nation, officer);
+  const taken = new Set([...state.officers.values()].map((o) => o.name));
+  const next = replaceOfficer(officer, rng, taken);
+  // 代わりに来るのは、忠誠だけは高い者である。腕は無い。
+  next.loyalty = Math.min(92, state.nation.loyalty + 18);
+  state.officers.set(unitId, next);
+  // 除かれた部隊は、しばらく士気が戻らない。
+  if (state.carry[unitId]) {
+    state.carry[unitId].morale = Math.max(28, (state.carry[unitId].morale ?? 70) - 16);
+  }
+  return { cost, removed: officer, replacement: next };
+}
+
+/** 叙勲。忠誠を買う ─ 買えるうちは安い。 */
+export function decorateOfficer(state, unitId) {
+  const officer = state.officers.get(unitId);
+  if (!officer || !state.nation) return null;
+  const res = decorate(state.nation, officer);
+  driftLoyalty(officer, state.nation.loyalty, { decorated: true });
+  return res;
+}
+
+/** 造反しかけている部隊（画面で赤く出す） */
+export function waveringUnits(state) {
+  return [...state.officers.values()].filter(isWavering).map((o) => o.unitId);
+}
+
+export { purgeCost };
+
+/* ------------------------------------------------------------------ */
 /* 保存                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -438,6 +515,8 @@ export function serializeCampaign(state) {
     carry: JSON.parse(JSON.stringify(state.carry)),
     officers: [...state.officers.values()].map(serializeOfficer),
     history: JSON.parse(JSON.stringify(state.history)),
+    nation: state.nation ? serializeNation(state.nation) : null,
+    collapse: state.collapse ?? null,
   };
 }
 
@@ -462,5 +541,8 @@ export function deserializeCampaign(raw) {
     carry: raw.carry ?? {},
     officers,
     history: raw.history ?? [],
+    // v2.0 で保存された戦役には国が無い。読めるようにしておく。
+    nation: deserializeNation(raw.nation),
+    collapse: raw.collapse ?? null,
   };
 }

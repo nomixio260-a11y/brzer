@@ -34,6 +34,20 @@ export function renderCampaign(dom, view, rows, api) {
     dom.prologue.textContent = view.stage.prologue;
   }
 
+  // 国の要点。前線の画面にも出す ─ 前線と国は別の話ではない。
+  if (dom.nation && view.nation) {
+    const n = view.nation;
+    dom.nation.hidden = false;
+    dom.nation.innerHTML =
+      `<span>民心 <b>${n.morale}</b></span>` +
+      `<span>統制 <b>${n.control}</b></span>` +
+      `<span>忠誠 <b class="${n.loyalty <= 28 ? 'is-bad' : ''}">${n.loyalty}</b></span>` +
+      `<span>国庫 <b>${n.treasury}</b></span>` +
+      `<span class="natstrip__decree">今夜の政令 ${n.decrees}/${n.limit}</span>`;
+  } else if (dom.nation) {
+    dom.nation.hidden = true;
+  }
+
   renderCompany(dom.company, rows, view, api);
   renderAllot(dom.allot, view, api);
   renderNight(dom.night, view, api);

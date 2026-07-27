@@ -346,7 +346,10 @@ export function stepMorale(u, now, dt) {
     u.morale = clamp(u.morale + dt * (u.rallying ? 0.34 : 0.13), 0, 100);
   }
 
-  if (u.state !== 'broken' && u.morale < 22) {
+  // 国家の統制。憲兵がいる軍は崩れにくい ─ 崩れ方が変わるわけではない。
+  // 崩れる敷居が下がるだけであって、崩れたら同じように潰走する。
+  const breakAt = 22 / (u.stateHold ?? 1);
+  if (u.state !== 'broken' && u.morale < breakAt) {
     u.state = 'broken';
     u.posture = 'rapid';
   } else if (u.state === 'broken' && u.morale > 46) {
