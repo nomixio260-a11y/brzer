@@ -353,7 +353,10 @@ export function canUndo(game) {
 
 /* --- 記号 ---------------------------------------------------------- */
 
-export function addMarker(game, { x, y, type = 'enemy_inf', confidence = 'estimated', label = '' }) {
+export function addMarker(
+  game,
+  { x, y, type = 'enemy_inf', confidence = 'estimated', label = '', unitId = null }
+) {
   snapshot(game);
   const marker = {
     id: `M${markerSeq++}`,
@@ -362,11 +365,60 @@ export function addMarker(game, { x, y, type = 'enemy_inf', confidence = 'estima
     type,
     confidence,
     label,
+    // 自軍の記号は、どの部隊のものかを覚えておく。
+    // 覚えていれば、次からは名前を打ち直さずに位置だけ付け替えられる。
+    unitId,
     createdAt: game.world.now,
     updatedAt: game.world.now,
   };
   game.belief.markers.push(marker);
   return marker;
+}
+
+/**
+ * その部隊の記号を「最後に聞いた位置」に置く。すでに置いてあれば動かす。
+ *
+ * 指揮官が自軍の位置を地図に写す作業は、本来こういうものである ―
+ * 報告を聞くたび、その分隊の駒を動かす。名前を書き直したりはしない。
+ * 確度は報告の古さから決める（古い報告で置いた駒は、そう見えるようにする）。
+ *
+ * @returns {object|null} 置いた／動かした記号。まだ交信が無ければ null。
+ */
+export function markUnit(game, unitId) {
+  const heard = game.belief.roster.get(unitId);
+  if (!heard?.grid) return null;
+  const p = fromGrid(heard.grid);
+  if (!p) return null;
+
+  const age = game.world.now - (heard.observedAt ?? heard.heardAt);
+  const confidence = age < 150 ? 'confirmed' : age < 480 ? 'estimated' : 'unconfirmed';
+
+  const existing = game.belief.markers.find((m) => m.unitId === unitId);
+  if (existing) {
+    snapshot(game);
+    existing.x = p.x;
+    existing.y = p.y;
+    existing.confidence = confidence;
+    existing.label = heard.callsign;
+    existing.updatedAt = game.world.now;
+    return existing;
+  }
+
+  return addMarker(game, {
+    x: p.x,
+    y: p.y,
+    type: 'friendly',
+    confidence,
+    label: heard.callsign,
+    unitId,
+  });
+}
+
+/** 自軍の呼出符号（記号のラベルに一発で貼れるようにするため） */
+export function getCallsigns(game) {
+  return getRosterOrder(game)
+    .filter((u) => !u.virtual)
+    .map((u) => u.callsign);
 }
 
 export function moveMarker(game, id, x, y, { record = false } = {}) {

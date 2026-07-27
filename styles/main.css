@@ -359,6 +359,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   padding-top: 6px;
 }
 
+#map-hint-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .maphint {
   position: absolute;
   left: 50%;
@@ -394,6 +395,30 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
 .maphint__done:hover { background: #4c8250; }
 
+/* 地図の上から命令を送る釦。携帯では、これがあるので頁を開き直さずに済む。 */
+.maphint__send {
+  background: #6b4a1e;
+  border-color: #b58a3c;
+  color: #ffe9c2;
+  max-width: 58vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.maphint__send:hover { background: #855c25; }
+.maphint__cancel {
+  pointer-events: auto;
+  flex: none;
+  background: none;
+  border: 1px solid #5a4a30;
+  color: #b9a586;
+  font: inherit;
+  padding: 3px 9px;
+  border-radius: 1px;
+  cursor: pointer;
+}
+.maphint__cancel:hover { border-color: #8a7350; color: #ffd9a0; }
+
 .markeredit {
   position: absolute;
   background: linear-gradient(rgba(20, 18, 15, 0.97), rgba(13, 11, 9, 0.97));
@@ -416,6 +441,28 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   width: 138px;
 }
 .markeredit input:focus { outline: none; border-color: #7a6334; }
+.markeredit { flex-direction: column; }
+.markeredit__row { display: flex; gap: 5px; align-items: center; }
+.markeredit__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 288px;
+}
+.markeredit__chips[hidden] { display: none; }
+.tool--chip {
+  font-size: 10.5px;
+  padding: 3px 8px;
+  letter-spacing: 0.04em;
+}
+.tool--chip.is-on { border-color: #b58a3c; color: #ffe9c2; background: linear-gradient(#3a2f18, #241d10); }
+.markeredit__close { font-size: 10.5px; }
+
+/* 携帯では指の下ではなく、地図の下端に貼り付ける ―
+   指の下に出すと、名前を付けたい当の記号が隠れてしまう。
+   位置は下の媒体規則が決める（拡大釦の列を避ける必要があるため）。 */
+.markeredit.is-docked .markeredit__chips { max-width: none; }
+.markeredit.is-docked input { flex: 1; width: auto; }
 
 /* --- 右側の器材 --- */
 .side {
@@ -484,6 +531,19 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   padding: 0 5px;
   border-radius: 1px;
 }
+.roster__mark {
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #9fc4e8;
+  background: #101820;
+  border: 1px solid #2b3d4e;
+  padding: 1px 7px;
+  border-radius: 1px;
+  cursor: pointer;
+  flex: none;
+}
+.roster__mark:hover { background: #16242f; border-color: #47637c; color: #d3e6f7; }
 .roster__age { margin-left: auto; font-size: 9.5px; color: var(--ink-faint); font-family: var(--mono); }
 
 .roster__bar {
@@ -1040,15 +1100,23 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   /* 拡大ボタンは欄外表記に被らない高さへ */
   .mapzoom { bottom: 66px; }
 
-  /* ラベル欄は画面を覆わない大きさに留め、下端に寄せる */
+  /* ラベル欄は画面を覆わない大きさに留め、下端に寄せる。
+     右端は拡大釦の列に譲る ─ 名前を付けている間も地図は動かせねばならない。 */
   .markeredit {
     left: 8px !important;
-    right: 8px;
+    right: 58px;
     top: auto !important;
     bottom: 80px;
     width: auto;
   }
   .markeredit input { width: 100%; font-size: 16px; }
+  /* 見本は折り返さずに横へ流す。折り返すと高さが読めず、地図を食う。 */
+  .markeredit__chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tool--chip { flex: none; padding: 5px 10px; font-size: 11px; }
   .objective { display: none; }
   .speed__btn { min-width: 33px; padding: 7px 4px; }
   .iconbtn { width: 30px; height: 30px; flex: none; }
@@ -1172,7 +1240,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   .btn--send { padding: 9px 22px; font-size: 13px; }
 
   .toast { top: 10px; max-width: calc(100% - 24px); font-size: 12px; }
-  .maphint { bottom: 12px; font-size: 11px; padding: 7px 14px; }
+  /* 縮尺と視程の刷り込みは図面の下端にある。その上に置く。 */
+  .maphint { bottom: 74px; font-size: 11px; padding: 7px 12px; max-width: calc(100% - 68px); }
+  .maphint__send { max-width: none; }
   .only-desktop { display: none; }
 }
 

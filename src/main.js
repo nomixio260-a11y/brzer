@@ -26,6 +26,8 @@ import {
   getCreative,
   creativeAction,
   getRevealed,
+  markUnit,
+  getCallsigns,
 } from './state.js';
 
 import {
@@ -50,6 +52,9 @@ import {
   setTarget,
   isTargeting,
   finishTargeting,
+  panelState,
+  submit as submitOrder,
+  cancel as cancelOrder,
   refresh as refreshOrders,
 } from './ui/orderpanel.js';
 import { createHud, renderHud } from './ui/hud.js';
@@ -245,7 +250,7 @@ function startMission() {
     centerOn(mapView, p.x, p.y, Math.max(mapView.zoom, 1.8));
     if (isNarrow()) closeSheet();
     audio.click();
-  });
+  }, markUnitOnMap);
 
   logView = createRadioLog($('radiolog'), {
     onCite: (entry) => citeReport(entry),
@@ -269,25 +274,15 @@ function startMission() {
     },
     game,
     {
-      onTargetingChange: (active, verb) => {
+      onTargetingChange: (active) => {
         mapView.targeting = active;
-        const hint = $('map-hint');
-        hint.hidden = !active;
-        const legs = mapView.orderLegs?.length ?? 0;
-        $('map-hint-done').hidden = !active || legs < 1;
-        if (active) {
-          $('map-hint-text').textContent = legs
-            ? '続けて叩けば経由地を足せる ─ これでよければ「決定」'
-            : verb === 'fire_mission'
-              ? '砲弾を落とす地点を地図で指定 ─ そこに味方がいれば味方に落ちる'
-              : verb === 'register'
-                ? '事前に標定しておく地点を指定 ─ 以後ここへの射撃は早く正確になる'
-                : '目標にする地点を地図で指定';
-          if (isNarrow()) closeSheet();
-        }
+        // 目標を叩かせるあいだは頁を退ける。地図が見えなければ指定できない。
+        if (active && isNarrow()) closeSheet();
+        syncMapHint();
       },
       onLegsChange: (legs) => {
         mapView.orderLegs = legs;
+        syncMapHint();
       },
       onNotice: (t) => {
         $('order-status').textContent = t;
@@ -297,6 +292,7 @@ function startMission() {
         selectInRoster(rosterView, orderPanel.unitId);
         if (isNarrow()) closeSheet();
         showToast('指揮所 発', order.text ?? '命令を送信した。応答を待て。', false);
+        syncMapHint();
       },
       // 演習統裁の操作は無線を通らない。押した瞬間に盤が変わる。
       onCreative: (verb, res) => {
@@ -662,16 +658,17 @@ function wireMap() {
     onTargetPick: (x, y) => {
       setTarget(orderPanel, x, y);
       audio.click();
-      // 経路点つきの命令は狙いを保ったままにする（続けて経由地を打てる）。
-      // 一点で済む命令なら、そのまま命令タブへ戻して送信させる。
-      if (!isTargeting(orderPanel) && isNarrow()) openTab('order');
+      // 頁を開き直させない。指定した所に「送信」が出るので、
+      // 地図を見たまま最後まで済ませられる。
+      syncMapHint();
     },
 
     onPlaceMarker: (x, y, ev) => {
       const m = addMarker(game, { x, y, type: tool.markerType, confidence: tool.confidence });
       mapView.selectedMarkId = m.id;
-      // 携帯では置くたびに入力欄が画面を覆ってしまう。付けたいときだけ叩かせる。
-      if (!isNarrow()) showMarkerEditor(m, ev);
+      // 置いたらすぐ名前を付けられるようにする。携帯では画面下に貼り付くので、
+      // 置いた記号そのものは隠れない ─ 見本を一つ叩けば名前が入る。
+      showMarkerEditor(m, ev);
       audio.click();
     },
 
@@ -736,25 +733,106 @@ function wireZoom() {
     audio.click();
   });
 
-  // 経路点の指定を打ち切る
+  // 経路点の指定を打ち切る（指定を終えても頁は開かない ─ 隣に送信が出る）
   $('map-hint-done').addEventListener('click', () => {
     finishTargeting(orderPanel);
     audio.click();
-    if (isNarrow()) openTab('order');
+    syncMapHint();
+  });
+
+  // 地図の上から送信する。命令の頁を開き直す必要はない。
+  $('map-hint-send').addEventListener('click', () => {
+    submitOrder(orderPanel);
+    syncMapHint();
+  });
+
+  $('map-hint-cancel').addEventListener('click', () => {
+    cancelOrder(orderPanel);
+    audio.click();
+    syncMapHint();
   });
 }
 
+/**
+ * 地図の下の帯。
+ *
+ * 携帯では、目標を指定するために命令の頁を閉じねばならない。
+ * 閉じたぶんの続きをここで済ませる ─ 経由地の決定も、送信も、取りやめも。
+ * 「選ぶ → 閉じる → 叩く → 開き直す → 送る」の開き直しを無くすためにある。
+ */
+function syncMapHint() {
+  if (!orderPanel) return;
+  const st = panelState(orderPanel);
+  const hint = $('map-hint');
+  const text = $('map-hint-text');
+  const done = $('map-hint-done');
+  const send = $('map-hint-send');
+  const cancel = $('map-hint-cancel');
+
+  // 目標の要らない命令は地図と関係がない
+  if (!st.verb || !st.needsTarget) {
+    hint.hidden = true;
+    return;
+  }
+
+  hint.hidden = false;
+  cancel.hidden = false;
+  done.hidden = !(st.targeting && st.legs >= 1 && st.multi);
+  send.hidden = !st.canSend;
+  send.textContent = `送信 ─ ${st.label}${st.grid ? ` ${st.grid}` : ''}`;
+  // 送信釦に命令も方眼も書いてある。同じことを二度並べると帯が潰れる。
+  text.hidden = st.canSend && !st.targeting;
+
+  if (!st.legs) {
+    text.textContent =
+      st.verb === 'fire_mission'
+        ? `${st.label}：落とす地点を叩け ─ そこに味方がいれば味方に落ちる`
+        : st.verb === 'register'
+          ? `${st.label}：標定する地点を叩け`
+          : st.verb === 'call_friend' || st.verb === 'place_enemy'
+            ? `${st.label}：置く地点を叩け`
+            : `${st.label}：目標を叩け`;
+  } else if (st.targeting) {
+    text.textContent = `${st.grid} ─ 続けて叩けば経由地を足せる`;
+  } else {
+    text.textContent = `${st.label} ${st.grid}`;
+  }
+}
+
+// ラベルの見本。打つより選ぶほうが速い ─ 特に片手で持っている時は。
+// 敵の記号には「何が何両いたか」を、味方の記号には呼出符号を出す。
+const LABEL_CHIPS = {
+  enemy_inf: ['一個分隊', '一個小隊', '斥候', '徒歩'],
+  enemy_mech: ['装甲車2両', '装甲車3両', '随伴歩兵あり'],
+  enemy_armor: ['戦車2両', '戦車3両', '縦隊', '停止中'],
+  enemy_at: ['対戦車班', '待ち伏せ'],
+  enemy_arty: ['迫撃砲', '砲声より', '陣地'],
+  unknown: ['正体不明', '音のみ', '要確認'],
+  obstacle: ['鉄条網', '地雷原', '倒木'],
+  objective: ['確保', '奪回', '集結地'],
+  note: ['要注意', '死角', '観測点', '退路'],
+};
+
 function showMarkerEditor(marker, ev) {
-  if (!ev || ev.clientX == null) return;
   const ed = $('marker-editor');
   const input = $('marker-label');
   ed.hidden = false;
+  ed.dataset.mark = marker.id;
 
-  const wrap = $('map').getBoundingClientRect();
-  const w = ed.offsetWidth || 210;
-  const h = ed.offsetHeight || 40;
-  ed.style.left = `${Math.max(6, Math.min(ev.clientX - wrap.left + 12, wrap.width - w - 6))}px`;
-  ed.style.top = `${Math.max(6, Math.min(ev.clientY - wrap.top + 12, wrap.height - h - 6))}px`;
+  // 携帯では画面下に貼り付ける（指の下に出すと、その記号が見えなくなる）。
+  // 広い画面では、これまでどおり叩いた場所の脇に出す。
+  if (isNarrow() || !ev || ev.clientX == null) {
+    ed.classList.add('is-docked');
+    ed.style.left = '';
+    ed.style.top = '';
+  } else {
+    ed.classList.remove('is-docked');
+    const wrap = $('map').getBoundingClientRect();
+    const w = ed.offsetWidth || 240;
+    const h = ed.offsetHeight || 64;
+    ed.style.left = `${Math.max(6, Math.min(ev.clientX - wrap.left + 12, wrap.width - w - 6))}px`;
+    ed.style.top = `${Math.max(6, Math.min(ev.clientY - wrap.top + 12, wrap.height - h - 6))}px`;
+  }
 
   input.value = marker.label ?? '';
   input.oninput = () => updateMarker(game, marker.id, { label: input.value });
@@ -765,14 +843,60 @@ function showMarkerEditor(marker, ev) {
       input.blur();
     }
   };
+
+  // 一発で貼れる見本
+  const chips = $('marker-chips');
+  chips.innerHTML = '';
+  const list =
+    marker.type === 'friendly' ? getCallsigns(game) : (LABEL_CHIPS[marker.type] ?? []);
+  for (const label of list) {
+    const b = document.createElement('button');
+    b.className = 'tool tool--chip';
+    b.textContent = label;
+    if (marker.label === label) b.classList.add('is-on');
+    b.onclick = () => {
+      updateMarker(game, marker.id, { label });
+      input.value = label;
+      for (const other of chips.querySelectorAll('button')) other.classList.remove('is-on');
+      b.classList.add('is-on');
+      audio.click();
+      // 携帯では、名前が入ったらすぐ退く。地図の前に居座らせない。
+      if (isNarrow()) hideMarkerEditor();
+    };
+    chips.appendChild(b);
+  }
+  chips.hidden = !list.length;
+
   $('marker-delete').onclick = () => {
     removeMarker(game, marker.id);
     hideMarkerEditor();
   };
+  $('marker-close').onclick = () => hideMarkerEditor();
 }
 
 function hideMarkerEditor() {
-  $('marker-editor').hidden = true;
+  const ed = $('marker-editor');
+  ed.hidden = true;
+  ed.dataset.mark = '';
+}
+
+/**
+ * 部隊の駒を、最後に聞いた位置へ置く／動かす。
+ *
+ * 部隊一覧の「記号」を叩くだけでよい。二度目からは同じ駒が動くので、
+ * 名前を打ち直す必要はない ─ 報告を聞くたびに駒を進める、それだけになる。
+ */
+function markUnitOnMap(unitId) {
+  const m = markUnit(game, unitId);
+  if (!m) {
+    showToast('指揮所', 'その部隊からはまだ何も届いていない。置く位置が無い。', false);
+    return;
+  }
+  mapView.selectedMarkId = m.id;
+  flashGrid(mapView, m.x, m.y);
+  if (!isWellVisible(mapView, m.x, m.y)) centerOn(mapView, m.x, m.y, Math.max(mapView.zoom, 1.8));
+  if (isNarrow()) closeSheet();
+  audio.click();
 }
 
 /* ================================================================== */

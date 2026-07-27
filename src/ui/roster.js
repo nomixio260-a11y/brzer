@@ -7,9 +7,15 @@ import { formatAgo, formatClock } from '../util.js';
 // 砲兵・ドローン・段列には交戦規定を与えない（陣地を守る部隊ではない）
 const NO_ROE = new Set(['TH', 'EG', 'LD']);
 
-export function createRoster(el, game, onSelect, onJumpToGrid) {
+export function createRoster(el, game, onSelect, onJumpToGrid, onMark) {
   const view = { el, game, onSelect, selectedId: null, _sig: '' };
   el.addEventListener('click', (e) => {
+    // 記号の札を叩いたら、その部隊の駒を最後に聞いた位置へ置く／動かす
+    const mark = e.target.closest('[data-mark-unit]');
+    if (mark && onMark) {
+      onMark(mark.dataset.markUnit);
+      return;
+    }
     // 方眼の札を叩いたら、選択ではなく地図へ跳ぶ
     const grid = e.target.closest('[data-grid]');
     if (grid && onJumpToGrid) {
@@ -59,7 +65,9 @@ export function renderRoster(view) {
     top.innerHTML =
       `<span class="roster__cs">${row.callsign}</span>` +
       (heard
-        ? `<button class="roster__grid" data-grid="${heard.grid}" title="この方眼へ跳ぶ">${heard.grid}</button>`
+        ? `<button class="roster__grid" data-grid="${heard.grid}" title="この方眼へ跳ぶ">${heard.grid}</button>` +
+          `<button class="roster__mark" data-mark-unit="${row.unitId}" ` +
+          `title="${row.callsign}の駒を、この位置に置く／動かす">記号</button>`
         : '<span class="roster__grid roster__grid--none">──</span>') +
       `<span class="roster__age">${heard ? formatClock(heard.heardAt) : '交信なし'}</span>`;
     li.appendChild(top);

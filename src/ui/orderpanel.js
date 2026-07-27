@@ -267,6 +267,44 @@ export function isTargeting(panel) {
   return needsMorePoints(panel);
 }
 
+/**
+ * 今の命令書の状態。
+ *
+ * 携帯では、目標を指定するために命令の頁を閉じねばならない ―
+ * そのまま地図の上で送信まで済ませられるように、地図側へ状態を渡す。
+ * 閉じた頁を開き直させるのは、指揮の手順として無駄である。
+ */
+export function panelState(panel) {
+  const spec = ALL_VERBS[panel.verb];
+  const last = panel.legs[panel.legs.length - 1];
+  return {
+    unitId: panel.unitId,
+    verb: panel.verb,
+    label: spec?.label ?? null,
+    needsTarget: !!spec?.needsTarget,
+    multi: !!spec?.multi,
+    legs: panel.legs.length,
+    targeting: needsMorePoints(panel),
+    canSend: canSend(panel),
+    grid: last ? toGrid(last.x, last.y) : null,
+  };
+}
+
+/** 地図の上から送信する（送信釦と同じ経路を通る） */
+export function submit(panel) {
+  send(panel);
+}
+
+/** 命令を組むのをやめる。打った点も捨てる。 */
+export function cancel(panel) {
+  panel.verb = null;
+  panel.trigger = 'now';
+  panel.triggerAt = null;
+  clearLegs(panel);
+  panel.hooks.onTargetingChange(false);
+  refresh(panel, '取りやめた。');
+}
+
 function send(panel) {
   if (!canSend(panel)) return;
   const spec = ALL_VERBS[panel.verb];

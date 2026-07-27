@@ -63,7 +63,12 @@
           <li><b>地図を掴んで動かす</b> ─ 図面をずらす ／ <b>二本指・車輪</b> ─ 拡大縮小</li>
           <li><b>記号を掴んで動かす</b> ─ 位置を直す ／ <b>長押し・右クリック</b> ─ 消す</li>
           <li><b>無線の一行を叩く</b> ─ その方眼へ跳ぶ。<b>「記号」</b>を押せば聞いた位置に一発で置ける</li>
-          <li><b>命令</b> ─ 部隊 → 分類（機動／火力／交戦規定／情報）→ 命令 → 目標（地図を叩く）→ 送信</li>
+          <li><b>部隊一覧の「記号」</b> ─ その部隊の駒を、最後に聞いた方眼に置く。
+            名前は呼出符号がそのまま入り、<b>二度目からは同じ駒が動く</b>。打ち直しは要らない</li>
+          <li><b>ラベルの見本</b> ─ 記号を置くと名前の欄が出る。
+            「戦車2両」「一個分隊」などを一つ叩けば入る（自軍の記号なら見本は呼出符号）</li>
+          <li><b>命令</b> ─ 部隊 → 分類（機動／火力／交戦規定／情報）→ 命令 → 目標（地図を叩く）→ 送信。
+            目標を叩くと<b>地図の下に「送信」が出る</b>ので、命令の頁を開き直さずに送り切れる</li>
           <li><b>経路の指定</b> ─ 移動・前進・攻撃・偵察・後退は、地図を続けて叩けば経由地を積める。
             「どこを通れ」まで指定できる。決まったら<b>決定</b>を押す</li>
           <li><b>交戦規定</b> ─ <b>死守</b>／<b>陣地防御</b>／<b>弾力防御</b>。部下がどこまで独断で下がってよいかの枠。
@@ -199,12 +204,18 @@
       <div id="map-hint" class="maphint" hidden>
         <span id="map-hint-text"></span>
         <button id="map-hint-done" class="maphint__done" hidden>決定</button>
+        <button id="map-hint-send" class="maphint__done maphint__send" hidden>送信</button>
+        <button id="map-hint-cancel" class="maphint__cancel" hidden aria-label="取りやめ">✕</button>
       </div>
       <div id="toast" class="toast" hidden></div>
 
       <div id="marker-editor" class="markeredit" hidden>
-        <input id="marker-label" type="text" maxlength="18" placeholder="ラベル" autocomplete="off">
-        <button id="marker-delete" class="tool" title="削除">削除</button>
+        <div class="markeredit__row">
+          <input id="marker-label" type="text" maxlength="18" placeholder="ラベル" autocomplete="off">
+          <button id="marker-delete" class="tool" title="削除">削除</button>
+          <button id="marker-close" class="tool markeredit__close" title="閉じる">閉じる</button>
+        </div>
+        <div class="markeredit__chips" id="marker-chips"></div>
       </div>
     </div>
 

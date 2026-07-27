@@ -300,6 +300,110 @@ async function checkMissions() {
 }
 
 /**
+ * 記号を貼る手数。
+ * 部隊一覧から一発で置けること、名前が見本から一発で入ること、
+ * そして携帯で「頁を開き直さずに」命令を送り切れること。
+ */
+async function checkQuickMarking() {
+  const ctx = await browser.newContext({ viewport: { width: 1500, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message));
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+
+  await p.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+  await p.waitForFunction(() => document.querySelectorAll('#mission-pick button').length > 0,
+    null, { timeout: 10000 });
+  await p.click('#btn-start');
+  await p.waitForTimeout(900);
+
+  // 交信が入るまで進める（聞いていない部隊は置けない）
+  await p.evaluate(() => { window.__brzer.game.speed = 30; window.__brzer.game.running = true; });
+  await p.waitForSelector('#roster button[data-mark-unit]', { timeout: 120000 });
+  await p.evaluate(() => { window.__brzer.game.running = false; });
+
+  const before = await p.evaluate(() => window.__brzer.game.belief.markers.length);
+  const unit = await p.$eval('#roster button[data-mark-unit]', (b) => b.dataset.markUnit);
+  await p.click(`#roster button[data-mark-unit="${unit}"]`);
+  await p.waitForTimeout(200);
+
+  const placed = await p.evaluate((id) => {
+    const m = window.__brzer.game.belief.markers.find((x) => x.unitId === id);
+    return m ? { type: m.type, label: m.label, x: m.x, y: m.y } : null;
+  }, unit);
+  check('部隊一覧から一発で駒が置ける', !!placed, JSON.stringify(placed));
+  check('置かれた駒は自軍の記号である', placed?.type === 'friendly', placed?.type);
+  check('名前は呼出符号がそのまま入る', (placed?.label ?? '').length > 0, placed?.label);
+  check('記号がひとつ増えた',
+    (await p.evaluate(() => window.__brzer.game.belief.markers.length)) === before + 1);
+
+  // 二度目は増やさずに動かす（名前を打ち直させない）
+  await p.evaluate(() => { window.__brzer.game.speed = 30; window.__brzer.game.running = true; });
+  await p.waitForTimeout(1200);
+  await p.evaluate(() => { window.__brzer.game.running = false; });
+  await p.click(`#roster button[data-mark-unit="${unit}"]`);
+  await p.waitForTimeout(200);
+  const after = await p.evaluate((id) => ({
+    count: window.__brzer.game.belief.markers.length,
+    m: window.__brzer.game.belief.markers.find((x) => x.unitId === id),
+  }), unit);
+  check('二度目は増やさず同じ駒を動かす', after.count === before + 1, `${after.count}`);
+  check('名前は保たれる', after.m?.label === placed.label, after.m?.label);
+
+  // ラベルの見本 ─ 一つ叩けば名前が入る
+  const box = await p.locator('#map').boundingBox();
+  await p.click('#marker-tools button[data-marker="enemy_armor"]');
+  await p.mouse.click(box.x + box.width * 0.55, box.y + box.height * 0.4);
+  await p.waitForTimeout(200);
+  check('置いた直後にラベル欄が出る', await p.isVisible('#marker-editor'));
+  const chips = await p.$$eval('#marker-chips button', (bs) => bs.map((b) => b.textContent));
+  check('敵戦車には両数の見本が出る', chips.some((c) => c.includes('戦車')), chips.join(','));
+  await p.click('#marker-chips button >> nth=0');
+  await p.waitForTimeout(150);
+  check('見本を叩けば名前が入る', await p.evaluate(() => {
+    const m = window.__brzer.game.belief.markers.at(-1);
+    return typeof m.label === 'string' && m.label.length > 0;
+  }));
+  await p.click('#marker-close');
+  check('閉じるで引っ込む', !(await p.isVisible('#marker-editor')));
+
+  // 自軍の記号の見本は呼出符号
+  await p.click('#marker-tools button[data-marker="friendly"]');
+  await p.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.62);
+  await p.waitForTimeout(200);
+  const own = await p.$$eval('#marker-chips button', (bs) => bs.map((b) => b.textContent));
+  check('自軍の見本は呼出符号', own.includes('ハンマー1'), own.join(','));
+  await p.click('#marker-close');
+
+  // 地図の上から命令を送り切れる（頁を開き直さない）
+  await p.click('#order-units button[data-unit="H2"]');
+  await p.click('#order-groups button[data-group="maneuver"]');
+  await p.click('#order-verbs button[data-verb="defend"]');
+  check('目標を促す帯が出る', await p.isVisible('#map-hint'));
+  check('まだ送信は出ていない', !(await p.isVisible('#map-hint-send')));
+  await p.mouse.click(box.x + box.width * 0.42, box.y + box.height * 0.66);
+  await p.waitForTimeout(200);
+  check('目標を打つと地図に送信が出る', await p.isVisible('#map-hint-send'));
+  const ordersBefore = await p.evaluate(() => window.__brzer.game.world.orders.length);
+  await p.click('#map-hint-send');
+  await p.waitForTimeout(300);
+  check('地図から送信できる',
+    (await p.evaluate(() => window.__brzer.game.world.orders.length)) === ordersBefore + 1);
+  check('送ったら帯が引っ込む', !(await p.isVisible('#map-hint')));
+
+  // 取りやめ
+  await p.click('#order-verbs button[data-verb="defend"]');
+  check('取りやめが出る', await p.isVisible('#map-hint-cancel'));
+  await p.click('#map-hint-cancel');
+  await p.waitForTimeout(150);
+  check('取りやめで帯が消える', !(await p.isVisible('#map-hint')));
+
+  check('記号まわりでエラーが出ない', errs.length === 0, errs.slice(0, 3).join(' | '));
+  await p.screenshot({ path: `${SHOTS}/08-marking.png` });
+  await ctx.close();
+}
+
+/**
  * 演習モード。
  * 増援が呼べ、真実の地図が開き、そして本編ではそれが一切できないこと。
  */
@@ -498,7 +602,11 @@ try {
   check('取消で1点戻る',
     (await page.evaluate(() => window.__brzer.mapView.orderLegs.length)) === 2);
   await page.click('#map-hint-done');
-  check('決定で目標指定が終わる', await page.isHidden('#map-hint'));
+  // 帯は消えない。指定が終わったので、そのまま地図の上で送信できる。
+  check('決定で経由地の指定が終わる',
+    (await page.isHidden('#map-hint-done')) && (await page.isVisible('#map-hint-send')));
+  check('地図を叩いても点が増えない',
+    (await page.evaluate(() => window.__brzer.mapView.orderLegs.length)) === 2);
   await page.click('#order-send');
   await page.waitForTimeout(500);
   check('経路つきの命令が発令された',
@@ -789,6 +897,9 @@ try {
 
   section('図幅とミッション');
   await checkMissions();
+
+  section('記号を貼る手数');
+  await checkQuickMarking();
 
   section('演習モード');
   await checkCreative();
