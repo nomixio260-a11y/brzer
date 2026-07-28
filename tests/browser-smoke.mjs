@@ -1185,6 +1185,71 @@ async function checkTouchReach() {
  * 演習モード。
  * 増援が呼べ、真実の地図が開き、そして本編ではそれが一切できないこと。
  */
+/**
+ * 断られた理由が、押した指の前に出ること。
+ *
+ * 携帯では目標を指定するために命令の頁が閉じている。
+ * そこへ「その命令は出せない」としか書かなければ、
+ * 遊び手には「押しても何も起きない」としか映らない。
+ */
+async function checkRefusalReason() {
+  section('断られた理由');
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 780 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message));
+
+  await p.goto(`${URL}?debug=1&mission=bridge_hold`, { waitUntil: 'networkidle' });
+  await p.waitForFunction(() => document.querySelectorAll('#mission-pick button').length > 0,
+    null, { timeout: 12000 });
+  await p.click('#btn-start');
+  await p.waitForTimeout(1000);
+  await p.click('#btn-hhour').catch(() => {});
+  await p.waitForTimeout(500);
+
+  // 砲弾を空にして、砲撃を頼む。
+  await p.evaluate(() => { window.__brzer.game.world.support.artillery.rounds = 0; });
+  await p.click('.tabbar__btn[data-tab="order"]');
+  await p.waitForTimeout(250);
+  await p.click('#order-units button[data-unit="TH"]');
+  await p.waitForTimeout(200);
+  await p.click('#order-groups button[data-group="fires"]').catch(() => {});
+  await p.waitForTimeout(150);
+  await p.click('#order-verbs button[data-verb="fire_mission"]');
+  await p.waitForTimeout(250);
+  const box = await p.locator('#map').boundingBox();
+  await p.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.4);
+  await p.waitForTimeout(250);
+
+  check('目標を指定すると地図の帯から送れる', await p.isVisible('#map-hint-send'));
+  await p.click('#map-hint-send');
+  await p.waitForTimeout(400);
+
+  const toast = await p.$('.toast, #toast');
+  const toastText = toast ? (await toast.textContent()) : '';
+  check('断られたら地図の上に出る', /砲弾が残っていない/.test(toastText), toastText.slice(0, 60));
+  // 「出せない」だけでは、何を直せば出せるのかが分からない。
+  check('理由が本当の理由である',
+    !/その命令は出せない。$/.test(toastText.trim()), toastText.slice(0, 60));
+
+  // 毎フレーム走る描き直しで、読む間もなく消えないこと。
+  await p.waitForTimeout(1200);
+  const status = (await p.textContent('#order-status')).trim();
+  check('命令の頁にも残っている', /砲弾が残っていない/.test(status), status.slice(0, 60));
+
+  // 指揮官が次に何かすれば、理由は退く。
+  await p.click('#order-verbs button[data-verb="smoke"]');
+  await p.waitForTimeout(300);
+  check('次の命令を選べば理由は退く',
+    !/砲弾が残っていない/.test(await p.textContent('#order-status')),
+    (await p.textContent('#order-status')).slice(0, 50));
+
+  // 命令そのものは手元に残っている（消えてはいない）
+  check('断られた命令は手元に残る', await p.isVisible('#order-verbs'));
+  check('理由の表示でエラーが出ない', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await ctx.close();
+}
+
 async function checkCreative() {
   const ctx = await browser.newContext({ viewport: { width: 1500, height: 900 } });
   const p = await ctx.newPage();
@@ -1726,6 +1791,7 @@ try {
   await checkTouchReach();
 
   section('演習モード');
+  await checkRefusalReason();
   await checkCreative();
 } finally {
   await browser.close();

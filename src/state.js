@@ -410,11 +410,22 @@ export function issueOrder(game, { unitId, verb, x, y, modifier, legs, trigger, 
   // 統制線を条件にする場合、線そのものを命令に添えて渡す。
   // 部下は地図を見ているわけではないので、線は言葉として伝わる必要がある。
   const line = lineId ? getControlLines(game).find((l) => l.id === lineId) : null;
+  const before = game.world.radio.log.length;
   const order = simIssueOrder(game.world, {
     unitId, verb, x, y, modifier, legs, trigger, triggerAt,
     line: line ? line.points : null,
     lineName: line ? line.name : null,
   });
+  // 断られた理由は、模組が無線記録へシステム行として押し込んでいる。
+  // 返り値は「出た命令か null」しか無かったので、画面には
+  // 「その命令は出せない」としか書けなかった ─ 弾切れなのか、射程外なのか、
+  // 概定射点の枠が埋まっているのかは、記録を遡らないと分からなかった。
+  const said = game.world.radio.log
+    .slice(before)
+    .filter((e) => e.kind === 'system')
+    .map((e) => e.text);
+  game.belief.lastNotice = said.length ? said[said.length - 1] : null;
+
   if (order) {
     const r = game.belief.roster.get(unitId);
     // 引き抜いた命令（前令取消）は、そもそも網に乗っていない ─
@@ -543,6 +554,14 @@ export function getRevealed(game) {
       state: u.state,
       immobile: !!u._immobile,
     }));
+}
+
+/**
+ * 直前の発令で、指揮所が聞かされたこと。
+ * 断られたときの理由がここに入る（弾が無い・届かない・枠が埋まっている）。
+ */
+export function getLastNotice(game) {
+  return game.belief.lastNotice ?? null;
 }
 
 /** その部隊に渡してある予令（指揮所の控え）。三つまで抱えられる。 */

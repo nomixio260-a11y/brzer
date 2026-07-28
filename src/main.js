@@ -1194,14 +1194,14 @@ function wireZoom() {
 
   // 地図の上から送信する。命令の頁を開き直す必要はない。
   $('map-hint-send').addEventListener('click', () => {
-    const before = panelState(orderPanel).verb;
-    submitOrder(orderPanel);
+    const res = submitOrder(orderPanel);
     // 断られた命令はそのまま手元に残る。理由は命令の頁に書かれるが、
     // 携帯ではその頁が地図の裏に退いている ─ 押した指の前に出さないと、
     // 「押しても何も起きない」としか映らない。
-    if (!isCreative(game) && before && panelState(orderPanel).verb === before) {
-      showToast('指揮所', $('order-status').textContent, true);
-    }
+    //
+    // 以前は送信の前後で動詞が変わったかを突き合わせて成否を推し測っていた。
+    // いまは送信そのものが理由を返す。
+    if (res && !res.ok && !isCreative(game)) showToast('指揮所', res.reason, true);
     syncMapHint();
   });
 

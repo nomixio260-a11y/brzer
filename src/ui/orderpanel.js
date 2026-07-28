@@ -7,6 +7,7 @@
 import {
   VERBS, VERB_GROUPS, MODIFIERS, ROE, TRIGGERS, FIRE_MODES, FIRE_MODE_ORDER, REINFORCEMENTS,
   getRosterOrder, getSupport, getRoeOf, getHeldOrders, getSimTime, getTrains, isLongBattle,
+  getLastNotice,
   getControlLines, toGrid, formatClock, issueOrder, isCreative, getCreative, creativeAction,
 } from '../state.js';
 
@@ -209,6 +210,7 @@ export function createOrderPanel(dom, game, hooks) {
 }
 
 export function selectUnit(panel, unitId) {
+  panel.notice = null;
   if (panel.unitId !== unitId) {
     panel.verb = null;
     targetingVerbId = null;
@@ -234,6 +236,7 @@ function allowedVerbs(panel, unitId) {
 }
 
 function selectVerb(panel, verb) {
+  panel.notice = null;
   panel.verb = verb;
   targetingVerbId = verb;
   clearLegs(panel);
@@ -282,6 +285,7 @@ export function finishTargeting(panel) {
 
 /** 地図がクリックされたときに呼ばれる */
 export function setTarget(panel, x, y) {
+  panel.notice = null;
   const spec = ALL_VERBS[panel.verb];
   if (!spec?.needsTarget) return false;
   if (spec.multi) {
@@ -326,12 +330,21 @@ export function panelState(panel) {
 }
 
 /** 地図の上から送信する（送信釦と同じ経路を通る） */
+/**
+ * 命令を送る。
+ *
+ * 成否と、断られたなら理由を返す ─
+ * 返していなかったので、呼ぶ側は「送信の前後で動詞が変わったか」を
+ * 突き合わせて成否を推し測るしかなかった。
+ * @returns {{ok: boolean, reason: string, order: object|null}}
+ */
 export function submit(panel) {
-  send(panel);
+  return send(panel);
 }
 
 /** 命令を組むのをやめる。打った点も捨てる。 */
 export function cancel(panel) {
+  panel.notice = null;
   panel.verb = null;
   targetingVerbId = null;
   panel.trigger = 'now';
@@ -342,7 +355,7 @@ export function cancel(panel) {
 }
 
 function send(panel) {
-  if (!canSend(panel)) return;
+  if (!canSend(panel)) return { ok: false, reason: 'まだ送れない。', order: null };
   const spec = ALL_VERBS[panel.verb];
   const last = panel.legs[panel.legs.length - 1];
 
@@ -364,7 +377,7 @@ function send(panel) {
       if (keep) syncTargeting(panel);
     }
     refresh(panel, res.text);
-    return;
+    return { ok: !!res.ok, reason: res.text, order: null };
   }
 
   const order = issueOrder(panel.game, {
@@ -381,9 +394,13 @@ function send(panel) {
   });
 
   if (!order) {
-    panel.hooks.onNotice('その命令は出せない。');
-    refresh(panel, 'その命令は出せない（弾切れ、または枠が埋まっている）。');
-    return;
+    // 断られた理由は模組が言っている。それをそのまま出す ─
+    // 「出せない」だけでは、何を直せば出せるのかが分からない。
+    const why = getLastNotice(panel.game) ?? 'その命令は出せない（弾切れ、または枠が埋まっている）。';
+    panel.hooks.onNotice(why);
+    panel.notice = why;
+    refresh(panel);
+    return { ok: false, reason: why, order: null };
   }
 
   panel.hooks.onSent?.(order);
@@ -394,7 +411,9 @@ function send(panel) {
   panel.triggerAt = null;
   clearLegs(panel);
   panel.hooks.onTargetingChange(false);
-  refresh(panel, wasHeld ? '予令を送信した。条件が満ちれば部下が動く。' : '送信した。応答を待て。');
+  const said = wasHeld ? '予令を送信した。条件が満ちれば部下が動く。' : '送信した。応答を待て。';
+  refresh(panel, said);
+  return { ok: true, reason: said, order };
 }
 
 function canSend(panel) {
@@ -582,6 +601,18 @@ export function refresh(panel, status) {
   dom.send.disabled = !canSend(panel);
 
   dom.status.classList.remove('is-warn');
+  // 断られた理由は、次に指揮官が何かするまで残しておく。
+  //
+  // refresh は毎フレーム走る。理由をここに書いても、次の一枚で
+  // 「着発 ─ 標準の効力射」に上書きされて消えていた ─
+  // 読む間もなく消える説明は、書いていないのと変わらない。
+  if (status) {
+    panel.notice = null;
+  } else if (panel.notice) {
+    dom.status.textContent = panel.notice;
+    dom.status.classList.add('is-warn');
+    return;
+  }
   if (status) {
     dom.status.textContent = status;
   } else if (!panel.unitId) {
