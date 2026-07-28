@@ -32,10 +32,160 @@ export function renderNation(dom, view, corps, api) {
   dom.left.textContent = `今夜あと ${view.left} 件`;
   renderWarnings(dom.warnings, view);
 
+  renderCouncil(dom.council, view, api);
+  renderPetition(dom.petition, view, api);
   renderDecrees(dom.decrees, view, api);
   renderStanding(dom.standing, view, api);
   renderCorps(dom.corps, corps, api);
   renderRule(dom.rule, view);
+}
+
+/* ------------------------------------------------------------------ */
+/* 評議会                                                              */
+/* ------------------------------------------------------------------ */
+//
+// 指標だけを並べていたとき、この画面には反対する者がいなかった。
+// 四つの塊は望むものが違い、望みは噛み合わない ─
+// だからどの札を押しても、必ずどこかの数字が下がる。
+
+function renderCouncil(el, view, api) {
+  if (!el) return;
+  el.innerHTML = '';
+  for (const b of view.council ?? []) {
+    const row = document.createElement('div');
+    row.className = 'bloc';
+    row.dataset.bloc = b.id;
+    if (b.warned) row.classList.add('is-warned');
+    if (b.puppet) row.classList.add('is-puppet');
+
+    const who = document.createElement('div');
+    who.className = 'bloc__who';
+    const name = document.createElement('b');
+    name.textContent = b.label;
+    const post = document.createElement('span');
+    post.className = 'bloc__post';
+    post.textContent = `${b.post} ${b.minister}`;
+    who.append(name, post);
+    if (b.puppet) {
+      const p = document.createElement('span');
+      p.className = 'bloc__tag';
+      p.textContent = '傀儡';
+      p.title = '逆らわない。働きもしない ─ 粛清で買えるのはそこまでである。';
+      who.appendChild(p);
+    }
+    row.appendChild(who);
+
+    const gauge = document.createElement('div');
+    gauge.className = 'bloc__gauge';
+    const track = document.createElement('span');
+    track.className = 'natmeter__track';
+    const fill = document.createElement('i');
+    fill.className = 'natmeter__fill is-bloc';
+    fill.style.width = `${Math.max(0, Math.min(100, b.support))}%`;
+    if (b.low) fill.classList.add('is-low');
+    track.appendChild(fill);
+    const word = document.createElement('span');
+    word.className = 'bloc__word';
+    word.textContent = b.stage;
+    if (b.low) word.classList.add('is-low');
+    gauge.append(track, word);
+    row.appendChild(gauge);
+
+    const note = document.createElement('em');
+    note.className = 'bloc__note';
+    note.textContent = b.puppet ? `${b.gives}（半分だけ）` : b.wants;
+    note.title = `付いていれば ─ ${b.gives}\n離れれば ─ ${b.fails}`;
+    row.appendChild(note);
+
+    if (!b.puppet) {
+      const act = document.createElement('button');
+      act.className = 'tool tool--purge';
+      act.dataset.purgeMinister = b.id;
+      act.textContent = '更迭';
+      act.title =
+        `${b.post}を除き、逆らわない者を座らせる。\n` +
+        '離反の通告は止まる。かわりにこの省庁は二度と働かない。\n' +
+        '残る三つは「次は自分だ」と考えはじめる。';
+      act.addEventListener('click', () => api.onPurgeMinister(b.id, b));
+      row.appendChild(act);
+    }
+    el.appendChild(row);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 上奏                                                                */
+/* ------------------------------------------------------------------ */
+//
+// 一番不満を溜めている省庁が、夜のうちに一件だけ持ってくる。
+// 容れれば彼らは付き、他が離れる。退ければその逆。
+// 答えないまま出撃すれば、退けたのと同じに数えられる ─ 決めないことも決定である。
+
+function renderPetition(el, view, api) {
+  if (!el) return;
+  el.innerHTML = '';
+  const p = view.petition;
+  el.hidden = !p;
+  if (!p) return;
+
+  const card = document.createElement('div');
+  card.className = 'petition';
+  card.dataset.petition = p.id;
+  if (p.answered) card.classList.add('is-answered');
+
+  const head = document.createElement('div');
+  head.className = 'petition__head';
+  head.innerHTML =
+    `<span class="petition__from">${p.blocLabel}・${p.post}</span><b>${p.label}</b>`;
+  card.appendChild(head);
+
+  const text = document.createElement('p');
+  text.className = 'petition__text';
+  text.textContent = p.text;
+  card.appendChild(text);
+
+  if (p.answered) {
+    const done = document.createElement('div');
+    done.className = 'petition__done';
+    done.textContent = {
+      accept: '容れた。', refuse: '退けた。',
+      ignored: '答えなかった ─ 退けたものとして数えられた。',
+    }[p.answered] ?? '';
+    card.appendChild(done);
+  } else {
+    const acts = document.createElement('div');
+    acts.className = 'petition__acts';
+    acts.append(
+      petitionButton('容れる', p.accept, true, p.canAccept, api,
+        p.canAccept ? '' : '国庫が足りない'),
+      petitionButton('退ける', p.refuse, false, true, api, '')
+    );
+    card.appendChild(acts);
+  }
+  el.appendChild(card);
+}
+
+function petitionButton(label, side, accept, can, api, why) {
+  const b = document.createElement('button');
+  b.className = `petbtn ${accept ? 'is-accept' : 'is-refuse'}`;
+  b.dataset.answer = accept ? 'accept' : 'refuse';
+  b.disabled = !can;
+
+  const t = document.createElement('b');
+  t.textContent = why ? `${label}（${why}）` : label;
+  b.appendChild(t);
+
+  const tags = document.createElement('div');
+  tags.className = 'decree__tags';
+  for (const tag of side.tags) {
+    const s = document.createElement('span');
+    s.className = `dtag is-${tag.kind}`;
+    s.textContent = tag.text;
+    tags.appendChild(s);
+  }
+  b.appendChild(tags);
+  b.addEventListener('click', () => api.onPetition(accept));
+  return b;
 }
 
 /* ------------------------------------------------------------------ */
@@ -330,8 +480,25 @@ function renderRule(el, view) {
     `粛清 ${view.rule.purged} 名`,
     `叙勲 ${view.rule.decorated} 名`,
   ];
+  if (view.rule.ministers?.length) bits.push(`更迭 ${view.rule.ministers.length} 名`);
   nums.textContent = bits.join(' ／ ');
   el.appendChild(nums);
+
+  if (view.rule.ministers?.length) {
+    const list = document.createElement('ul');
+    list.className = 'purgelist';
+    for (const m of view.rule.ministers) {
+      const li = document.createElement('li');
+      li.textContent =
+        `${m.post} ${m.name}${m.rank ? ` ${m.rank}` : ''}` +
+        `（${m.blocLabel}）${m.day ? ` ${m.day}日目` : ''}`;
+      list.appendChild(li);
+    }
+    const cap = document.createElement('div');
+    cap.className = 'rule__nums';
+    cap.textContent = '空にした席';
+    el.append(cap, list);
+  }
 
   if (view.purged.length) {
     const list = document.createElement('ul');

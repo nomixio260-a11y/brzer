@@ -727,6 +727,29 @@ async function checkNation() {
   check('士官団が並ぶ', (await p.$$('#nat-corps .corps')).length >= 6);
   check('恐怖は言葉で出る', (await p.textContent('#nat-fear')).length > 3);
 
+  // 評議会 ─ 反対する者がいる画面
+  check('評議会に四つの塊が並ぶ', (await p.$$('#nat-council .bloc')).length === 4);
+  check('席に名前が出る',
+    (await p.textContent('#nat-council [data-bloc="army"]')).includes('参謀総長'));
+  check('支持は言葉で出る',
+    (await p.$$eval('#nat-council .bloc__word', (e) => e.map((x) => x.textContent)))
+      .every((t) => t.length > 0));
+  check('初日から上奏が出ている', await p.isVisible('#nat-petition .petition'));
+  check('上奏に台詞がある', (await p.textContent('.petition__text')).length > 12);
+  check('容れる側と退ける側が並ぶ', (await p.$$('.petition .petbtn')).length === 2);
+  check('札に相手の名が出る',
+    (await p.$$eval('.petbtn .dtag', (e) => e.map((x) => x.textContent)))
+      .some((t) => /軍部|民政|保安|産業/.test(t)));
+
+  const petBloc = await p.evaluate(() => window.__brzer.campaign.nation.council.petition.bloc);
+  const sup0 = await p.evaluate((b) => window.__brzer.campaign.nation.council.blocs[b].support, petBloc);
+  await p.click('.petbtn[data-answer="accept"]');
+  await p.waitForTimeout(250);
+  check('容れれば持ってきた側が付く',
+    (await p.evaluate((b) => window.__brzer.campaign.nation.council.blocs[b].support, petBloc)) > sup0);
+  check('答えたことが画面に残る', await p.isVisible('.petition__done'));
+  check('二度は答えられない', (await p.$$('.petition .petbtn')).length === 0);
+
   // 一晩に二つまで
   await p.click('#nat-decrees button[data-decree="conscript"]');
   await p.waitForTimeout(150);
@@ -798,6 +821,20 @@ async function checkNation() {
   await p.click('#nat-corps button[data-decorate]');
   await p.waitForTimeout(250);
   check('叙勲でエラーが出ない', errs.length === 0, errs.slice(0, 2).join(' | '));
+
+  // 更迭 ─ 通告は止まるが、その省庁は二度と働かない
+  await p.click('#nat-council [data-purge-minister="industry"]');
+  await p.waitForTimeout(250);
+  check('更迭にも確認が挟まる', await p.isVisible('#confirm'));
+  check('確認に代価が書いてある（更迭）',
+    (await p.textContent('#confirm-text')).includes('二度と働かない'));
+  await p.click('#confirm-yes');
+  await p.waitForTimeout(300);
+  check('席が空く',
+    await p.evaluate(() => window.__brzer.campaign.nation.council.blocs.industry.puppet === true));
+  check('傀儡の省庁には更迭の釦が無い',
+    (await p.$$('#nat-council [data-purge-minister="industry"]')).length === 0);
+  check('空にした席が記録に残る', (await p.textContent('#nat-rule')).includes('空にした席'));
 
   await p.click('#btn-nat-back');
   await p.waitForTimeout(300);

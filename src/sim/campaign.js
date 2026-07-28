@@ -19,6 +19,9 @@ import {
   createNation, applyDecrees, absorbBattle, warFactors, checkCollapse,
   serializeNation, deserializeNation, purge, decorate, purgeCost,
 } from './nation.js';
+import {
+  ensurePetition, answerPetition, purgeMinister, ministerPurgeCost,
+} from './council.js';
 import { driftLoyalty, isWavering } from './officers.js';
 
 /* ------------------------------------------------------------------ */
@@ -360,6 +363,7 @@ export function recordBattle(state, report, rng, campaign = getCampaign(state.ca
     state.finished = true;
     state.result = 'collapse';
     state.collapse = collapse.id;
+    state.collapseLabel = collapse.label;
     state.resultReason = collapse.reason;
   } else if (state.front <= campaign.front.min) {
     state.finished = true;
@@ -474,6 +478,29 @@ export function settleNight(state) {
   return res;
 }
 
+/**
+ * その晩の上奏を出す。国政の画面を開くたびに呼んでよい ─
+ * 同じ日には同じ一件しか出ない。
+ */
+export function openCouncilNight(state) {
+  if (!state?.nation) return null;
+  return ensurePetition(state.nation, state.stage + 1);
+}
+
+/** 上奏に答える。容れるか、退けるか。黙っていれば退けたことになる。 */
+export function answerPetitionIn(state, accept) {
+  if (!state?.nation) return null;
+  return answerPetition(state.nation, accept);
+}
+
+/** 省庁の長官を除く。通告は止まるが、その省庁は二度と働かない。 */
+export function purgeMinisterIn(state, blocId) {
+  if (!state?.nation) return null;
+  return purgeMinister(state.nation, blocId, state.stage + 1);
+}
+
+export { ministerPurgeCost };
+
 /** 粛清。将校を除き、代わりを立てる。 */
 export function purgeOfficer(state, unitId, rng) {
   const officer = state.officers.get(unitId);
@@ -534,6 +561,7 @@ export function serializeCampaign(state) {
     history: JSON.parse(JSON.stringify(state.history)),
     nation: state.nation ? serializeNation(state.nation) : null,
     collapse: state.collapse ?? null,
+    collapseLabel: state.collapseLabel ?? null,
     settledStage: state.settledStage ?? -1,
     recruitQuality: state.recruitQuality ?? 0,
     purgedUnits: { ...(state.purgedUnits ?? {}) },
@@ -564,6 +592,7 @@ export function deserializeCampaign(raw) {
     // v2.0 で保存された戦役には国が無い。読めるようにしておく。
     nation: deserializeNation(raw.nation),
     collapse: raw.collapse ?? null,
+    collapseLabel: raw.collapseLabel ?? null,
     settledStage: raw.settledStage ?? -1,
     recruitQuality: raw.recruitQuality ?? 0,
     purgedUnits: raw.purgedUnits ?? {},

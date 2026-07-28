@@ -53,6 +53,8 @@ import {
   stopStanding,
   purgeIn,
   decorateIn,
+  answerPetition,
+  purgeMinister,
 } from './state.js';
 
 import {
@@ -327,7 +329,8 @@ function drawCampaign() {
     b.className = `is-${view.result}`;
     b.textContent = {
       victory: '戦役 ─ 勝利', narrow: '戦役 ─ 辛勝', defeat: '戦役 ─ 敗北',
-      collapse: view.collapse === 'coup' ? '造反 ─ 失脚' : '内乱 ─ 失脚',
+      collapse: view.collapseLabel ? `${view.collapseLabel} ─ 失脚`
+        : view.collapse === 'coup' ? '造反 ─ 失脚' : '内乱 ─ 失脚',
     }[view.result] ?? '終わり';
     res.append(b, document.createTextNode(view.resultReason ?? ''));
   }
@@ -347,6 +350,8 @@ const natDom = () => ({
   standing: $('nat-standing'),
   corps: $('nat-corps'),
   rule: $('nat-rule'),
+  council: $('nat-council'),
+  petition: $('nat-petition'),
 });
 
 function drawNation() {
@@ -362,6 +367,14 @@ function drawNation() {
     onLift: (id) => { stopStanding(campaign, id); saveCampaign(campaign); drawNation(); audio.click(); },
     onDecorate: (id) => { decorateIn(campaign, id); saveCampaign(campaign); drawNation(); audio.click(); },
     onPurge: (id, o) => askPurge(id, o),
+    onPetition: (accept) => {
+      answerPetition(campaign, accept);
+      saveCampaign(campaign);
+      drawNation();
+      drawCampaign();
+      audio.click();
+    },
+    onPurgeMinister: (blocId, b) => askMinisterPurge(blocId, b),
   });
 }
 
@@ -387,6 +400,31 @@ function askPurge(unitId, o) {
       '経歴も特性も戻らない。代わりに来るのは、忠誠だけは高い者である。',
     () => {
       purgeIn(campaign, unitId);
+      saveCampaign(campaign);
+      drawNation();
+      drawCampaign();
+    }
+  );
+}
+
+/**
+ * 更迭にも一手を挟む。
+ * 省庁を空にするのは、将校を一人除くより後で効いてくる決定である。
+ */
+function askMinisterPurge(blocId, b) {
+  confirmAction(
+    '更迭',
+    `${b.post} ${b.minister} を除き、逆らわない者を座らせる。
+` +
+      `${b.label}の離反通告は止まる。かわりにこの省庁は二度と働かない ─
+` +
+      `${b.gives}
+` +
+      `統制 +${b.cost.control} ／ 忠誠 ${b.cost.loyalty} ／ 民心 ${b.cost.morale} ／ 恐怖 増。
+` +
+      '残る三つの省庁は、次は自分だと考えはじめる。',
+    () => {
+      purgeMinister(campaign, blocId);
       saveCampaign(campaign);
       drawNation();
       drawCampaign();

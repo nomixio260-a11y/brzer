@@ -12,6 +12,10 @@
 // 扱うのは架空国家の統治である。実在の国も民族も史実も、ここには無い。
 
 import { clamp } from '../util.js';
+import {
+  createCouncil, deserializeCouncil, councilFactors, settleCouncil, checkCouncil,
+  councilWarnings, shiftSupport, blocEffect, BLOCS,
+} from './council.js';
 
 /* ------------------------------------------------------------------ */
 /* 国の状態                                                            */
@@ -116,6 +120,9 @@ export function createNation() {
     pending: { replacements: 0, rounds: 0, quality: 0 },
     // 帳簿の上の生産。前の手番の政令で決まる。
     output: { replacements: 6, rounds: 4 },
+    // 評議会。貴官の背後に立っている四つの塊と、その席に座っている人間。
+    // 政令はすべてここを通る ─ 誰の顔も立てない晩は無い。
+    council: createCouncil(),
   };
 }
 
@@ -139,34 +146,38 @@ export const DECREES = Object.freeze({
     id: 'volunteer', group: 'mobilize', label: '志願兵の募集',
     note: '町に募兵所を置く。集まるのは明日の晩になるが、来る者は自分の意思で来る。',
     cost: 6, effect: { morale: +1 }, yields: { replacements: 5 }, quality: +0.05, slow: true,
+    blocs: { civil: +5, army: +2, industry: -3 },
   },
   conscript: {
     id: 'conscript', group: 'mobilize', label: '徴兵の実施',
     note: '名簿から引く。今夜のうちに揃う。揃うだけである。',
     cost: 4, effect: { morale: -6 }, yields: { replacements: 8 }, quality: -0.04, scar: 1,
+    blocs: { army: +7, civil: -5, industry: -6 },
   },
   total_war: {
     id: 'total_war', group: 'mobilize', label: '総動員令',
     note: '年齢の上下を広げ、工場から人を抜く。国が一度に痩せる ─ そして元には戻らない。',
     cost: 8, effect: { morale: -14, control: +4 }, yields: { replacements: 14 }, quality: -0.09,
-    scar: 4,
+    scar: 4, blocs: { army: +13, industry: -16, civil: -9 },
   },
 
   /* --- 経済 ------------------------------------------------------ */
   tax: {
     id: 'tax', group: 'economy', label: '戦時増税',
     note: '取れるところから取る。取られた側は覚えている ─ 施しても、忘れない。',
-    cost: -18, effect: { morale: -7 }, scar: 2,
+    cost: -18, effect: { morale: -7 }, scar: 2, blocs: { industry: -15, civil: +6, army: +4 },
   },
   requisition: {
     id: 'requisition', group: 'economy', label: '物資の徴発',
     note: '倉から出させる。弾は今夜のうちに前線へ届き、麦は町から消える。',
     cost: 2, effect: { morale: -9 }, yields: { rounds: 7 }, scar: 2,
+    blocs: { army: +10, industry: -13, civil: -5 },
   },
   factory: {
     id: 'factory', group: 'economy', label: '増産計画',
     note: '工場を二交代にする。今夜は何も増えないが、以後は毎晩ここから弾が出る。',
     cost: 14, effect: { morale: -2 }, yields: { rounds: 6 }, keep: true, slow: true,
+    blocs: { industry: +9, army: +5, civil: -2 },
   },
 
   /* --- 秩序 ------------------------------------------------------ */
@@ -177,6 +188,7 @@ export const DECREES = Object.freeze({
       '町は静かになるが、口を塞ぐ令ではない。',
     // 統制を買う令。恐怖はさほど生まない ─ 秩序と恐怖は別の道具である。
     cost: 5, effect: { control: +16, morale: -8 }, fear: +0.05, keep: true, upkeep: 3,
+    blocs: { security: +9, civil: -10, army: +2 },
   },
   censorship: {
     id: 'censorship', group: 'order', label: '情報統制',
@@ -184,13 +196,14 @@ export const DECREES = Object.freeze({
       '新聞と無線を検める。悪い報せは国民に届かない ─ ' +
       'そして、しばらくすると貴官にも届かなくなる。',
     cost: 4, effect: { control: +6, morale: +4 }, fear: +0.16, keep: true, upkeep: 2,
+    blocs: { security: +11, civil: -11 },
   },
   secret_police: {
     id: 'secret_police', group: 'order', label: '保安部の拡張',
     note: '密告を制度にする。造反の芽は摘める。摘んでいる側も、次は自分だと思っている。',
     // 恐怖を買う令。統制はあまり上がらない ─ 密告は秩序ではない。
     cost: 10, effect: { control: +5, loyalty: -6, morale: -6 }, fear: +0.30,
-    keep: true, upkeep: 5, scar: 1,
+    keep: true, upkeep: 5, scar: 1, blocs: { security: +17, civil: -13, army: -9 },
   },
 
   /* --- 恩恤 ------------------------------------------------------ */
@@ -198,16 +211,18 @@ export const DECREES = Object.freeze({
     id: 'relief', group: 'mercy', label: '罹災民の救済',
     note: '焼けた町に配給を回す。前線には何も増えない。傷は塞がるが、痕は残る。',
     cost: 16, effect: { morale: +13 }, fear: -0.06, heal: 1,
+    blocs: { civil: +11, industry: -6, security: -3 },
   },
   amnesty: {
     id: 'amnesty', group: 'mercy', label: '恩赦',
     note: '収容している者を帰す。何人かは戻ってこないが、大半は家に帰る。',
     cost: 6, effect: { morale: +9, control: -8, loyalty: +3 }, fear: -0.12,
+    blocs: { civil: +12, security: -14, army: -3 },
   },
   honors: {
     id: 'honors', group: 'mercy', label: '叙勲と恩給',
     note: '戦った者に報いる。士官団は見ている ─ 報いるかどうかを、ずっと見ている。',
-    cost: 12, effect: { loyalty: +11, morale: +3 },
+    cost: 12, effect: { loyalty: +11, morale: +3 }, blocs: { army: +13, industry: -4 },
   },
   free_press: {
     id: 'free_press', group: 'mercy', label: '報道の解禁',
@@ -215,6 +230,7 @@ export const DECREES = Object.freeze({
       '検閲を解く。損害が国民に知れる ─ ' +
       'そのかわり、前線からの報告も正直になる。',
     cost: 3, effect: { morale: -5, control: -6 }, fear: -0.3, clears: ['censorship'],
+    blocs: { civil: +13, security: -16 },
   },
 });
 
@@ -292,6 +308,10 @@ export function liftStanding(nation, id) {
  */
 export function applyDecrees(nation, day = 1) {
   const notes = [];
+  // 評議会の側の晩。握り潰した上奏の勘定と、保安部が握っているぶんの統制。
+  const council = settleCouncil(nation);
+  // 省庁がどれだけ働いているか。政令の効きは、出す側ではなく配る側で決まる。
+  const cf = councilFactors(nation);
   // 前の晩に仕込んだものが、今夜になって届く。
   const pending = nation.pending ?? { replacements: 0, rounds: 0, quality: 0 };
   const output = { replacements: pending.replacements, rounds: pending.rounds };
@@ -303,8 +323,16 @@ export function applyDecrees(nation, day = 1) {
     if (!d) continue;
     const before = { morale: nation.morale, control: nation.control, loyalty: nation.loyalty, fear: nation.fear };
     nation.treasury = Math.max(0, nation.treasury - d.cost);
-    for (const [k, v] of Object.entries(d.effect ?? {})) nation[k] = clamp(nation[k] + v, 0, 100);
+    for (const [k, v] of Object.entries(d.effect ?? {})) {
+      // 民心を上げる令だけは、役所を通る。
+      // 配る者がいなければ、金は出ていくのに何も届かない ─
+      // 救済とは金額のことではなく、配給所に立っている人間のことである。
+      const got = k === 'morale' && v > 0 ? v * cf.admin : v;
+      nation[k] = clamp(nation[k] + got, 0, 100);
+    }
     if (d.fear) nation.fear = clamp(nation.fear + d.fear, 0, 1);
+    // どの令にも必ず怒る者がいる。誰の顔も立てない晩というものが無い。
+    shiftSupport(nation, d.blocs);
     // 継続の令は、実際に動いた分を控えておく（解くときにそれを返す）
     if (d.keep) {
       const moved = {};
@@ -341,6 +369,9 @@ export function applyDecrees(nation, day = 1) {
     nation.treasury = Math.max(0, nation.treasury - (d.upkeep ?? 0));
     // 恐怖は敷いている限り毎晩積む。敷いた晩だけの話ではない。
     if (d.fear) nation.fear = clamp(nation.fear + d.fear * 0.35, 0, 1);
+    // 支持も同じである。敷いた晩だけ怒って、翌朝には忘れる省庁は無い ─
+    // 戒厳令が続いている限り、民政は毎晩それを見ている。
+    shiftSupport(nation, d.blocs, 0.35);
   }
 
   // 民心は、焼いた郡の数だけ天井が下がる。
@@ -351,8 +382,14 @@ export function applyDecrees(nation, day = 1) {
   output.replacements += base;
   output.rounds += 2 + Math.round(nation.morale / 34);
 
-  // 税収。取り立てなくても、国が回っていれば入るものは入る。
-  nation.treasury = Math.min(120, nation.treasury + 6 + Math.round(nation.morale / 12));
+  // 帳簿の上の数と、前線に着く数は違う。運ぶのは段列であり、段列は軍部のものである。
+  output.replacements = Math.max(0, Math.round(output.replacements * cf.supply));
+  output.rounds = Math.max(0, Math.round(output.rounds * cf.supply));
+
+  // 税収。取り立てなくても、国が回っていれば入るものは入る ─
+  // 入れる役所と、納める側が残っていれば。
+  const income = Math.round((6 + nation.morale / 12) * cf.revenue);
+  nation.treasury = Math.min(120, nation.treasury + income);
 
   // 恐怖は放っておけば薄れる。統制が高いままなら、薄れない。
   nation.fear = clamp(nation.fear - 0.04 + (nation.control > 75 ? 0.03 : 0), 0, 1);
@@ -362,7 +399,7 @@ export function applyDecrees(nation, day = 1) {
   nation.pending = next;
   nation.output = { ...output };
 
-  return { output, quality, notes, pending: next };
+  return { output, quality, notes, pending: next, council: council.notes };
 }
 
 /* ------------------------------------------------------------------ */
@@ -474,7 +511,13 @@ export function warFactors(nation) {
     // これを配線していなかったので、悪政には代償しか無く、
     // 「罰しかない機構」を遊び手が選ぶ理由がどこにも無かった。
     // 忠誠で心服させるか、恐怖で黙らせるか。通し方が二つあるだけである。
-    obey: clamp(0.78 + loyalty * 0.30 + nation.fear * 0.34, 0.6, 1.45),
+    // 参謀本部が付いていれば、命令は下まで通る ─
+    // 議長の署名の下に、もう一つ署名があるかどうかの話である。
+    obey: clamp(
+      0.74 + loyalty * 0.28 + nation.fear * 0.32 +
+        blocEffect(nation.council?.blocs?.army) * 0.14,
+      0.6, 1.5
+    ),
     // 恐怖。前線から上がる報告が、どれだけ甘くなるか。
     fear: nation.fear,
   };
@@ -535,7 +578,11 @@ export function checkCollapse(nation) {
     notices.push('民心が線を割った。次の戦闘の翌朝、町は政府に背く。');
   }
 
+  // 評議会の側の期限。作法は同じ ─ 告げてから、一手番の猶予がある。
+  const council = checkCouncil(nation);
+  notices.push(...council.notices);
   nation.notices = notices;
+  if (council.collapse) return council.collapse;
   return null;
 }
 
@@ -544,6 +591,7 @@ export function warnings(nation) {
   const out = [];
   if (nation?.warned?.coup) out.push({ id: 'coup', label: '造反の通告', note: COLLAPSE.coup.reason });
   if (nation?.warned?.uprising) out.push({ id: 'uprising', label: '内乱の通告', note: COLLAPSE.uprising.reason });
+  out.push(...councilWarnings(nation));
   return out;
 }
 
@@ -562,7 +610,7 @@ export function ruleSummary(nation) {
     (counts.get('martial_law') ?? 0) + (counts.get('censorship') ?? 0) +
     (counts.get('secret_police') ?? 0) + (counts.get('conscript') ?? 0) +
     (counts.get('requisition') ?? 0) + (counts.get('total_war') ?? 0) +
-    nation.purged.length * 2;
+    nation.purged.length * 2 + (nation.council?.purgedMinisters?.length ?? 0) * 3;
   const mild =
     (counts.get('relief') ?? 0) + (counts.get('amnesty') ?? 0) +
     (counts.get('honors') ?? 0) + (counts.get('free_press') ?? 0) +
@@ -590,6 +638,13 @@ export function ruleSummary(nation) {
     decorated: nation.decorated.length,
     decrees: nation.ledger.length,
     standing: [...nation.standing],
+    // 除いた長官。数だけでなく、どの省庁を空にしたかが残る。
+    ministers: (nation.council?.purgedMinisters ?? []).map((m) => ({ ...m })),
+    // 誰と組んで、誰を切って国を回したか。
+    blocs: Object.values(nation.council?.blocs ?? {}).map((b) => ({
+      id: b.id, label: BLOCS[b.id]?.label ?? b.id,
+      support: Math.round(b.support), puppet: !!b.puppet,
+    })),
   };
 }
 
@@ -603,5 +658,6 @@ export function serializeNation(n) {
 
 export function deserializeNation(raw) {
   if (!raw) return createNation();
-  return { ...createNation(), ...raw };
+  // v3.0 で保存された国には評議会が無い。読めるようにしておく。
+  return { ...createNation(), ...raw, council: deserializeCouncil(raw.council) };
 }

@@ -24,12 +24,17 @@ import {
   NIGHT_PLANS, NIGHT_PLAN_IDS, serializeCampaign, deserializeCampaign,
   attachAsset, detachAsset, assetsLeft, canAttach, campaignList,
   settleNight, purgeOfficer, decorateOfficer, waveringUnits, purgeCost,
+  openCouncilNight, answerPetitionIn as campAnswerPetition,
+  purgeMinisterIn as campPurgeMinister, ministerPurgeCost,
 } from './sim/campaign.js';
 import {
   NATION, METERS, DECREES, DECREE_GROUPS, DECREE_IDS, DECREE_LIMIT,
   canDecree, decree, revokeDecree, liftStanding, ruleSummary, stageOf,
   warnings, moraleCeiling,
 } from './sim/nation.js';
+import {
+  BLOCS, BLOC_IDS, BLOC_LINE, supportStage, blocEffect, findPetition,
+} from './sim/council.js';
 import { ATTACHMENTS, attachmentShort, attachmentLabels } from './sim/attachments.js';
 import { TEMPERAMENTS, TRAITS, gradeOf, officerLine } from './sim/officers.js';
 import { Rng, toGrid, fromGrid, formatClock } from './util.js';
@@ -1162,6 +1167,9 @@ export function clearCampaign() {
 
 /** 戦役の全体像。戦線・段階・これまでの経過。 */
 export function getCampaignView(state) {
+  // 上奏はここで立つ。国政の画面を開かなくても、その晩の一件は机の上にある ─
+  // 開かなかった遊び手にも「決めないことも決定である」が成り立つ必要がある。
+  openCouncilNight(state);
   if (!state) return null;
   const campaign = getCampaign(state.campaignId);
   const stage = currentStage(state, campaign);
@@ -1183,6 +1191,7 @@ export function getCampaignView(state) {
     result: state.result,
     resultReason: state.resultReason,
     collapse: state.collapse ?? null,
+    collapseLabel: state.collapseLabel ?? null,
     // 国政の要点。戦役の画面にも出す ─ 前線と国は別の話ではない。
     nation: state.nation && {
       morale: Math.round(state.nation.morale),
@@ -1192,6 +1201,14 @@ export function getCampaignView(state) {
       fear: state.nation.fear,
       decrees: state.nation.decrees.length,
       limit: DECREE_LIMIT,
+      // 通告が出ているかどうかだけは、前線の画面からでも見えていてほしい。
+      alarms: warnings(state.nation).length,
+      // いま一番怒っている省庁。国政の画面を開く理由になる。
+      angry: angriestBloc(state.nation),
+      // 答えていない上奏。開かなければ、退けたものとして数えられる。
+      petition: state.nation.council?.petition?.bloc &&
+        !state.nation.council.petition.answered
+        ? BLOCS[state.nation.council.petition.bloc].label : null,
     },
     history: state.history.map((h) => ({ ...h })),
     pool: { ...state.pool },
@@ -1337,8 +1354,12 @@ export function getNationView(state) {
   const n = state?.nation;
   if (!n) return null;
   const left = DECREE_LIMIT - n.decrees.length;
+  // その晩の上奏。開くたびに呼んでよい ─ 同じ日には同じ一件しか出ない。
+  openCouncilNight(state);
 
   return {
+    council: councilView(state, n),
+    petition: petitionView(n),
     name: NATION.name,
     eyebrow: NATION.eyebrow,
     blurb: NATION.blurb,
@@ -1392,6 +1413,95 @@ export function getNationView(state) {
     decorated: n.decorated.map((p) => ({ ...p })),
     rule: ruleSummary(n),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* 評議会                                                              */
+/* ------------------------------------------------------------------ */
+//
+// 数字そのものより「誰が怒っているか」が読めればよい。
+// 支持の段階と、その席に座っている人間の名前だけを渡す。
+
+function councilView(state, n) {
+  const c = n.council;
+  if (!c) return [];
+  return BLOC_IDS.map((id) => {
+    const b = c.blocs[id];
+    const meta = BLOCS[id];
+    return {
+      id,
+      label: meta.label,
+      post: meta.post,
+      wants: meta.wants,
+      gives: meta.gives,
+      fails: meta.fails,
+      support: Math.round(b.support),
+      stage: supportStage(b.support),
+      // その省庁が実際に働いている度合い。傀儡は上が詰まっている。
+      effect: Math.round(blocEffect(b) * 100),
+      puppet: !!b.puppet,
+      warned: !!c.warned?.[id] && !b.puppet,
+      low: b.support <= BLOC_LINE + 10,
+      minister: `${b.minister.name}${b.minister.rank ? ` ${b.minister.rank}` : ''}`,
+      cost: b.puppet ? null : ministerPurgeCost(n, id),
+    };
+  });
+}
+
+function petitionView(n) {
+  const cur = n.council?.petition;
+  if (!cur?.bloc) return null;
+  const p = findPetition(cur.bloc, cur.id);
+  if (!p) return null;
+  return {
+    bloc: cur.bloc,
+    blocLabel: BLOCS[cur.bloc].label,
+    post: BLOCS[cur.bloc].post,
+    id: p.id,
+    label: p.label,
+    text: p.text,
+    answered: cur.answered ?? null,
+    accept: petitionSide(p.accept),
+    refuse: petitionSide(p.refuse),
+    // 国庫が足りなければ容れられない。断るのは常にできる。
+    canAccept: (p.accept.cost ?? 0) <= n.treasury,
+  };
+}
+
+/** 上奏の一方の側を、札に並べられる形に均す。 */
+function petitionSide(side) {
+  if (!side) return { tags: [] };
+  const tags = [];
+  for (const [k, v] of Object.entries(side.effect ?? {})) {
+    tags.push({ kind: v >= 0 ? 'up' : 'down', text: `${EFFECT_LABEL[k] ?? k} ${v >= 0 ? '+' : ''}${v}` });
+  }
+  if (side.cost) tags.push({ kind: 'down', text: `国庫 −${side.cost}` });
+  if (side.yields?.rounds) tags.push({ kind: 'yield', text: `砲弾 +${side.yields.rounds}` });
+  if (side.yields?.replacements) tags.push({ kind: 'yield', text: `補充 +${side.yields.replacements}` });
+  if (side.fear) tags.push({ kind: side.fear > 0 ? 'fear' : 'up', text: side.fear > 0 ? '恐怖 増' : '恐怖 減' });
+  if (side.scar) tags.push({ kind: 'down', text: '傷跡' });
+  for (const [id, v] of Object.entries(side.support ?? {})) {
+    tags.push({ kind: v >= 0 ? 'bloc-up' : 'bloc-down', text: `${BLOCS[id]?.label ?? id} ${v >= 0 ? '+' : ''}${v}` });
+  }
+  return { tags };
+}
+
+const EFFECT_LABEL = { morale: '民心', control: '統制', loyalty: '忠誠' };
+
+/** いま一番支持の低い省庁。戦役の画面に一言だけ出す。 */
+function angriestBloc(n) {
+  const c = n.council;
+  if (!c) return null;
+  let worst = null;
+  for (const id of BLOC_IDS) {
+    const b = c.blocs[id];
+    if (!b || b.puppet) continue;
+    if (!worst || b.support < c.blocs[worst].support) worst = id;
+  }
+  if (!worst) return null;
+  const b = c.blocs[worst];
+  if (b.support >= 45) return null;
+  return { id: worst, label: BLOCS[worst].label, support: Math.round(b.support), stage: supportStage(b.support) };
 }
 
 /**
@@ -1495,4 +1605,17 @@ export function purgeIn(state, unitId) {
 
 export function decorateIn(state, unitId) {
   return decorateOfficer(state, unitId);
+}
+
+/** 上奏に答える。容れるか、退けるか。 */
+export function answerPetition(state, accept) {
+  return campAnswerPetition(state, accept);
+}
+
+/**
+ * 省庁の長官を除く。
+ * 通告は止まり、その省庁は二度と貴官に逆らわない ─ 二度と働きもしない。
+ */
+export function purgeMinister(state, blocId) {
+  return campPurgeMinister(state, blocId);
 }

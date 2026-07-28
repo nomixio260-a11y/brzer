@@ -29,12 +29,18 @@ import {
   newCampaign, startCampaignBattle, finishCampaignBattle, getCampaignView, getCompany,
   assignReplacement, allotRounds, setNightPlan, campaignList,
   getNationView, getOfficerCorps, pickDecree, unpickDecree, stopStanding,
-  purgeIn, decorateIn, getReportGap,
+  purgeIn, decorateIn, getReportGap, answerPetition, purgeMinister,
 } from '../src/state.js';
 import {
   createNation, canDecree, checkCollapse, ruleSummary, START, stageOf, warnings,
-  moraleCeiling, decree, applyDecrees, warFactors,
+  moraleCeiling, decree, applyDecrees, warFactors, DECREES, DECREE_IDS,
 } from '../src/sim/nation.js';
+import {
+  createCouncil, councilFactors, blocEffect, ensurePetition,
+  answerPetition as councilAnswer, purgeMinister as councilPurgeMinister,
+  shiftSupport, hushOf, checkCouncil, supportStage, BLOC_IDS, BLOC_LINE, PETITION_LINE,
+  PETITIONS, findPetition,
+} from '../src/sim/council.js';
 import { enqueue as commsEnqueue } from '../src/sim/comms.js';
 import { endPlanning } from '../src/sim/world.js';
 import {
@@ -1892,6 +1898,320 @@ section('聞いていたこと と 起きていたこと');
   const st2 = newCampaign('volne_three_days', 2025);
   const g2 = startCampaignBattle(st2);
   check('戦闘中は突き合わせを返さない', getReportGap(g2).length === 0);
+}
+
+/* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+
+section('評議会 ─ 反対する者');
+{
+  const n = createNation();
+  check('四つの塊が立っている', BLOC_IDS.length === 4, BLOC_IDS.join(','));
+  check('席には名前がある',
+    BLOC_IDS.every((id) => (n.council.blocs[id].minister.name ?? '').length > 0));
+  check('開幕はどれも容認か支持',
+    BLOC_IDS.every((id) => n.council.blocs[id].support >= 45), 
+    BLOC_IDS.map((id) => `${id}:${n.council.blocs[id].support}`).join(' '));
+
+  // どの政令にも必ず怒る者がいる。誰の顔も立てない晩というものが無い。
+  for (const id of DECREE_IDS) {
+    const d = DECREES[id];
+    const vals = Object.values(d.blocs ?? {});
+    check(`「${d.label}」には怒る者がいる`, vals.some((v) => v < 0),
+      JSON.stringify(d.blocs ?? {}));
+  }
+}
+
+section('評議会は国の運営に効く');
+{
+  // 段列は軍部のものである。付いていなければ、帳簿の数は前線に着かない。
+  const rich = createNation();
+  rich.council.blocs.army.support = 100;
+  const poor = createNation();
+  poor.council.blocs.army.support = 0;
+  const a = applyDecrees(rich, 1);
+  const b = applyDecrees(poor, 1);
+  check('軍部が付いていれば補充が前線まで届く', a.output.replacements > b.output.replacements,
+    `${a.output.replacements} vs ${b.output.replacements}`);
+  check('砲弾も同じ', a.output.rounds > b.output.rounds,
+    `${a.output.rounds} vs ${b.output.rounds}`);
+  check('命令の通りにも効く',
+    warFactors(rich).obey > warFactors(poor).obey,
+    `${warFactors(rich).obey.toFixed(3)} vs ${warFactors(poor).obey.toFixed(3)}`);
+
+  // 救済は役所が配る。配る者がいなければ、金だけが消える。
+  const admin = createNation();
+  admin.council.blocs.civil.support = 100;
+  const noAdmin = createNation();
+  noAdmin.council.blocs.civil.support = 0;
+  decree(admin, 'relief');
+  decree(noAdmin, 'relief');
+  const m0 = admin.morale;
+  applyDecrees(admin, 1);
+  applyDecrees(noAdmin, 1);
+  check('役所が動いていれば救済が届く', admin.morale > noAdmin.morale,
+    `${admin.morale.toFixed(1)} vs ${noAdmin.morale.toFixed(1)}`);
+  check('届かなくても国庫は出ていく', noAdmin.treasury < START.treasury, `${noAdmin.treasury}`);
+  check('民心そのものは上がっている', admin.morale > m0);
+
+  // 統制は放っておけば緩む。緩ませないのが保安部の仕事である。
+  const grip = createNation();
+  grip.council.blocs.security.support = 0;
+  const before = grip.control;
+  applyDecrees(grip, 1);
+  check('保安が離れれば統制はこぼれる', grip.control < before,
+    `${before} → ${grip.control.toFixed(1)}`);
+
+  // 税は取り立てる役所の側の話でもある。
+  const money = createNation();
+  money.council.blocs.industry.support = 100;
+  const broke = createNation();
+  broke.council.blocs.industry.support = 0;
+  applyDecrees(money, 1);
+  applyDecrees(broke, 1);
+  check('産業が離れれば税収が落ちる', money.treasury > broke.treasury,
+    `${money.treasury} vs ${broke.treasury}`);
+}
+
+section('上奏');
+{
+  const n = createNation();
+  // 開幕から一番低い省庁が持ってくる。賽は振らない。
+  const p = ensurePetition(n, 1);
+  check('一晩に一件だけ上奏が来る', !!p && !!p.bloc, JSON.stringify(p));
+  check('同じ晩に二度呼んでも同じ一件', ensurePetition(n, 1)?.id === p.id);
+  check('持ってくるのは一番不満な省庁',
+    BLOC_IDS.every((id) => n.council.blocs[id].support >= n.council.blocs[p.bloc].support),
+    p.bloc);
+
+  const def = findPetition(p.bloc, p.id);
+  check('上奏には台詞がある', (def?.text ?? '').length > 10);
+  check('容れる側と退ける側の両方に代価がある',
+    Object.keys(def.accept.support ?? {}).length > 0 &&
+    Object.keys(def.refuse.support ?? {}).length > 0);
+
+  // 容れれば彼らは付き、他が離れる。
+  const yes = createNation();
+  ensurePetition(yes, 1);
+  const bloc = yes.council.petition.bloc;
+  const other = Object.keys(findPetition(bloc, yes.council.petition.id).accept.support)
+    .find((k) => k !== bloc);
+  const b0 = yes.council.blocs[bloc].support;
+  const o0 = other ? yes.council.blocs[other].support : 0;
+  councilAnswer(yes, true);
+  check('容れれば持ってきた側は付く', yes.council.blocs[bloc].support > b0,
+    `${b0} → ${yes.council.blocs[bloc].support}`);
+  if (other) {
+    check('容れれば別の誰かが離れる', yes.council.blocs[other].support < o0,
+      `${other} ${o0} → ${yes.council.blocs[other].support}`);
+  }
+  check('答えは一度きり', councilAnswer(yes, true) === null);
+
+  // 退ければその逆。
+  const no = createNation();
+  ensurePetition(no, 1);
+  const nb = no.council.petition.bloc;
+  const nb0 = no.council.blocs[nb].support;
+  councilAnswer(no, false);
+  check('退ければ持ってきた側が離れる', no.council.blocs[nb].support < nb0);
+
+  // 答えないまま出撃すれば、退けたものとして数えられる ─ ただし半分。
+  const mute = createNation();
+  ensurePetition(mute, 1);
+  const mb = mute.council.petition.bloc;
+  const mb0 = mute.council.blocs[mb].support;
+  applyDecrees(mute, 1);
+  check('黙っていても数えられる', mute.council.blocs[mb].support < mb0,
+    `${mb0} → ${mute.council.blocs[mb].support}`);
+  check('握り潰しは面と向かって断るより軽い',
+    (mb0 - mute.council.blocs[mb].support) < (nb0 - no.council.blocs[nb].support),
+    `黙 ${(mb0 - mute.council.blocs[mb].support).toFixed(2)} / 断 ${(nb0 - no.council.blocs[nb].support).toFixed(2)}`);
+
+  // 同じ省庁は連夜では来ない。
+  const twice = createNation();
+  const p1 = ensurePetition(twice, 1);
+  applyDecrees(twice, 1);
+  const p2 = ensurePetition(twice, 2);
+  check('同じ省庁が連夜では来ない', !p2 || p2.bloc !== p1.bloc, `${p1.bloc} → ${p2?.bloc}`);
+  // 一晩空ければ、また持ってくる。
+  applyDecrees(twice, 2);
+  const p3 = ensurePetition(twice, 3);
+  check('一晩空ければまた持ってくる', p3?.bloc === p1.bloc, `${p3?.bloc}`);
+}
+
+section('黙殺は自滅にならない');
+{
+  // 一番低い者が毎晩来る作りにしていたとき、握り潰し続けるだけで
+  // 同じ一つが必ず 0 まで落ちた ─ 何もしないことが、選べない自滅になっていた。
+  const n = createNation();
+  let raised = 0;
+  for (let d = 1; d <= 12; d++) {
+    if (ensurePetition(n, d)) raised++;
+    applyDecrees(n, d);
+  }
+  // 「昨夜の省庁は来ない」の札が外れないと、戦役を通して上奏が一件しか立たなかった。
+  check('上奏は一件で打ち止めにならない', raised >= 4, `十二晩で ${raised} 件`);
+  const low = Math.min(...BLOC_IDS.map((id) => n.council.blocs[id].support));
+  check('十二晩黙っていても誰も離反しない', low > BLOC_LINE, `最低 ${low.toFixed(1)}`);
+  check('それでも支持は下がっている', low < 48, `最低 ${low.toFixed(1)}`);
+}
+
+section('恐怖は反対も黙らせる');
+{
+  const quiet = createNation();
+  const loud = createNation();
+  quiet.fear = 0.8;
+  const q0 = quiet.council.blocs.civil.support;
+  const l0 = loud.council.blocs.civil.support;
+  shiftSupport(quiet, { civil: -20 });
+  shiftSupport(loud, { civil: -20 });
+  check('恐怖の下では反対が半分しか出ない',
+    (q0 - quiet.council.blocs.civil.support) < (l0 - loud.council.blocs.civil.support),
+    `${(q0 - quiet.council.blocs.civil.support).toFixed(1)} vs ${(l0 - loud.council.blocs.civil.support).toFixed(1)}`);
+
+  // 恐怖で買えるのは沈黙であって、支持ではない。
+  const up = createNation();
+  up.fear = 0.9;
+  const u0 = up.council.blocs.army.support;
+  shiftSupport(up, { army: +10 });
+  check('恐怖で支持そのものは増えない',
+    Math.abs((up.council.blocs.army.support - u0) - 10) < 0.001,
+    `${(up.council.blocs.army.support - u0).toFixed(2)}`);
+  check('恐怖ゼロなら目減りしない', hushOf(createNation()) === 1);
+}
+
+section('評議会を離れるとき');
+{
+  const n = createNation();
+  n.council.blocs.industry.support = 5;
+  const first = checkCouncil(n);
+  check('線を割れば通告が出る', first.collapse === null && first.notices.length > 0,
+    JSON.stringify(first.notices));
+  check('通告は賽ではなく期限である', n.council.warned.industry === true);
+
+  // 戻せば助かる。
+  const saved = JSON.parse(JSON.stringify(n));
+  saved.council.blocs.industry.support = 40;
+  const back = checkCouncil(saved);
+  check('翌朝までに戻せば助かる', back.collapse === null && !saved.council.warned.industry,
+    JSON.stringify(back.notices));
+
+  // 戻せなければ終わる。
+  const doomed = checkCouncil(n);
+  check('戻せなければ国は貴官の手を離れる', doomed.collapse?.id === 'bloc_industry',
+    JSON.stringify(doomed.collapse));
+  check('終わり方に理由が書いてある', (doomed.collapse?.reason ?? '').length > 10);
+
+  // 指標の側の通告と同じ窓口に出る。
+  const w = createNation();
+  w.council.blocs.security.support = 3;
+  checkCollapse(w);
+  check('評議会の通告も同じ窓口に出る',
+    warnings(w).some((x) => x.id === 'bloc_security'),
+    warnings(w).map((x) => x.id).join(','));
+}
+
+section('長官を除く');
+{
+  const n = createNation();
+  n.council.blocs.civil.support = 8;
+  checkCouncil(n);
+  check('除く前は通告が出ている', n.council.warned.civil === true);
+
+  const fear0 = n.fear;
+  const loyal0 = n.loyalty;
+  const army0 = n.council.blocs.army.support;
+  const res = councilPurgeMinister(n, 'civil', 2);
+  check('除いた者の名が残る', res?.removed?.name?.length > 0, JSON.stringify(res?.removed));
+  check('後任が座る', n.council.blocs.civil.minister.name !== res.removed.name);
+  check('通告は止まる', n.council.warned.civil === false);
+  check('恐怖が増える', n.fear > fear0, `${fear0} → ${n.fear}`);
+  check('士官団に伝わる', n.loyalty < loyal0, `${loyal0} → ${n.loyalty}`);
+  check('残る省庁は次は自分だと考える',
+    n.council.blocs.army.support < army0, `${army0} → ${n.council.blocs.army.support}`);
+
+  // 傀儡は逆らわない ─ 働きもしない。
+  n.council.blocs.civil.support = 100;
+  check('傀儡は上が詰まっている', blocEffect(n.council.blocs.civil) < 0.7,
+    `${blocEffect(n.council.blocs.civil).toFixed(2)}`);
+  n.council.blocs.civil.support = 0;
+  check('傀儡は下も詰まっている', blocEffect(n.council.blocs.civil) > 0.3,
+    `${blocEffect(n.council.blocs.civil).toFixed(2)}`);
+  n.council.blocs.civil.support = 2;
+  check('傀儡は二度と離反しない', checkCouncil(n).collapse === null);
+  check('傀儡は上奏しない', ensurePetition(n, 9)?.bloc !== 'civil');
+  check('二度は除けない', councilPurgeMinister(n, 'civil', 3) === null);
+  check('空にした席が記録に残る', n.council.purgedMinisters.length === 1);
+}
+
+section('評議会に支配戦略が無いこと');
+{
+  // 保安に寄り切れば民政が死ぬ。
+  const sec = createNation();
+  for (let d = 1; d <= 5; d++) {
+    if (canDecree(sec, 'martial_law').ok) decree(sec, 'martial_law');
+    if (canDecree(sec, 'censorship').ok) decree(sec, 'censorship');
+    if (canDecree(sec, 'secret_police').ok) decree(sec, 'secret_police');
+    applyDecrees(sec, d);
+  }
+  check('秩序に寄れば民政が離れる', sec.council.blocs.civil.support < 30,
+    `${sec.council.blocs.civil.support.toFixed(0)}`);
+
+  // 軍に寄り切れば産業が死ぬ。
+  const arm = createNation();
+  for (let d = 1; d <= 6; d++) {
+    if (canDecree(arm, 'requisition').ok) decree(arm, 'requisition');
+    if (canDecree(arm, 'conscript').ok) decree(arm, 'conscript');
+    applyDecrees(arm, d);
+  }
+  check('軍に寄れば産業が離れる', arm.council.blocs.industry.support < 30,
+    `${arm.council.blocs.industry.support.toFixed(0)}`);
+  check('そのかわり軍部は付いてくる', arm.council.blocs.army.support > 70,
+    `${arm.council.blocs.army.support.toFixed(0)}`);
+
+  // 恩恤に寄り切れば保安が離れる。
+  const soft = createNation();
+  soft.treasury = 120;
+  for (let d = 1; d <= 6; d++) {
+    soft.treasury = Math.max(soft.treasury, 40);
+    if (canDecree(soft, 'amnesty').ok) decree(soft, 'amnesty');
+    if (canDecree(soft, 'relief').ok) decree(soft, 'relief');
+    applyDecrees(soft, d);
+  }
+  check('恩恤に寄れば保安が離れる', soft.council.blocs.security.support < 45,
+    `${soft.council.blocs.security.support.toFixed(0)}`);
+}
+
+section('評議会は戦役に載る');
+{
+  const st = newCampaign('volne_three_days', 31);
+  const view = getNationView(st);
+  check('画面に四つの塊が出る', view.council.length === 4);
+  check('席の名前が出る', view.council.every((b) => b.minister.length > 0));
+  check('支持は言葉で出る', view.council.every((b) => b.stage.length > 0));
+  check('初日から上奏が出ている', !!view.petition, JSON.stringify(view.petition));
+  check('上奏には容れる側と退ける側の札がある',
+    view.petition.accept.tags.length > 0 && view.petition.refuse.tags.length > 0);
+
+  answerPetition(st, true);
+  check('答えれば画面に残る', getNationView(st).petition.answered === 'accept');
+
+  purgeMinister(st, 'security');
+  const after = getNationView(st);
+  check('更迭は画面に出る', after.council.find((b) => b.id === 'security').puppet === true);
+  check('更迭は統治の記録に残る', after.rule.ministers.length === 1);
+
+  // 書き出して読み戻せる。
+  const back = deserializeCampaign(JSON.parse(JSON.stringify(serializeCampaign(st))));
+  check('評議会も読み戻せる',
+    back.nation.council.blocs.security.puppet === true &&
+    back.nation.council.purgedMinisters.length === 1);
+  // v3.0 の保存（評議会が無い）も読める
+  const old = JSON.parse(JSON.stringify(serializeCampaign(st)));
+  delete old.nation.council;
+  check('評議会の無い古い保存も読める',
+    BLOC_IDS.every((id) => !!deserializeCampaign(old)?.nation?.council?.blocs?.[id]));
 }
 
 /* ------------------------------------------------------------------ */

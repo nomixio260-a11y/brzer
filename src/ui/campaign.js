@@ -43,7 +43,11 @@ export function renderCampaign(dom, view, rows, api) {
       `<span>統制 <b>${n.control}</b></span>` +
       `<span>忠誠 <b class="${n.loyalty <= 28 ? 'is-bad' : ''}">${n.loyalty}</b></span>` +
       `<span>国庫 <b>${n.treasury}</b></span>` +
-      `<span class="natstrip__decree">今夜の政令 ${n.decrees}/${n.limit}</span>`;
+      `<span class="natstrip__decree">今夜の政令 ${n.decrees}/${n.limit}</span>` +
+      // 評議会で誰が怒っているかは、国政の画面を開く理由になる。
+      (n.angry ? `<span class="natstrip__angry">${n.angry.label} ${n.angry.stage}</span>` : '') +
+      (n.petition ? `<span class="natstrip__pet">${n.petition}の上奏 未決</span>` : '') +
+      (n.alarms ? `<span class="natstrip__alarm">通告 ${n.alarms}</span>` : '');
   } else if (dom.nation) {
     dom.nation.hidden = true;
   }
