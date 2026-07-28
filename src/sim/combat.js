@@ -286,11 +286,15 @@ export function stepFireMissions(world, dt) {
  * 進行中の射撃を打ち切る。撃っていない弾は戻る。
  * @returns {{cancelled:number, returned:object}}
  */
-export function checkFire(world, side = 'friend') {
+export function checkFire(world, side = 'friend', onlyId = null) {
   let cancelled = 0;
   const returned = { he: 0, smoke: 0, illum: 0 };
   for (const fm of world.fireMissions) {
     if (fm.done || fm.side !== side) continue;
+    // 危近弾を聞いて止めたいのは、その一発である。
+    // ここに絞りが無かったので、掩護の煙も照明も一緒に落ちていた ─
+    // 止めた側が損をする「射撃中止」だった。
+    if (onlyId && fm.id !== onlyId) continue;
     returned[fm.kind] = (returned[fm.kind] ?? 0) + fm.roundsLeft;
     fm.roundsLeft = 0;
     fm.done = true;

@@ -2,7 +2,9 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<!-- 拡大を禁じると、9〜10px の文字が並ぶ国政・戦役・講評を老眼の指揮官が読めなくなる。
+     地図だけは指で拡大されると困るので、canvas 側で touch-action:none を敷いて防いでいる。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a0908">
 <meta name="description" content="地図と無線だけで戦闘を指揮する。ブラウザで遊べる無線指揮官ゲーム。">
 <meta name="mobile-web-app-capable" content="yes">
@@ -88,9 +90,14 @@
             陣地変換のあいだ（約105秒）は撃てない。<b>射撃中止</b>で、まだ撃っていない弾は止められる</li>
           <li><b>装甲には向きがある</b> ─ 正面から抜けない砲でも、横腹と背中は抜ける。
             交戦中の車輌は撃ち合っている相手を向くので、対戦車班をどこに置くかで結果が変わる</li>
-          <li class="only-desktop"><kbd>Space</kbd> 一時停止 ／ <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 速度 ／
-            <kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd> 図式 ／ <kbd>Ctrl</kbd>+<kbd>Z</kbd> 取り消し ／
-            <kbd>+</kbd><kbd>-</kbd> 拡大縮小 ／ <kbd>Esc</kbd> 解除</li>
+          <li><b>操作の早見表</b> ─ 戦闘中でも地図右上の<b>「?」</b>で開ける
+            （鍵盤なら <kbd class="only-desktop">?</kbd>）。この頁には戻れないので、覚える必要はない</li>
+          <li class="only-desktop"><kbd>Space</kbd> 一時停止 ／
+            <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd> 速度（<kbd>4</kbd>＝8倍は長期戦のみ） ／
+            <kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd><kbd>M</kbd> 図式 ／ <kbd>A</kbd> 自動記入 ／
+            <kbd>Ctrl</kbd>+<kbd>Z</kbd> 取り消し ／
+            <kbd>+</kbd><kbd>-</kbd> 拡大縮小 ／ <kbd>0</kbd> 全体表示 ／
+            <kbd>?</kbd> 早見表 ／ <kbd>Esc</kbd> 解除</li>
         </ul>
       </section>
 
@@ -224,6 +231,13 @@
         <button id="zoom-in" class="zoombtn" aria-label="拡大">＋</button>
         <button id="zoom-out" class="zoombtn" aria-label="縮小">－</button>
         <button id="zoom-fit" class="zoombtn zoombtn--fit" aria-label="全体表示">全</button>
+        <button id="btn-help" class="zoombtn zoombtn--fit" title="操作の早見 (?)" aria-label="操作の早見">?</button>
+      </div>
+
+      <!-- 取消は地図の脇に出しておく。指で地図を叩けば必ず記号が置かれる以上、
+           打ち間違いは常時起きる ─ それを消す手が道具箱の中では遠すぎる。 -->
+      <div class="mapundo">
+        <button id="btn-undo-map" class="zoombtn" title="最後の書き込みを取り消す" aria-label="取消">↶</button>
       </div>
 
       <div id="map-hint" class="maphint" hidden>
@@ -243,6 +257,9 @@
             概定射点も前夜のうちに諸元が出る。渡し終えたら「H時」を宣言せよ。
           </span>
         </div>
+        <!-- 帯は地図の上に居座る。命令を書き込む間だけ畳めるようにしておく ─
+             読み終えた文章のために、図面の下端を取り上げ続ける理由はない。 -->
+        <button id="planbar-fold" class="planbar__fold" title="この帯を畳む" aria-label="帯を畳む">▾</button>
         <button id="btn-hhour" class="btn btn--primary planbar__go">H時</button>
       </div>
 
@@ -397,9 +414,19 @@
 
     <footer class="campaign__foot">
       <div id="camp-result" class="campaign__result" hidden></div>
-      <button id="btn-sortie" class="btn btn--primary">配置につく</button>
-      <button id="btn-govern" class="btn">国政</button>
-      <button id="btn-abandon" class="btn">戦役をやめる</button>
+      <!-- 出撃の前に、まだ決めていないことを出撃釦の隣で言う。
+           頁の頭の帯に書いてあっても、指はここにあって目はそこに無い ─
+           そして答えなかった上奏は、退けたものとして数えられる。 -->
+      <div id="camp-unspent" class="campaign__unspent" hidden></div>
+      <div class="campaign__acts">
+        <button id="btn-sortie" class="btn btn--primary">配置につく</button>
+        <button id="btn-govern" class="btn">国政</button>
+      </div>
+      <!-- 戦役の記録を消す釦。三日ぶんの損害と経歴が消えるので、
+           出撃の釦と同じ列には置かない。押しても確認が一手挟まる。 -->
+      <div class="campaign__acts campaign__acts--quit">
+        <button id="btn-abandon" class="btn btn--quiet">戦役をやめる</button>
+      </div>
     </footer>
   </div>
 </section>
@@ -418,10 +445,20 @@
         <span id="nat-fear" class="fearline">町は普通に喋っている</span>
       </div>
       <div class="natwarns" id="nat-warnings" hidden></div>
+      <nav class="nattabs" id="nat-tabs" aria-label="国政の頁">
+        <button class="nattab is-on" data-nattab="council">評議会<i class="nattab__dot" hidden></i></button>
+        <button class="nattab" data-nattab="decree">政令<i class="nattab__dot" hidden></i></button>
+        <button class="nattab" data-nattab="corps">士官団<i class="nattab__dot" hidden></i></button>
+        <button class="nattab" data-nattab="rule">記録</button>
+      </nav>
     </header>
 
-    <div class="campaign__body">
-      <section class="brief-block">
+    <!-- 政令の札には「国庫 −7」としか書いていない。その −7 が何から引かれるのかは
+         頁の頭にしかなく、押す頃には巻き上がって見えていない。ここだけは貼り付ける。 -->
+    <div class="natsticky" id="nat-sticky"></div>
+
+    <div class="campaign__body" id="nat-body">
+      <section class="brief-block" data-natpage="council">
         <h2>評議会</h2>
         <p class="brief-note">
           貴官の背後に四つの塊が立っている。望むものは互いに噛み合わない ─
@@ -432,7 +469,7 @@
         <div class="blocs" id="nat-council"></div>
       </section>
 
-      <section class="brief-block" id="nat-petition-block">
+      <section class="brief-block" id="nat-petition-block" data-natpage="council">
         <h2>上奏</h2>
         <p class="brief-note">
           一番不満を溜めている省庁が、夜のうちに一件だけ持ってくる。
@@ -442,7 +479,7 @@
         <div class="petitions" id="nat-petition"></div>
       </section>
 
-      <section class="brief-block">
+      <section class="brief-block" data-natpage="decree">
         <h2>今夜の政令 <em class="h2note" id="nat-left">今夜あと 2 件</em></h2>
         <p class="brief-note">
           一晩に出せるのは二つまで。全部やれるなら、それは統治ではなく願望である。
@@ -451,7 +488,7 @@
         <div class="decrees" id="nat-decrees"></div>
       </section>
 
-      <section class="brief-block">
+      <section class="brief-block" data-natpage="decree">
         <h2>施行中の令</h2>
         <p class="brief-note">
           継続の令は、解くまで毎晩効き続ける。解けば得たものは返るが、
@@ -460,7 +497,7 @@
         <div class="standings" id="nat-standing"></div>
       </section>
 
-      <section class="brief-block">
+      <section class="brief-block" data-natpage="corps">
         <h2>士官団</h2>
         <p class="brief-note">
           忠誠は一人ずつ違う。付いていない者は命令の呑み込みが遅く、渋る。
@@ -471,7 +508,7 @@
         <div class="corpslist" id="nat-corps"></div>
       </section>
 
-      <section class="brief-block">
+      <section class="brief-block" data-natpage="rule">
         <h2>統治の記録</h2>
         <div class="rule" id="nat-rule"></div>
       </section>
@@ -687,13 +724,52 @@
 </section>
 
 <!-- 取り返しのつかない決定には、一手を挟む -->
-<div id="confirm" class="confirm" hidden>
+<div id="confirm" class="confirm" hidden role="dialog" aria-modal="true" aria-labelledby="confirm-title">
   <div class="confirm__box">
     <b id="confirm-title">確認</b>
     <p id="confirm-text"></p>
     <div class="confirm__acts">
       <button id="confirm-no" class="btn">やめる</button>
       <button id="confirm-yes" class="btn btn--danger">実行する</button>
+    </div>
+  </div>
+</div>
+
+<!-- 操作の早見。
+     配置についた後、ブリーフィングには読み込み直すまで戻れない ─
+     覚えていなかった一つのために画面を捨てさせるわけにはいかない。 -->
+<div id="keyhelp" class="keyhelp" hidden role="dialog" aria-modal="true" aria-labelledby="keyhelp-title">
+  <div class="keyhelp__box">
+    <div class="keyhelp__head">
+      <b id="keyhelp-title">操作の早見</b>
+      <button id="keyhelp-close" class="tool">閉じる</button>
+    </div>
+    <div class="keyhelp__body">
+      <section>
+        <h3>指</h3>
+        <ul>
+          <li><b>地図を叩く</b> ─ 選んでいる記号を置く（目標の指定中はそちらが優先）</li>
+          <li><b>掴んで動かす</b> ─ 図面をずらす ／ <b>二本指</b> ─ 拡大縮小</li>
+          <li><b>記号を長押し</b> ─ 消す ／ <b>記号を掴んで動かす</b> ─ 位置を直す</li>
+          <li><b>地図の右上「↶」</b> ─ 取り消し ／ <b>「＋」「－」「全」</b> ─ 縮尺 ／ <b>「?」</b> ─ この表</li>
+          <li><b>上部の「記」</b> ─ 自動記入の入切 ／ <b>「♪」</b> ─ 音の入切</li>
+          <li><b>下のタブ</b> ─ 部隊／無線／命令。<b>つまみを下へ払う</b>と閉じる</li>
+          <li><b>無線の一行</b> ─ その方眼へ跳ぶ（記録簿は開いたまま）。
+            <b>行の中の釦</b> ─ 聞いたとおりに記号を置く／修正射を命じる</li>
+        </ul>
+      </section>
+      <section>
+        <h3>鍵盤</h3>
+        <ul>
+          <li><kbd>Space</kbd> 一時停止と再開（H時前は「H時」の釦だけが時計を回す）</li>
+          <li><kbd>1</kbd> 標準 ／ <kbd>2</kbd> 2倍 ／ <kbd>3</kbd> 4倍 ／ <kbd>4</kbd> 8倍（長期戦のみ）</li>
+          <li><kbd>+</kbd> <kbd>-</kbd> 拡大縮小 ／ <kbd>0</kbd> 全体表示</li>
+          <li><kbd>Q</kbd> 記号に戻す ／ <kbd>M</kbd> 記号の種類を順に ／
+            <kbd>W</kbd> 作図の道具を順に ／ <kbd>E</kbd> 確度を順に</li>
+          <li><kbd>A</kbd> 自動記入の入切 ／ <kbd>Ctrl</kbd>+<kbd>Z</kbd> 取り消し</li>
+          <li><kbd>?</kbd> この表 ／ <kbd>Esc</kbd> 解除（選択・組みかけの命令・この表）</li>
+        </ul>
+      </section>
     </div>
   </div>
 </div>

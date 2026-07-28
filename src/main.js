@@ -87,7 +87,7 @@ import {
 } from './ui/orderpanel.js';
 import { createHud, renderHud, rebindHud } from './ui/hud.js';
 import { showDebrief } from './ui/debrief.js';
-import { renderCampaign } from './ui/campaign.js';
+import { renderCampaign, unspentNotes } from './ui/campaign.js';
 import { renderNation } from './ui/nation.js';
 import { fromGrid, formatClock, WORLD } from './util.js';
 // 検査用の窓口。?debug=1 のときだけ window に出す（本番の遊びには一切関わらない）。
@@ -301,6 +301,7 @@ const campDom = () => ({
   history: $('camp-history'),
   historyBlock: $('camp-history-block'),
   nation: $('camp-nation'),
+  unspent: $('camp-unspent'),
 });
 
 function drawCampaign() {
@@ -352,7 +353,46 @@ const natDom = () => ({
   rule: $('nat-rule'),
   council: $('nat-council'),
   petition: $('nat-petition'),
+  tabs: $('nat-tabs'),
 });
+
+// 国政の頁。六節を縦に積むと、携帯では上奏に辿り着くまでが遠すぎた。
+let natPage = 'council';
+
+function showNatPage(id) {
+  natPage = id;
+  for (const b of document.querySelectorAll('#nat-tabs .nattab')) {
+    b.classList.toggle('is-on', b.dataset.nattab === id);
+  }
+  for (const sec of document.querySelectorAll('#nat-body [data-natpage]')) {
+    sec.hidden = sec.dataset.natpage !== id;
+  }
+  const body = $('nat-body');
+  if (body) body.scrollTop = 0;
+}
+
+/**
+ * 国政の頁に貼り付ける要点。
+ *
+ * 政令の札には「国庫 −7」としか書いていない。その −7 が何から引かれるのかは
+ * 頁の頭にしかなく、札を押す頃には巻き上がって見えていない ─
+ * 値段だけ見せて残高を隠すのは、賭場の作法である。
+ */
+function drawNatSticky(view) {
+  const el = $('nat-sticky');
+  if (!el) return;
+  const num = (label, value, low) =>
+    `<span>${label}<b class="${low ? 'is-low' : ''}">${value}</b></span>`;
+  const m = Object.fromEntries(view.meters.map((x) => [x.id, x]));
+  el.innerHTML =
+    num('国庫', view.treasury, view.treasury <= 8) +
+    num('民心', m.morale?.value ?? '─', m.morale?.value <= 25) +
+    num('統制', m.control?.value ?? '─', m.control?.value <= 25) +
+    num('忠誠', m.loyalty?.value ?? '─', m.loyalty?.value <= 25) +
+    `<span class="natsticky__left${view.left > 0 ? '' : ' is-done'}">今夜あと ${view.left} 件</span>` +
+    (view.petition && !view.petition.answered
+      ? '<span class="natsticky__todo">上奏 未決</span>' : '');
+}
 
 function drawNation() {
   if (!campaign?.nation) return;
@@ -360,6 +400,8 @@ function drawNation() {
   $('nat-name').textContent = view.name;
   $('nat-eyebrow').textContent = view.eyebrow;
   $('nat-blurb').textContent = view.blurb;
+
+  drawNatSticky(view);
 
   renderNation(natDom(), view, getOfficerCorps(campaign), {
     onPick: (id) => { pickDecree(campaign, id); saveCampaign(campaign); drawNation(); audio.click(); },
@@ -376,13 +418,27 @@ function drawNation() {
     },
     onPurgeMinister: (blocId, b) => askMinisterPurge(blocId, b),
   });
+  showNatPage(natPage);
 }
 
 function openNation() {
   if (!campaign) return;
+  // 開いたときに見せる頁は、まだ決めていないことがある所にする ─
+  // 未決の上奏や通告を、遊び手が探しに行かなくてよいように。
+  const view = getNationView(campaign);
+  natPage =
+    view.warnings.length || (view.petition && !view.petition.answered) ? 'council'
+      : view.left > 0 ? 'decree' : natPage;
   drawNation();
   showView('view-nation');
 }
+
+$('nat-tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('.nattab');
+  if (!b) return;
+  showNatPage(b.dataset.nattab);
+  audio.click();
+});
 
 /**
  * 粛清には一手を挟む。
@@ -439,12 +495,51 @@ function confirmAction(title, text, fn) {
   $('confirm-text').textContent = text;
   confirmFn = fn;
   $('confirm').hidden = false;
+  // 開いた瞬間に指が乗っているのは「やめる」側にしておく。
+  // 取り返しのつかない側を既定にすれば、確認は儀式でしかない。
+  $('confirm-no').focus();
 }
 
 function closeConfirm() {
   $('confirm').hidden = true;
   confirmFn = null;
 }
+
+const confirmOpen = () => !$('confirm').hidden;
+
+// 幕を叩いても引き下がれる。逃げ道が「やめる」の一点しかない小窓は、
+// 押し間違えた者を追い詰めるだけである。
+$('confirm').addEventListener('click', (e) => {
+  if (e.target !== $('confirm')) return;
+  closeConfirm();
+  audio.click();
+});
+
+/* --- 操作の早見 --------------------------------------------------- */
+//
+// ブリーフィングには読み込み直すまで戻れない。
+// 覚え違いの一つで盤を捨てさせないために、戦闘中から開ける表を置いてある。
+
+const helpOpen = () => !$('keyhelp').hidden;
+
+function openHelp() {
+  $('keyhelp').hidden = false;
+  $('keyhelp-close').focus();
+  audio.click();
+}
+
+function closeHelp() {
+  $('keyhelp').hidden = true;
+}
+
+$('btn-help').addEventListener('click', () => (helpOpen() ? closeHelp() : openHelp()));
+$('keyhelp-close').addEventListener('click', () => {
+  closeHelp();
+  audio.click();
+});
+$('keyhelp').addEventListener('click', (e) => {
+  if (e.target === $('keyhelp')) closeHelp();
+});
 
 function openCampaign() {
   if (!campaign) campaign = loadCampaign() ?? newCampaign();
@@ -650,9 +745,14 @@ function finishBattleWiring(creative) {
 function syncPlanBar() {
   const on = isPlanning(game);
   $('planbar').hidden = !on;
+  // 帯を畳んだまま次の戦闘へ持ち越さない。二日目もまず読ませる。
+  if (on) $('planbar').classList.remove('is-folded');
   document.body.classList.toggle('is-planning', on);
   $('clock').classList.toggle('is-planning', on);
   document.querySelector('.speed').classList.toggle('is-off', on);
+  // H時前の速さの釦は本当に効かない。薄く見えているものを押しただけで、
+  // 命令が自由で歪まない唯一の時間が終わるようでは、道具として裏切っている。
+  for (const b of document.querySelectorAll('.speed .speed__btn')) b.disabled = on;
 }
 
 /** H時を宣言する。ここから先は無線だけになる。 */
@@ -686,7 +786,13 @@ function loop(t) {
   renderHud(hud);
   renderRoster(rosterView);
   refreshOrders(orderPanel);
-  $('btn-undo').disabled = !canUndo(game);
+  // 使えない釦には、使えない理由を持たせておく（押されたときに読み上げるため）
+  const nothingToUndo = !canUndo(game);
+  const undoTitle = nothingToUndo ? '取り消せる書き込みが無い' : '取り消し (Ctrl+Z)';
+  $('btn-undo').disabled = nothingToUndo;
+  $('btn-undo').title = undoTitle;
+  $('btn-undo-map').disabled = nothingToUndo;
+  $('btn-undo-map').title = nothingToUndo ? undoTitle : '最後の書き込みを取り消す';
   draw(mapView);
 
   if (game.finished) {
@@ -765,9 +871,15 @@ function showToast(head, text, urgent) {
 
 function setSpeed(s) {
   if (!game) return;
-  // H時前に「進め」を押したなら、それはH時の宣言である。
+  // H時前に速さを触っても、時計は回らない。
+  // H時の宣言は「H時」の釦だけが行う ─ 命令が無線に乗らず歪まない唯一の時間を、
+  // 押した覚えのない釦で終わらせてはならない。
   if (isPlanning(game)) {
-    if (s > 0) declareHHour();
+    showToast(
+      '指揮所',
+      'H時前は時計が止まっている。渡し終えたら「H時」を宣言せよ。',
+      false
+    );
     return;
   }
   if (s > (game.maxSpeed ?? 4)) return; // 短期戦に x8 はない
@@ -798,7 +910,8 @@ function citeReport(entry) {
   if (!isWellVisible(mapView, p.x, p.y)) {
     centerOn(mapView, p.x, p.y, Math.max(mapView.zoom, 1.8));
   }
-  if (isNarrow()) closeSheet();
+  // 記録簿は閉じない。行を叩くのは「読みながら位置を確かめる」動作であって、
+  // 読むのをやめる動作ではない ─ 釦を外した指で頁ごと消えるのが一番こたえる。
   audio.click();
 }
 
@@ -911,12 +1024,16 @@ function buildToolbox() {
   });
 
   // 記号が消えたり戻ったりしたあとで、ラベル欄が居なくなった記号を掴んだままにしない
-  $('btn-undo').addEventListener('click', () => {
+  const undoOnce = () => {
     // 取り消すと記号が入れ替わる。開いたままのラベル欄は、もう無い記号を掴んでいる。
     hideMarkerEditor();
     if (mapView) mapView.selectedMarkId = null;
     if (undo(game)) audio.click();
-  });
+  };
+  $('btn-undo').addEventListener('click', undoOnce);
+  // 地図の脇にも同じ釦を出してある。道具箱は携帯では畳まれているので、
+  // 指で置き間違えた記号を消すのに三手かかっていた。
+  $('btn-undo-map').addEventListener('click', undoOnce);
   $('btn-clear-markers').addEventListener('click', () => {
     clearMarkings(game);
     hideMarkerEditor();
@@ -1034,9 +1151,19 @@ function wireMap() {
     onViewChanged: () => hideMarkerEditor(),
   });
 
+  // 画面の高さだけが変わるのは、たいてい画面の向きの話ではない ─
+  // ソフトキーボードが上がったか、住所欄が引っ込んだかである。
+  // それでラベル欄を閉じていたので、Android では記号に自分で名前を付けられなかった
+  // （見本の札しか使えない）。ついでに図面まで動いていた。
+  let lastViewW = window.visualViewport?.width ?? window.innerWidth;
   window.addEventListener('resize', () => {
+    const w = window.visualViewport?.width ?? window.innerWidth;
+    const heightOnly = Math.abs(w - lastViewW) < 2;
+    lastViewW = w;
+
     resize(mapView);
-    // 画面の向きや大きさが変わったら、まだ自分で拡大していない人には
+    if (heightOnly) return;
+    // 向きや大きさが変わったら、まだ自分で拡大していない人には
     // 図面が画面を満たす倍率を出し直す
     if (!mapView.userZoomed && isNarrow()) setZoom(mapView, coverZoom(mapView));
     hideMarkerEditor();
@@ -1067,7 +1194,14 @@ function wireZoom() {
 
   // 地図の上から送信する。命令の頁を開き直す必要はない。
   $('map-hint-send').addEventListener('click', () => {
+    const before = panelState(orderPanel).verb;
     submitOrder(orderPanel);
+    // 断られた命令はそのまま手元に残る。理由は命令の頁に書かれるが、
+    // 携帯ではその頁が地図の裏に退いている ─ 押した指の前に出さないと、
+    // 「押しても何も起きない」としか映らない。
+    if (!isCreative(game) && before && panelState(orderPanel).verb === before) {
+      showToast('指揮所', $('order-status').textContent, true);
+    }
     syncMapHint();
   });
 
@@ -1310,6 +1444,29 @@ const MARKER_KEYS = Object.keys(MARKER_TYPES);
 const SKETCH_KEYS = Object.keys(SKETCH_TOOLS);
 
 window.addEventListener('keydown', (e) => {
+  // 小窓が開いている間は、その小窓が鍵盤を握る。
+  // Esc で消したいのは目の前の確認であって、組みかけの命令ではない。
+  if (confirmOpen()) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeConfirm();
+    }
+    return;
+  }
+  if (helpOpen()) {
+    if (e.key === 'Escape' || e.key === '?') {
+      e.preventDefault();
+      closeHelp();
+    }
+    return;
+  }
+  // 早見表。どの画面からでも開く ─ 忘れた時に開けなければ表の意味がない。
+  if ((e.key === '?' || (e.key === '/' && e.shiftKey)) && !(e.target instanceof HTMLInputElement)) {
+    e.preventDefault();
+    openHelp();
+    return;
+  }
+
   if (e.key === 'Escape') {
     hideMarkerEditor();
     if (mapView) mapView.selectedMarkId = null;
@@ -1337,8 +1494,8 @@ window.addEventListener('keydown', (e) => {
   switch (e.key) {
     case ' ':
       e.preventDefault();
-      if (isPlanning(game)) declareHHour();
-      else setSpeed(game.running ? 0 : game.speed || 1);
+      // H時前の空白は「一時停止の解除」ではない。宣言は釦だけが行う。
+      setSpeed(game.running ? 0 : game.speed || 1);
       break;
     case '1': setSpeed(1); break;
     case '2': setSpeed(2); break;
@@ -1440,7 +1597,9 @@ function buildCampaignPicker() {
   const nb = document.createElement('button');
   nb.className = 'btn notesbtn';
   nb.id = 'btn-notes';
-  nb.textContent = '更新内容 v3.0「統治」';
+  // 入口の札は、開いた先の見出しと同じものにする ─
+  // 違う番号が書いてあると、押した先が古い頁だと思われる。
+  nb.textContent = '更新内容 v4.0「評議会」';
   wrap.appendChild(nb);
 }
 
@@ -1470,6 +1629,19 @@ $('btn-notes-back').addEventListener('click', () => {
 $('btn-sortie').addEventListener('click', () => {
   audio.initAudio();
   audio.setVoiceEnabled(options.voice);
+
+  // 夜の権限を残したまま出るのは、それ自体が一つの決定である ─
+  // 特に上奏は、答えなければ退けたことになる。黙って持って行かせない。
+  const notes = unspentNotes(getCampaignView(campaign));
+  if (notes.length) {
+    confirmAction(
+      'このまま配置につく',
+      `${notes.join('\n')}\nここを出れば、今夜はもう戻れない。`,
+      beginCampaignStage
+    );
+    audio.click();
+    return;
+  }
   beginCampaignStage();
 });
 
@@ -1483,10 +1655,20 @@ $('btn-abandon').addEventListener('click', () => {
     audio.click();
     return;
   }
-  clearCampaign();
-  campaign = null;
-  buildCampaignPicker();
-  showView('view-briefing');
+  // 三日ぶんの損害・経歴・国の状態が、この一押しで消える。
+  // 将校一人を除くのに一手を挟むなら、戦役ごと捨てるのにも挟まねばならない。
+  confirmAction(
+    '戦役をやめる',
+    `${view?.title ?? '戦役'} ─ ${(view?.stageIndex ?? 0) + 1}日目までの記録を消す。\n` +
+      '倒れた者も、生き延びた者の経歴も、国の状態も戻らない。\n' +
+      '続きから戦うことはできなくなる。',
+    () => {
+      clearCampaign();
+      campaign = null;
+      buildCampaignPicker();
+      showView('view-briefing');
+    }
+  );
   audio.click();
 });
 
@@ -1520,6 +1702,37 @@ $('btn-nextday').addEventListener('click', () => {
 });
 
 $('btn-hhour').addEventListener('click', declareHHour);
+
+// H時前の帯を畳む。読み終えた文章のために、図面の下端を取り上げ続けない。
+$('planbar-fold').addEventListener('click', () => {
+  const bar = $('planbar');
+  const folded = bar.classList.toggle('is-folded');
+  $('planbar-fold').textContent = folded ? '▸' : '▾';
+  $('planbar-fold').title = folded ? '説明を出す' : 'この帯を畳む';
+  document.body.classList.toggle('is-planbar-folded', folded);
+  audio.click();
+});
+
+/**
+ * 押せない釦を押したときに、なぜ押せないのかを言う。
+ *
+ * 理由は title に書いてあるが、指には吹き出しが出ない ─
+ * 触屏では「反応しない釦」と「壊れた釦」の区別が付かない。
+ * 使えない釦は click を出さないので、指の下にある要素から拾う。
+ */
+document.addEventListener('pointerdown', (e) => {
+  if (!$('view-game').classList.contains('is-active')) return;
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const btn = el?.closest?.('button:disabled');
+  if (!btn) return;
+  // 速さの釦は、押せない理由が釦の説明ではなく局面のほうにある。
+  const why = btn.closest('.speed')
+    ? 'H時前は時計が止まっている。渡し終えたら「H時」を宣言せよ。'
+    : btn.title?.trim();
+  if (!why) return;
+  $('order-status').textContent = why;
+  showToast('指揮所', why, false);
+}, true);
 
 // 検査用の窓口。?debug=1 のときだけ出す（本番の遊びには一切関わらない）。
 // 盤も戦役も getter で覗く ─ 戦闘に入る前の画面でも見えている必要がある。

@@ -6,7 +6,7 @@
 
 import {
   VERBS, VERB_GROUPS, MODIFIERS, ROE, TRIGGERS, FIRE_MODES, FIRE_MODE_ORDER, REINFORCEMENTS,
-  getRosterOrder, getSupport, getRoeOf, getHeldOrder, getSimTime, getTrains, isLongBattle,
+  getRosterOrder, getSupport, getRoeOf, getHeldOrders, getSimTime, getTrains, isLongBattle,
   getControlLines, toGrid, formatClock, issueOrder, isCreative, getCreative, creativeAction,
 } from '../state.js';
 
@@ -35,18 +35,19 @@ const GROUP_LABEL = Object.freeze({ ...VERB_GROUPS, drill: '演習' });
 const VERBS_BY_UNIT = {
   CRE: ['call_friend', 'place_enemy', 'replenish', 'clear_enemy', 'reveal'],
   TH: [
-    'fire_mission', 'smoke', 'illum', 'register', 'check_fire',
-    'move', 'resupply', 'sitrep', 'ammo_check',
+    'fire_mission', 'smoke', 'illum', 'register', 'cancel_fire', 'check_fire',
+    'move', 'countermand', 'resupply', 'sitrep', 'ammo_check',
   ],
-  EG: ['recon', 'move', 'observe', 'sitrep'],
+  EG: ['recon', 'move', 'observe', 'countermand', 'sitrep', 'report_on'],
   // 段列は運ぶのが仕事。補給先はその部隊を選んで「補給要請」を出す。
-  LD: ['move', 'hold', 'withdraw', 'sitrep'],
+  LD: ['move', 'hold', 'withdraw', 'countermand', 'sitrep'],
   _default: [
     'move', 'advance', 'attack', 'defend', 'hold', 'recon', 'withdraw', 'rally',
+    'breach', 'countermand',
     'observe', 'hold_fire', 'free_fire',
     'roe_hold_fast', 'roe_standard', 'roe_elastic',
     'resupply', 'rest', 'stand_to',
-    'sitrep', 'ammo_check',
+    'sitrep', 'ammo_check', 'report_on',
   ],
 };
 
@@ -57,11 +58,15 @@ const TRIGGER_ORDER = ['now', 'on_contact', 'on_pressure', 'on_line', 'at_time']
 // 予令を渡せない命令。今すぐ聞きたいことを「後で」と言っても仕方がない。
 const NO_TRIGGER = new Set([
   'sitrep', 'ammo_check', 'roe_hold_fast', 'roe_standard', 'roe_elastic',
+  // 前令取消と射撃中止は「今すぐ」でなければ意味がない。
+  // 「圧されたら前令を取り消せ」と言われて分かる部下はいない。
+  'countermand', 'cancel_fire', 'check_fire',
   ...Object.keys(CREATIVE_VERBS),
 ]);
 
 // 態勢を選んでも意味がない命令
 const NO_MODS = new Set([
+  'countermand', 'cancel_fire', 'report_on',
   'sitrep', 'ammo_check', 'smoke', 'illum', 'register', 'check_fire',
   'hold', 'hold_fire', 'free_fire', 'roe_hold_fast', 'roe_standard', 'roe_elastic',
   'rest', 'stand_to', 'resupply',
@@ -94,11 +99,23 @@ function modSetFor(panel) {
 }
 
 /** 盤を差し替える（聞き手は付け直さない） */
+// いま指揮官が何を指定させられているか。
+//
+// 地図の側がこれを読んで、砲の届く範囲を描く ─
+// 「そこには届かない」を、要請して断られてから知るのでは遅い。
+// 盤に一つしか無い機構なので、素直に持っておく。
+let targetingVerbId = null;
+
+export function currentTargetingVerb() {
+  return targetingVerbId;
+}
+
 export function rebindOrderPanel(panel, game) {
   panel.game = game;
   panel.unitId = null;
   panel.group = 'maneuver';
   panel.verb = null;
+  targetingVerbId = null;
   panel.modifier = 'normal';
   panel.fireMode = 'impact';
   panel.unitType = 'infantry';
@@ -194,6 +211,7 @@ export function createOrderPanel(dom, game, hooks) {
 export function selectUnit(panel, unitId) {
   if (panel.unitId !== unitId) {
     panel.verb = null;
+    targetingVerbId = null;
     clearLegs(panel);
     // その部隊にとって薄い分類を選んだままにしない。
     // 砲兵を選んで「機動」に移動しか出ていない、という画面は役に立たない ─
@@ -217,6 +235,7 @@ function allowedVerbs(panel, unitId) {
 
 function selectVerb(panel, verb) {
   panel.verb = verb;
+  targetingVerbId = verb;
   clearLegs(panel);
   if (NO_TRIGGER.has(verb)) panel.trigger = 'now';
   syncTargeting(panel);
@@ -314,6 +333,7 @@ export function submit(panel) {
 /** 命令を組むのをやめる。打った点も捨てる。 */
 export function cancel(panel) {
   panel.verb = null;
+  targetingVerbId = null;
   panel.trigger = 'now';
   panel.triggerAt = null;
   clearLegs(panel);
@@ -338,6 +358,7 @@ function send(panel) {
       panel.hooks.onCreative?.(panel.verb, res);
       const keep = panel.verb === 'call_friend' || panel.verb === 'place_enemy';
       if (!keep) panel.verb = null;
+      if (!keep) targetingVerbId = null;
       clearLegs(panel);
       panel.hooks.onTargetingChange(false);
       if (keep) syncTargeting(panel);
@@ -368,6 +389,7 @@ function send(panel) {
   panel.hooks.onSent?.(order);
   const wasHeld = order.trigger && order.trigger !== 'now';
   panel.verb = null;
+  targetingVerbId = null;
   panel.trigger = 'now';
   panel.triggerAt = null;
   clearLegs(panel);
@@ -580,9 +602,13 @@ export function refresh(panel, status) {
     }
   } else if (!panel.verb) {
     const s = getSupport(game);
-    const held = getHeldOrder(game, panel.unitId);
-    const heldNote = held
-      ? ` 予令：${TRIGGERS[held.trigger].label}に${ALL_VERBS[held.verb].label}${held.grid ? ` ${held.grid}` : ''}。`
+    // 渡してある予令は一覧で出す。三つまで抱えられるので、
+    // 「何を渡したか」を覚えていろというのは指揮所の仕事の押しつけである。
+    const held = getHeldOrders(game, panel.unitId);
+    const heldNote = held.length
+      ? ` 予令：${held
+        .map((h) => `${TRIGGERS[h.trigger].label}に${ALL_VERBS[h.verb].label}${h.grid ? ` ${h.grid}` : ''}`)
+        .join('／')}。`
       : '';
     const trains = getTrains(game);
     const trainsNote = trains

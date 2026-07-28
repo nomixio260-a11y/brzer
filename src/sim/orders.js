@@ -5,11 +5,13 @@ import { toGrid, dist, formatClock, clamp } from '../util.js';
 import { enqueue, PRI } from './comms.js';
 import { setDestination, clearDestination } from './units.js';
 import { createFireMission, checkFire } from './combat.js';
-import { composeSitrep, composeAmmoReport } from './reports.js';
+import { composeSitrep, composeAmmoReport, composeAreaReport } from './reports.js';
 import { setRoe } from './friendlyAI.js';
 import { orderResupply } from './logistics.js';
 import { FIRE_MODES, fireMode, fireCheck, dangerClose } from './fires.js';
 import { officerFactors } from './officers.js';
+import { canBreach } from './attachments.js';
+import { obstacleNear } from './terrain.js';
 
 /**
  * 命令。
@@ -22,6 +24,17 @@ export const VERBS = Object.freeze({
   attack: { label: '攻撃', group: 'maneuver', needsTarget: true, multi: true, phrase: (g) => `${g}の敵を攻撃せよ` },
   defend: { label: '防御', group: 'maneuver', needsTarget: true, phrase: (g) => `${g}を確保し、陣地を築いて防御せよ` },
   hold: { label: '待機', group: 'maneuver', needsTarget: false, phrase: () => `現在地を保持し、待機せよ` },
+  // 前令取消。まだ網に乗っていない命令なら、送信そのものを取りやめられる ─
+  // 指揮所で紙を破るだけの話である。喋り出してしまったものは戻らない。
+  countermand: {
+    label: '前令取消', group: 'maneuver', needsTarget: false,
+    phrase: () => `前令取消。繰り返す、前令取消。現在地で待て`,
+  },
+  // 障害処理。工兵班を付けた分隊だけができる。
+  breach: {
+    label: '障害処理', group: 'maneuver', needsTarget: true,
+    phrase: (g) => `${g}の障害を処理し、通路を開け`,
+  },
   recon: { label: '偵察', group: 'maneuver', needsTarget: true, multi: true, phrase: (g) => `${g}方向を隠密に偵察せよ` },
   withdraw: { label: '後退', group: 'maneuver', needsTarget: true, multi: true, phrase: (g) => `${g}まで後退せよ` },
   rally: { label: '集結', group: 'maneuver', needsTarget: true, phrase: (g) => `${g}へ集結し、部隊を立て直せ` },
@@ -49,6 +62,14 @@ export const VERBS = Object.freeze({
     indirect: true,
     phrase: (g) => `${g}を概定射点として標定せよ。以後この点への射撃を優先する`,
   },
+  // 危近弾を聞いて止めたいのは、その一発である ─
+  // 掩護の煙まで一緒に落とされては、止めた側が損をする。
+  cancel_fire: {
+    label: '射撃中止（一つ）',
+    group: 'fires',
+    needsTarget: true,
+    phrase: (g) => `${g}への射撃を中止せよ。他はそのまま続行`,
+  },
   // 撃ってしまったものは戻らないが、まだ撃っていない弾なら止められる。
   check_fire: {
     label: '射撃中止',
@@ -63,6 +84,13 @@ export const VERBS = Object.freeze({
 
   sitrep: { label: '状況報告要求', group: 'intel', needsTarget: false, phrase: () => `状況を報告せよ` },
   ammo_check: { label: '弾薬照会', group: 'intel', needsTarget: false, phrase: () => `弾薬の残量を報告せよ` },
+  // 部隊に自分のことを訊けても、外のことを訊けなかった。
+  // 統制線を引いても、そこに目が届いているかを確かめる術が無い ─
+  // それでは線に予令を付ける意味がない。
+  report_on: {
+    label: '地点の観測要求', group: 'intel', needsTarget: true,
+    phrase: (g) => `${g}に何が見えるか。見えるものだけを報告せよ`,
+  },
 
   // 長期戦でだけ意味を持つ。半日守るなら、撃つことより続けることが難しい。
   resupply: {
@@ -188,6 +216,9 @@ export function crossedLine(points, x, y) {
   return y > lineY;
 }
 
+/** 一つの部隊が懐に入れておける予令の数。 */
+export const HELD_LIMIT = 3;
+
 let orderSeq = 1;
 
 /**
@@ -204,6 +235,8 @@ export function issueOrder(
   const u = world.unitsById.get(unitId);
   const spec = VERBS[verb];
   if (!u || !spec) return null;
+  // 命令に添える余分（どの射撃を止めるか、など）
+  let order0 = null;
 
   const trig = TRIGGERS[trigger] ?? TRIGGERS.now;
   // 過ぎた時刻を条件にしても意味がない
@@ -230,6 +263,61 @@ export function issueOrder(
   if (verb === 'check_fire' && !world.fireMissions.some((fm) => !fm.done && fm.side === 'friend')) {
     pushSystemMessage(world, '止めるべき射撃がない。');
     return null;
+  }
+  if (verb === 'cancel_fire') {
+    const fm = nearestOwnMission(world, x, y);
+    if (!fm) {
+      pushSystemMessage(world, 'その辺りに、止められる射撃がない。');
+      return null;
+    }
+    order0 = { cancelId: fm.id };
+  }
+
+  // --- 前令取消 ---------------------------------------------------
+  //
+  // 誤って叩いた方眼へ「攻撃」を送ってしまった瞬間 ─
+  // それを止めたいのは、まさに送信がまだ列に並んでいる間である。
+  // 本物の指揮所はそこで割り込む。ここには割り込む手が無かった。
+  if (verb === 'countermand') {
+    const pulled = pullBackTransmission(world, u);
+    if (pulled) {
+      world.stats.countermands = (world.stats.countermands ?? 0) + 1;
+      pushSystemMessage(
+        world,
+        `前令取消 ─ ${u.callsign}への「${VERBS[pulled.verb]?.label ?? pulled.verb}` +
+        `${pulled.grid ? ` ${pulled.grid}` : ''}」は、まだ送信していない。取りやめた。`
+      );
+      // 網に乗せていないのだから、無線も食わないし遅れもしない。
+      // 返すのは「済んだ命令」であって、部下は何も知らない。
+      const done = {
+        id: `O${orderSeq++}`, unitId, verb, x: u.x, y: u.y, legs: null,
+        grid: toGrid(u.x, u.y), modifier, trigger: 'now', triggerAt: null,
+        line: null, lineName: null, issuedAt: world.now,
+        state: 'completed', receivedAt: world.now, ackAt: world.now,
+        completedAt: world.now, pulled: true,
+      };
+      world.orders.push(done);
+      return done;
+    }
+    if (!u.pendingOrder && !u.order) {
+      pushSystemMessage(world, `${u.callsign}に取り消せる前令がない。`);
+      return null;
+    }
+    // もう喋ってしまった、あるいは届いてしまった ─
+    // 止められるのは「これ以上やるな」までである。
+  }
+  if (verb === 'breach') {
+    // 道具の無い分隊に「鉄条網を切れ」と言っても、切るものを持っていない。
+    if (!canBreach(u)) {
+      pushSystemMessage(world, `${u.callsign}: 工兵班が付いていない。障害は処理できない。`);
+      return null;
+    }
+    const obs = obstacleNear(world.terrain, x, y);
+    if (!obs) {
+      pushSystemMessage(world, `${u.callsign}: その辺りに処理すべき障害は無い。`);
+      return null;
+    }
+    order0 = { obstacleId: obs.id ?? `${obs.x},${obs.y}`, x: obs.x, y: obs.y };
   }
   if (verb === 'register' && world.registrations.length >= 3) {
     pushSystemMessage(world, `${u.callsign}: 概定射点はこれ以上抱えられない。どれかを撤する必要がある。`);
@@ -279,6 +367,7 @@ export function issueOrder(
     receivedAt: null,
     ackAt: null,
     completedAt: null,
+    ...(order0 ?? {}),
   };
 
   world.orders.push(order);
@@ -331,6 +420,40 @@ export function issueOrder(
 
   world.stats.ordersIssued++;
   return order;
+}
+
+/**
+ * まだ網に乗っていない命令を、送信の列から引き抜く。
+ *
+ * 引き抜けるのは「並んでいる間」だけである。
+ * 通信士が読み上げはじめてしまえば、指揮所にできることは何もない ─
+ * そこから先は、届いた命令を新しい命令で上書きするしかない。
+ */
+function pullBackTransmission(world, u) {
+  const q = world.radio?.queue;
+  if (!q?.length) return null;
+  const i = q.findIndex((tx) => tx.outbound && tx.meta?.toId === u.id && tx.meta?.orderId);
+  if (i < 0) return null;
+  const [tx] = q.splice(i, 1);
+  const order = world.orders.find((o) => o.id === tx.meta.orderId);
+  if (order) {
+    order.state = 'void';
+    order.voidedAt = world.now;
+  }
+  if (u.pendingOrder && u.pendingOrder.id === tx.meta.orderId) u.pendingOrder = null;
+  return order ?? null;
+}
+
+/** その地点にいちばん近い、まだ落ち切っていない味方の射撃 */
+function nearestOwnMission(world, x, y) {
+  let best = null;
+  let bestD = 700 * 700;
+  for (const fm of world.fireMissions) {
+    if (fm.done || fm.side !== 'friend') continue;
+    const d = (fm.x - x) ** 2 + (fm.y - y) ** 2;
+    if (d < bestD) { bestD = d; best = fm; }
+  }
+  return best;
 }
 
 /**
@@ -433,10 +556,23 @@ export function stepOrders(world, dt) {
 
     // --- 予令は懐に入れて待つ -------------------------------------
     if (order.trigger && order.trigger !== 'now') {
-      // 同じ部隊に予令は1つ。新しいものが古いものを差し替える。
-      if (u.heldOrder && u.heldOrder !== order) u.heldOrder.state = 'superseded';
+      // 予令は三つまで抱えられる。
+      //
+      // 一つしか持てなかったので、「接敵したら報告」を渡した部隊に
+      // 「圧されたら下がれ」を渡すと、前の一つが黙って消えていた。
+      // 意図を先に配っておくのがこの摩擦への備えだと書いておきながら、
+      // 配れる意図が一つでは計画にならない。
+      //
+      // ただし同じ条件の予令は差し替える ─ 「接敵したら」が二つあれば、
+      // どちらに従うかを部下に選ばせることになる。
+      const held = (u.heldOrders ?? []).filter((h) => h.state === 'standby' && h !== order);
+      for (const h of held) if (h.trigger === order.trigger) h.state = 'superseded';
+      const kept = held.filter((h) => h.state === 'standby');
+      // 溢れたら古いものから落ちる。多すぎる予令は計画ではなく願望である。
+      while (kept.length >= HELD_LIMIT) kept.shift().state = 'superseded';
       order.state = 'standby';
-      u.heldOrder = order;
+      kept.push(order);
+      u.heldOrders = kept;
       world.stats.heldOrders = (world.stats.heldOrders ?? 0) + 1;
       if (spoken) {
         pushSystemMessage(world, `${u.callsign}: ${standbyAckText(u, order, rng)}`);
@@ -513,27 +649,30 @@ export function stepOrders(world, dt) {
 function stepHeldOrders(world) {
   const { now, rng } = world;
   for (const u of world.units) {
-    const order = u.heldOrder;
-    if (!order) continue;
+    if (!u.heldOrders?.length) continue;
     if (!u.alive) {
-      order.state = 'void';
-      u.heldOrder = null;
+      for (const o of u.heldOrders) if (o.state === 'standby') o.state = 'void';
+      u.heldOrders = [];
       continue;
     }
-    if (order.state !== 'standby') {
-      u.heldOrder = null;
-      continue;
-    }
+    // 差し替えられたものは、ここで懐から落ちる。
+    const list = u.heldOrders.filter((o) => o.state === 'standby');
+    u.heldOrders = list;
 
-    const trig = TRIGGERS[order.trigger];
-    if (!trig?.ready?.(world, u, order)) continue;
+    // 条件が揃ったものを一つだけ発動する。
+    // 同じ瞬間に二つ揃うことはあるが、部隊は一つのことしかできない ─
+    // 渡した順が古いものから拾う（先に配った意図が優先される）。
+    const order = list.find((o) => TRIGGERS[o.trigger]?.ready?.(world, u, o));
+    if (!order) continue;
 
     // 予令が発動すれば、いま抱えている任務はそこで打ち切られる
     if (u.order && u.order !== order) u.order.state = 'superseded';
 
     order.state = 'executing';
     order.firedAt = now;
-    u.heldOrder = null;
+    // 残りの予令は懐に残る。一つ発動したからといって、
+    // 「圧されたら下がれ」まで反故になるわけではない。
+    u.heldOrders = list.filter((o) => o !== order);
     u.order = order;
     beginExecution(world, u, order);
 
@@ -718,6 +857,54 @@ function beginExecution(world, u, order) {
       clearDestination(u);
       break;
 
+    // 前令取消。届いてしまったものは戻らないが、
+    // 「これ以上やるな」までは伝えられる。
+    case 'countermand':
+      u.state = 'holding';
+      u.posture = 'normal';
+      u._selfWithdrawing = false;
+      u.rallying = false;
+      clearDestination(u);
+      u.path = [];
+      u._resumePath = null;
+      u._legs = null;
+      completeOrder(world, u, order, true);
+      enqueue(world, {
+        from: u.callsign,
+        fromId: u.id,
+        kind: 'ack',
+        text: `こちら${u.callsign}、前令取消を了解。その場で止まる。`,
+        priority: PRI.FLASH,
+        meta: { unitId: u.id, orderId: order.id, observedAt: world.now },
+        composedAt: world.now,
+        duration: 3,
+      });
+      break;
+
+    // 障害処理。掛かる時間は、道具と人数と、撃たれているかどうかで決まる。
+    case 'breach':
+      u.state = 'moving';
+      u.posture = posture === 'normal' ? 'cautious' : posture;
+      setDestination(u, world.terrain, order.x, order.y);
+      order.breachLeft = null;
+      break;
+
+    // 指定地点の観測要求。答えは「見えるものだけ」である ─
+    // 見えていなければ「見えない」と答える。それも情報である。
+    case 'report_on':
+      enqueue(world, {
+        from: u.callsign,
+        fromId: u.id,
+        kind: 'sitrep',
+        text: composeAreaReport(u, world, order.x, order.y, order.grid),
+        priority: PRI.PRIORITY,
+        meta: { unitId: u.id, orderId: order.id, observedAt: world.now },
+        composedAt: world.now,
+        duration: 5,
+      });
+      completeOrder(world, u, order, true);
+      break;
+
     case 'rally':
       u.state = 'withdrawing';
       u.posture = posture === 'normal' ? 'rapid' : posture;
@@ -866,8 +1053,10 @@ function beginExecution(world, u, order) {
       break;
     }
 
+    case 'cancel_fire':
     case 'check_fire': {
-      const res = checkFire(world, 'friend');
+      const one = order.verb === 'cancel_fire';
+      const res = checkFire(world, 'friend', one ? order.cancelId : null);
       if (!world.creative?.unlimitedFires) {
         world.support.artillery.rounds += res.returned.he ?? 0;
         world.support.smoke.rounds += res.returned.smoke ?? 0;
@@ -881,7 +1070,8 @@ function beginExecution(world, u, order) {
         kind: 'firecontrol',
         text:
           res.cancelled > 0
-            ? `こちら${u.callsign}、射撃中止。手を止めた。${back}発、砲側に残る。`
+            ? `こちら${u.callsign}、${one ? `${order.grid}への射撃を中止` : '射撃中止'}。` +
+              `手を止めた。${back}発、砲側に残る。`
             : `こちら${u.callsign}、射撃中止 ─ だが、もう全弾出たあとだ。`,
         priority: PRI.FLASH,
         meta: { unitId: u.id, observedAt: world.now },
@@ -967,6 +1157,51 @@ function advanceExecution(world, u, order, dt) {
       break;
     }
 
+    // 障害処理。
+    //
+    // 「工兵班は鉄条網と地雷原を処理できる」と書いておきながら、
+    // 実際に消えるものは何も無かった ─ 付けた分隊の足が速くなるだけで、
+    // 後続の中隊には依然として同じ壁が立っていた。
+    case 'breach': {
+      const obs = (world.terrain.obstacles ?? []).find((o) => o.id === order.obstacleId);
+      if (!obs || obs.cleared) { completeOrder(world, u, order, true); break; }
+      if (dist(u.x, u.y, order.x, order.y) > obs.r * 0.9 + 60) break;
+
+      if (order.breachLeft == null) {
+        // 地雷原は鉄条網より長くかかる。一歩ずつ確かめる以外に道が無い。
+        order.breachLeft = obs.kind === 'wire' ? 160 : 320;
+        u.state = 'holding';
+        clearDestination(u);
+        enqueue(world, {
+          from: u.callsign, fromId: u.id, kind: 'sitrep',
+          text: `こちら${u.callsign}、${order.grid}の障害に取り付いた。処理にかかる。`,
+          priority: PRI.ROUTINE,
+          meta: { unitId: u.id, orderId: order.id, grid: order.grid, observedAt: world.now },
+          composedAt: world.now, duration: 3.5,
+        });
+      }
+      // 撃たれている間は手が止まる。障害処理は掩護の下でしかできない ─
+      // 工兵を送り込むだけでは足りず、そこを制圧してやる必要がある。
+      order.breachLeft -= dt * (u.suppression > 35 ? 0.2 : 1);
+      if (order.breachLeft <= 0) {
+        obs.cleared = true;
+        obs.clearedAt = world.now;
+        world.stats.breaches = (world.stats.breaches ?? 0) + 1;
+        enqueue(world, {
+          from: u.callsign, fromId: u.id, kind: 'sitrep',
+          text:
+            `こちら${u.callsign}、${order.grid}の` +
+            `${obs.kind === 'wire' ? '鉄条網を切り開いた' : '地雷原に通路を啓開した'}。` +
+            `後続はここを通れる。`,
+          priority: PRI.PRIORITY,
+          meta: { unitId: u.id, orderId: order.id, grid: order.grid, observedAt: world.now },
+          composedAt: world.now, duration: 4,
+        });
+        completeOrder(world, u, order, true);
+      }
+      break;
+    }
+
     case 'attack': {
       // 攻撃は止まらない。
       //
@@ -1016,6 +1251,7 @@ function advanceExecution(world, u, order, dt) {
     case 'fire_mission':
     case 'smoke':
     case 'illum':
+    case 'cancel_fire':
     case 'check_fire':
     case 'register':
     case 'roe_hold_fast':

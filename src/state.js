@@ -8,11 +8,11 @@
 
 import { createWorld, tick, spawnReinforcement, endPlanning, planningTick } from './sim/world.js';
 import { replenish, REINFORCEMENTS } from './sim/creative.js';
-import { issueOrder as simIssueOrder, VERBS } from './sim/orders.js';
+import { issueOrder as simIssueOrder, VERBS, HELD_LIMIT } from './sim/orders.js';
 import { congestion } from './sim/comms.js';
 import { enemyIntentLog } from './sim/enemyCommand.js';
 import { visibilityJa } from './sim/weather.js';
-import { supportGun, layingLeft } from './sim/fires.js';
+import { supportGun, layingLeft, MIN_RANGE } from './sim/fires.js';
 import {
   scoreMission, missionList, battleReport, friendlyOrderOfBattle,
   getMission as simGetMission,
@@ -112,7 +112,7 @@ export function createGame(opts = {}) {
       sketches: [],
       roster: new Map(), // unitId -> 最後に「聞いた」内容
       roe: new Map(), // unitId -> 与えた交戦規定
-      held: new Map(), // unitId -> 渡してある予令
+      held: new Map(), // unitId -> 渡してある予令の一覧（三つまで）
       log: [],
       unread: 0,
       // 指揮官が自分の手で盤から下ろした駒の出所。
@@ -215,8 +215,12 @@ function absorb(game, entry) {
 
   // 予令が発動したことは、部下からそう聞かされて初めて分かる
   if (entry.kind === 'initiative' && entry.meta?.orderId && !entry.lost) {
-    const held = game.belief.held.get(entry.fromId);
-    if (held?.orderId === entry.meta.orderId) game.belief.held.delete(entry.fromId);
+    const list = game.belief.held.get(entry.fromId);
+    if (list?.length) {
+      const rest = list.filter((h) => h.orderId !== entry.meta.orderId);
+      if (rest.length) game.belief.held.set(entry.fromId, rest);
+      else game.belief.held.delete(entry.fromId);
+    }
   }
 
   const self = entry.meta?.self;
@@ -413,13 +417,19 @@ export function issueOrder(game, { unitId, verb, x, y, modifier, legs, trigger, 
   });
   if (order) {
     const r = game.belief.roster.get(unitId);
-    if (r) r.pendingOrder = { verb, grid: order.grid, at: order.issuedAt };
+    // 引き抜いた命令（前令取消）は、そもそも網に乗っていない ─
+    // 出したことにならないので、控えにも残さない。
+    if (r && order.state !== 'completed') r.pendingOrder = { verb, grid: order.grid, at: order.issuedAt };
+    // 前令取消が通れば、指揮所の控えからも消える。
+    if (verb === 'countermand' && r) r.pendingOrder = null;
     // 交戦規定は指揮官自身が出した枠なので、届く前から手元の控えに残る
     const roe = VERBS[verb]?.roe;
     if (roe) game.belief.roe.set(unitId, roe);
-    // 予令も同じ。渡した控えは指揮所に残る（発動したかは無線で知る）
+    // 予令も同じ。渡した控えは指揮所に残る（発動したかは無線で知る）。
+    // 三つまで抱えられるので、控えも一覧である ─ 同じ条件のものは差し替わる。
     if (order.trigger && order.trigger !== 'now') {
-      game.belief.held.set(unitId, {
+      const list = (game.belief.held.get(unitId) ?? []).filter((h) => h.trigger !== order.trigger);
+      list.push({
         orderId: order.id,
         verb,
         grid: order.grid,
@@ -427,6 +437,8 @@ export function issueOrder(game, { unitId, verb, x, y, modifier, legs, trigger, 
         triggerAt: order.triggerAt,
         at: order.issuedAt,
       });
+      while (list.length > HELD_LIMIT) list.shift();
+      game.belief.held.set(unitId, list);
     }
   }
   // 発令そのものが記録簿に一行を残すことがある（弾が無い・射程外・作戦命令の下達）。
@@ -533,9 +545,15 @@ export function getRevealed(game) {
     }));
 }
 
-/** その部隊に渡してある予令（指揮所の控え） */
+/** その部隊に渡してある予令（指揮所の控え）。三つまで抱えられる。 */
+export function getHeldOrders(game, unitId) {
+  return game.belief.held.get(unitId) ?? [];
+}
+
+/** いちばん新しい一件だけ。一行しか出せない所で使う。 */
 export function getHeldOrder(game, unitId) {
-  return game.belief.held.get(unitId) ?? null;
+  const list = game.belief.held.get(unitId);
+  return list?.length ? list[list.length - 1] : null;
 }
 
 /** 各部隊に与えた交戦規定（指揮官自身の控え） */
@@ -952,6 +970,11 @@ export function getSupport(game) {
     gunAlive: !!gun,
     layingIn: gun ? Math.round(layingLeft(w, gun)) : 0,
     gunRange: gun ? gun.tpl.indirect : 0,
+    // 砲の位置。指揮官が自分でそこへ据えさせたのだから、これは知っている ─
+    // 知らないのは「そこから何処まで届くか」ではなく「そこに何がいるか」である。
+    gunX: gun ? gun.x : null,
+    gunY: gun ? gun.y : null,
+    minRange: MIN_RANGE,
     firing: w.fireMissions.some((fm) => !fm.done && fm.side === 'friend'),
   };
 }
@@ -1412,6 +1435,8 @@ export function getNationView(state) {
     })),
     decorated: n.decorated.map((p) => ({ ...p })),
     rule: ruleSummary(n),
+    // 頁を切ったので、開かなくても「そこに用がある」ことは見えている必要がある。
+    corpsWavering: waveringUnits(state).length > 0,
   };
 }
 

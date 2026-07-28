@@ -728,6 +728,13 @@ async function checkNation() {
   check('恐怖は言葉で出る', (await p.textContent('#nat-fear')).length > 3);
 
   // 評議会 ─ 反対する者がいる画面
+  check('頁の見出しが並ぶ', (await p.$$('#nat-tabs .nattab')).length === 4);
+  check('未決があれば評議会の頁から開く',
+    await p.$eval('#nat-tabs [data-nattab="council"]', (b) => b.classList.contains('is-on')));
+  check('未決に印が出る',
+    !(await p.$eval('#nat-tabs [data-nattab="council"] .nattab__dot', (e) => e.hidden)));
+  check('他の頁は畳まれている',
+    await p.$eval('#nat-body [data-natpage="corps"]', (e) => e.hidden));
   check('評議会に四つの塊が並ぶ', (await p.$$('#nat-council .bloc')).length === 4);
   check('席に名前が出る',
     (await p.textContent('#nat-council [data-bloc="army"]')).includes('参謀総長'));
@@ -751,6 +758,11 @@ async function checkNation() {
   check('二度は答えられない', (await p.$$('.petition .petbtn')).length === 0);
 
   // 一晩に二つまで
+  await p.click('#nat-tabs [data-nattab="decree"]');
+  await p.waitForTimeout(200);
+  check('頁を切り替えると政令が出る', await p.isVisible('#nat-decrees'));
+  check('切り替えると評議会は畳まれる',
+    await p.$eval('#nat-body [data-natpage="council"]', (e) => e.hidden));
   await p.click('#nat-decrees button[data-decree="conscript"]');
   await p.waitForTimeout(150);
   check('政令が選べる',
@@ -770,6 +782,8 @@ async function checkNation() {
   await p.screenshot({ path: `${SHOTS}/15-nation.png`, fullPage: true });
 
   // 政令の札に、遅れと維持費が出ること
+  await p.click('#nat-tabs [data-nattab="decree"]');
+  await p.waitForTimeout(150);
   const volunteer = await p.$$eval('[data-decree="volunteer"] .dtag', (e) => e.map((x) => x.textContent));
   check('善政の札に「明晩から」が出る', volunteer.some((t) => t.includes('明晩')), volunteer.join(','));
   const martial = await p.$$eval('[data-decree="martial_law"] .dtag', (e) => e.map((x) => x.textContent));
@@ -792,6 +806,8 @@ async function checkNation() {
   });
 
   // 粛清には一手が挟まる
+  await p.click('#nat-tabs [data-nattab="corps"]');
+  await p.waitForTimeout(200);
   const purged0 = await p.evaluate(() => window.__brzer.campaign.nation.purged.length);
   await p.click('#nat-corps button[data-purge]');
   await p.waitForTimeout(250);
@@ -815,7 +831,11 @@ async function checkNation() {
   }));
   check('実行すれば除かれる', after.purged === purged0 + 1);
   check('忠誠が下がる', after.loyalty < loyal0, `${loyal0} → ${after.loyalty}`);
+  await p.click('#nat-tabs [data-nattab="rule"]');
+  await p.waitForTimeout(200);
   check('除かれた者が記録に残る', (await p.$$('#nat-rule .purgelist li')).length >= 1);
+  await p.click('#nat-tabs [data-nattab="corps"]');
+  await p.waitForTimeout(200);
 
   // 叙勲
   await p.click('#nat-corps button[data-decorate]');
@@ -823,6 +843,8 @@ async function checkNation() {
   check('叙勲でエラーが出ない', errs.length === 0, errs.slice(0, 2).join(' | '));
 
   // 更迭 ─ 通告は止まるが、その省庁は二度と働かない
+  await p.click('#nat-tabs [data-nattab="council"]');
+  await p.waitForTimeout(200);
   await p.click('#nat-council [data-purge-minister="industry"]');
   await p.waitForTimeout(250);
   check('更迭にも確認が挟まる', await p.isVisible('#confirm'));
@@ -834,6 +856,8 @@ async function checkNation() {
     await p.evaluate(() => window.__brzer.campaign.nation.council.blocs.industry.puppet === true));
   check('傀儡の省庁には更迭の釦が無い',
     (await p.$$('#nat-council [data-purge-minister="industry"]')).length === 0);
+  await p.click('#nat-tabs [data-nattab="rule"]');
+  await p.waitForTimeout(200);
   check('空にした席が記録に残る', (await p.textContent('#nat-rule')).includes('空にした席'));
 
   await p.click('#btn-nat-back');

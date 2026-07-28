@@ -1,8 +1,9 @@
 // ミッション定義「橋梁死守」。地理・戦闘序列・展開・勝敗条件をデータとして持つ。
 
-import { parseClock, toGrid, dist, formatClock } from '../util.js';
+import { parseClock, toGrid, dist, formatClock, clamp, WORLD } from '../util.js';
 import { riverCenterY } from './terrain.js';
-import { MISSION_PASS, MISSION_TOWN } from './missions.js';
+import { UNIT_TYPES } from './units.js';
+import { MISSION_PASS, MISSION_TOWN, MISSION_HILL, MISSION_TOWN_HOLD } from './missions.js';
 
 const T0 = parseClock('0700');
 const TEND = parseClock('0900');
@@ -177,9 +178,18 @@ export const MISSIONS = Object.freeze({
   [MISSION_LONG.id]: MISSION_LONG,
   [MISSION_PASS.id]: MISSION_PASS,
   [MISSION_TOWN.id]: MISSION_TOWN,
+  [MISSION_HILL.id]: MISSION_HILL,
+  [MISSION_TOWN_HOLD.id]: MISSION_TOWN_HOLD,
 });
 
-/** 選択画面に出す順 */
+/**
+ * 選択画面に出す順。
+ *
+ * 戦役でしか出ない任務は、ここには載せない ─
+ * 「関門の丘の奪回」は前日に峠へ押し込まれていることが前提であり、
+ * 「ザーレンの確保」は自分が昨日その町を取ったからこそ砲兵が付いてこない。
+ * どちらも単発で選ばれると、遊び手には理不尽な編成にしか見えない。
+ */
 export function missionList() {
   return [MISSION, MISSION_LONG, MISSION_PASS, MISSION_TOWN];
 }
@@ -261,6 +271,141 @@ export function friendlyOrderOfBattle(mission = MISSION) {
   });
 }
 
+/* ------------------------------------------------------------------ */
+/* 戦線が翌日に効く                                                      */
+/* ------------------------------------------------------------------ */
+//
+// 昨日どこまで押したかは、今日の敵の集結地の遠さである。
+// 前へ出た翌朝、敵は遠くから来る ─ 出足が鈍り、梯団は道々に伸びて薄くなり、
+// 予備は一つ間に合わない。押し込まれた翌朝はその逆で、敵は近い集結地から
+// 早く、厚く出てくる。戦線の目盛りを「勝ったら伸びる棒」で終わらせないための一点である。
+//
+// 効きは一日ぶんしか残らない。負けが込んだ戦役を詰みにしないためで、
+// 押し込まれた側の傾きは -0.7 で頭打ちにしてある ─ 苦しくはなるが、手は残る。
+
+/** 傾き1あたり、敵の出足が何秒ずれるか（前へ出ていれば遅れ、下がっていれば早まる） */
+const FRONT_LEAD = 480;
+/** 傾き1あたり、出てくる梯団の兵力が何割痩せるか */
+const FRONT_THIN = 0.30;
+/** これ以上押し上げていれば、敵の予備は一隊ぶん間に合わない */
+const FRONT_RESERVE_OUT = 0.42;
+/** これ以上押し込まれていれば、敵の最終梯団が一隊ぶん厚くなる */
+const FRONT_EXTRA_IN = 0.42;
+/** 押し込まれた側の下限。ここで止めないと、一日の負けが戦役の詰みになる */
+const FRONT_FLOOR = -0.7;
+/** これ未満の傾きは盤に出さない（出しても遊び手には分からない） */
+const FRONT_DEADBAND = 0.04;
+
+// 戦役が次の一戦のために置いていく戦線の傾き。
+// createWorld は setup を timeline へ渡さないので、ここで受け渡す ─
+// 取り置きは timeline が必ず一度で使い切る。使い残しが次の単発戦闘に
+// 混ざると、戦役を触った直後だけ盤が変わることになる。
+let stashedFront = null;
+
+/** 戦役の側から呼ぶ。次に組み立てられる一戦にだけ効く。 */
+export function stashFront(front) {
+  stashedFront = front ?? null;
+}
+
+function takeFront() {
+  const f = stashedFront;
+  stashedFront = null;
+  return f;
+}
+
+/** いま取り置きされている戦線（検査用） */
+export function peekFront() {
+  return stashedFront;
+}
+
+/**
+ * 展開表に戦線を効かせる。
+ *
+ * 触るのは敵の出足・厚み・予備だけで、味方の増援も民間車列も動かさない ─
+ * 昨日の戦果で味方の到着が早まる筋合いは無い。
+ */
+function applyFront(events, front, mission) {
+  const tilt = Math.max(FRONT_FLOOR, Math.min(1, front?.tilt ?? 0));
+  if (Math.abs(tilt) < FRONT_DEADBAND) return events;
+
+  const shift = Math.round(tilt * FRONT_LEAD);
+  const thin = Math.min(1, Math.max(0.55, 1 - FRONT_THIN * tilt));
+  const first = mission.startTime + 60;
+  const last = mission.endTime - 300;
+
+  let dropReserve = tilt >= FRONT_RESERVE_OUT ? 1 : 0;
+  const out = [];
+  let lastEnemyIdx = -1;
+
+  for (const ev of events) {
+    if (ev.kind === 'spawn') {
+      if (!(ev.units ?? []).some((u) => u.side === 'enemy')) {
+        out.push(ev);
+        continue;
+      }
+      let units = ev.units;
+      if (dropReserve > 0) {
+        const i = units.findIndex((u) => u.side === 'enemy' && u.ai?.task === 'reserve');
+        if (i >= 0) {
+          units = units.filter((_, k) => k !== i);
+          dropReserve--;
+        }
+      }
+      if (thin < 1) {
+        units = units.map((u) => {
+          if (u.side !== 'enemy') return u;
+          const max = UNIT_TYPES[u.type]?.maxStrength ?? 9;
+          return { ...u, strength: Math.max(1, Math.round((u.strength ?? max) * thin)) };
+        });
+      }
+      lastEnemyIdx = out.length;
+      out.push({ ...ev, at: clamp(ev.at + shift, first, last), units });
+      continue;
+    }
+    if (ev.kind === 'jamming') {
+      out.push({ ...ev, at: clamp(ev.at + shift, first, last) });
+      continue;
+    }
+    out.push(ev);
+  }
+
+  // 押し込まれていれば、敵は最後の梯団に一隊ぶん余計に付けられる。
+  // 兵力ではなく部隊数で増やすのは、削り切れなかった一隊が
+  // そのまま「もう一つ相手をしなければならない方向」になるからである。
+  if (tilt <= -FRONT_EXTRA_IN && lastEnemyIdx >= 0) {
+    const ev = out[lastEnemyIdx];
+    const src = ev.units.find((u) => u.side === 'enemy' && u.type !== 'mortar' && u.type !== 'recon');
+    if (src) {
+      out[lastEnemyIdx] = {
+        ...ev,
+        units: [
+          ...ev.units,
+          {
+            ...src,
+            id: `${src.id}-XF`,
+            callsign: '敵増強隊',
+            x: Math.min(WORLD.width - 120, src.x + 220),
+            y: Math.max(40, src.y - 60),
+            ai: src.ai ? JSON.parse(JSON.stringify(src.ai)) : null,
+          },
+        ],
+      };
+    }
+  }
+
+  // 戦線が効いていることは、遊び手に言葉で伝わらねば意味がない。
+  // 数えれば分かる、では戦線は目盛りのままである。
+  out.unshift({
+    at: mission.startTime + 2,
+    kind: 'message',
+    text: tilt > 0
+      ? '大隊本部より: 昨日の線は前へ出ている。敵の集結地はそのぶん遠く、出足は鈍る。梯団も薄いはずだ。'
+      : '大隊本部より: 昨日の線は下がっている。敵は近い集結地から出てくる。出足は早く、厚い。',
+  });
+
+  return out;
+}
+
 /**
  * 展開イベント。時刻順に発火する。
  * kind: 'spawn' | 'jamming' | 'message'
@@ -271,8 +416,18 @@ export function friendlyOrderOfBattle(mission = MISSION) {
  */
 export function timeline(rng, opts = {}) {
   const mission = opts.mission ?? MISSION;
-  if (mission.timeline) return mission.timeline(rng, opts);
-  if (mission.duration === 'long') return longTimeline(rng, opts);
+  // 取り置きは使うか使わないかにかかわらず、ここで必ず引き取る。
+  const stashed = takeFront();
+  const front = opts.front ?? opts.setup?.front ?? stashed;
+  const base = mission.timeline
+    ? mission.timeline(rng, opts)
+    : mission.duration === 'long'
+      ? longTimeline(rng, opts)
+      : shortTimeline(rng, opts);
+  return applyFront(base, front, mission);
+}
+
+function shortTimeline(rng, opts = {}) {
   const riverAtFord = riverCenterY(4180);
 
   // 主攻は東の浅瀬か、橋の正面か。

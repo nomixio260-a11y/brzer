@@ -32,12 +32,43 @@ export function renderNation(dom, view, corps, api) {
   dom.left.textContent = `今夜あと ${view.left} 件`;
   renderWarnings(dom.warnings, view);
 
+  renderTabs(dom.tabs, view);
   renderCouncil(dom.council, view, api);
   renderPetition(dom.petition, view, api);
   renderDecrees(dom.decrees, view, api);
   renderStanding(dom.standing, view, api);
   renderCorps(dom.corps, corps, api);
   renderRule(dom.rule, view);
+}
+
+/* ------------------------------------------------------------------ */
+/* 頁の見出し                                                          */
+/* ------------------------------------------------------------------ */
+//
+// 六節を縦に積むと、携帯では上奏に辿り着くまでに三回ひと払いが要った。
+// 頁に切るなら、切った先で何が待っているかは表に出しておく ─
+// 「未決の上奏がある」ことを見るために頁を開かせるなら、切った意味がない。
+
+function renderTabs(el, view) {
+  if (!el) return;
+  const dots = {
+    council:
+      view.warnings.length ? 'warn'
+        : view.petition && !view.petition.answered ? 'todo' : null,
+    decree: view.left > 0 ? 'todo' : null,
+    corps: view.corpsWavering ? 'warn' : null,
+  };
+  for (const b of el.querySelectorAll('.nattab')) {
+    const dot = b.querySelector('.nattab__dot');
+    if (!dot) continue;
+    const kind = dots[b.dataset.nattab];
+    dot.hidden = !kind;
+    dot.className = `nattab__dot${kind ? ` is-${kind}` : ''}`;
+    b.title = {
+      todo: 'まだ決めていないことがある',
+      warn: '通告が出ている',
+    }[kind] ?? '';
+  }
 }
 
 /* ------------------------------------------------------------------ */

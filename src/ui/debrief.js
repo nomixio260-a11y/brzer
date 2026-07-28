@@ -21,6 +21,11 @@ const VERDICT = {
   defeat: { label: '任 務 失 敗', cls: 'is-defeat' },
 };
 
+// 最後に描いた真実の地図。
+// 図は一度きり clientWidth から起こしているので、端末を横にすると縦横比が崩れたまま
+// 残っていた ─ 講評は読む画面であり、読む間に持ち替えるのは普通のことである。
+let lastTruth = null;
+
 export function showDebrief(dom, game) {
   const outcome = getOutcome(game);
   const truth = revealTruth(game);
@@ -34,6 +39,7 @@ export function showDebrief(dom, game) {
     ? `${outcome.reason} ── 演習モードの盤である。弾は減らず、味方はほとんど倒れなかった。記録には残らない。`
     : outcome.reason;
 
+  lastTruth = { canvas: dom.canvas, game, truth };
   drawTruthMap(dom.canvas, game, truth);
   renderStats(dom.stats, outcome.score, truth);
   renderUnitFates(dom.units, truth);
@@ -66,6 +72,22 @@ function renderEnemyIntent(el, truth) {
     el.appendChild(li);
   }
 }
+
+// 画面の幅が変われば、図も引き直す。
+// 描き直しは重いので、大きさが実際に変わったときだけにする。
+let redrawTimer = null;
+window.addEventListener('resize', () => {
+  if (!lastTruth) return;
+  if (!lastTruth.canvas.closest('.view')?.classList.contains('is-active')) return;
+  clearTimeout(redrawTimer);
+  redrawTimer = setTimeout(() => {
+    if (!lastTruth) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const want = Math.round((lastTruth.canvas.clientWidth || 720) * dpr);
+    if (Math.abs(want - lastTruth.canvas.width) < 2) return;
+    drawTruthMap(lastTruth.canvas, lastTruth.game, lastTruth.truth);
+  }, 180);
+});
 
 /* ------------------------------------------------------------------ */
 

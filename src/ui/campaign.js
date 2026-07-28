@@ -52,11 +52,69 @@ export function renderCampaign(dom, view, rows, api) {
     dom.nation.hidden = true;
   }
 
+  renderUnspent(dom.unspent, view);
+
   renderCompany(dom.company, rows, view, api);
   renderAllot(dom.allot, view, api);
   renderNight(dom.night, view, api);
   renderHistory(dom.history, view);
   dom.historyBlock.hidden = view.history.length === 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* 出撃の前に残っていること                                             */
+/* ------------------------------------------------------------------ */
+//
+// 頁の頭の帯には「今夜の政令 0/2」「◯の上奏 未決」と出ている。
+// だが出撃の釦は長い頁の一番下にあり、そこまで来た指の前には何も書いていない ─
+// そして答えなかった上奏は、この国では退けたものとして数えられる。
+
+/**
+ * まだ使っていない夜の権限を数える。
+ * 出撃の釦の隣に出すのと、押したときの確認に同じ文言を使う。
+ * @returns {string[]}
+ */
+export function unspentNotes(view) {
+  const n = view?.nation;
+  if (!n || view.finished) return [];
+  const notes = [];
+  if (n.petition) {
+    notes.push(
+      `${n.petition}の上奏に答えていない ─ ` +
+      '答えないまま出撃すれば、退けたものとして数えられる。'
+    );
+  }
+  const left = n.limit - n.decrees;
+  if (left > 0) {
+    notes.push(
+      `今夜の政令があと ${left} 件出せる ─ 使わなかった枠は、朝には消える。`
+    );
+  }
+  if (n.alarms) {
+    notes.push(
+      `離反の通告が ${n.alarms} 件出ている ─ 戻せなければ、次の朝に国は貴官の手を離れる。`
+    );
+  }
+  return notes;
+}
+
+function renderUnspent(el, view) {
+  if (!el) return;
+  const notes = unspentNotes(view);
+  el.hidden = notes.length === 0;
+  if (!notes.length) return;
+  el.innerHTML = '';
+  const head = document.createElement('b');
+  head.textContent = '出撃前 ─ まだ決めていないこと';
+  el.appendChild(head);
+  for (const t of notes) {
+    const p = document.createElement('div');
+    p.textContent = t;
+    el.appendChild(p);
+  }
+  const tail = document.createElement('em');
+  tail.textContent = '「国政」で決めてから出るか、このまま配置につくかは貴官が決める。';
+  el.appendChild(tail);
 }
 
 /* ------------------------------------------------------------------ */

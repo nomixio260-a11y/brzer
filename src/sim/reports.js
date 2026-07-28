@@ -407,6 +407,51 @@ export function composeSitrep(u, world) {
 }
 
 /**
+ * 指定地点の観測要求への回答。
+ *
+ * これが無かったので、指揮官は部隊に「お前はどうだ」としか訊けなかった。
+ * 統制線を引いて予令を付けても、その線に誰の目が届いているのかを
+ * 確かめる術がない ─ それでは線に意図を託せない。
+ *
+ * 答えるのは「見えるものだけ」である。見えていなければ、見えていないと言う。
+ * それも情報であり、しばしば一番高くつく情報である。
+ */
+export function composeAreaReport(u, world, x, y, grid) {
+  const rng = world.textRng ?? world.rng;
+  const R = 900;
+  const near = [...u.contacts.values()].filter(
+    (c) => world.now - c.lastSeenAt < 120 && Math.hypot(c.x - x, c.y - y) < R
+  );
+
+  // そもそも見えているのか。距離と視線が通っていなければ、
+  // 「何も見えない」と「何も居ない」の区別がつかない ─ その区別は本人にもつかない。
+  const far = Math.hypot(u.x - x, u.y - y);
+  const reach = (u.tpl.sight ?? u.tpl.range ?? 1200) * 1.25;
+
+  if (!near.length) {
+    if (far > reach) {
+      return (
+        `こちら${u.callsign}。${grid}は、ここからは見えない。` +
+        `見えていないだけで、何も居ないとは言えない。以上。`
+      );
+    }
+    return `こちら${u.callsign}。${grid}方向、現在のところ視認できるものはない。以上。`;
+  }
+
+  near.sort((a, b) => b.quality - a.quality);
+  const parts = near.slice(0, 3).map((c) => {
+    const pos = reportedPosition(c, rng, u.skill, u.mods?.accuracy ?? 1);
+    return (
+      `${toGrid(pos.x, pos.y)}に${TYPE_JA[c.classified] ?? '正体不明'}` +
+      `${countPhrase(c, rng, world.distortion?.fear ?? 0)}`
+    );
+  });
+  const stale = world.now - near[0].lastSeenAt;
+  const age = stale > 60 ? `ただし最後に見たのは${Math.round(stale / 60)}分前だ。` : '';
+  return `こちら${u.callsign}。${grid}方向、${parts.join('、')}。${age}以上。`;
+}
+
+/**
  * 弾薬照会への回答。
  *
  * 「あと何分撃てるか」は指揮官が本当に知りたいことである。

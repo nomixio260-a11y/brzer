@@ -348,7 +348,9 @@ export function generateTerrain(seed, mapId = 'volne_river') {
     orchards: ORCHARDS,
     hedges,
     // 障害。防者が敷いたもので、攻者はここで足を止める。
-    obstacles: (map.obstacles ?? []).map((o) => ({
+    obstacles: (map.obstacles ?? []).map((o, i) => ({
+      id: o.id ?? `OB${i + 1}`,
+      cleared: false,
       ...o,
       y: o.y === 'front' ? front(o.x) + (o.dy ?? 0) : o.y,
     })),
@@ -444,9 +446,25 @@ export function nearestPassable(terrain, x, y, maxRadius = 1200, heavy = false) 
 /** 障害の中にいるか（地雷原・鉄条網） */
 export function obstacleAt(terrain, x, y) {
   for (const o of terrain.obstacles ?? []) {
+    // 処理済みの障害には通路が開いている。
+    // 開いた通路は中隊ぜんぶが使える ─ 工兵を付けた分隊だけが通れて、
+    // 後続が止まるのでは、それは処理ではなく個人技である。
+    if (o.cleared) continue;
     if (Math.hypot(x - o.x, y - o.y) <= o.r) return o;
   }
   return null;
+}
+
+/** その地点にいちばん近い、まだ通路の開いていない障害 */
+export function obstacleNear(terrain, x, y, within = 420) {
+  let best = null;
+  let bestD = Infinity;
+  for (const o of terrain.obstacles ?? []) {
+    if (o.cleared) continue;
+    const d = Math.hypot(x - o.x, y - o.y);
+    if (d <= o.r + within && d < bestD) { bestD = d; best = o; }
+  }
+  return best;
 }
 
 /** 通過点の種別 → 地形種別 */

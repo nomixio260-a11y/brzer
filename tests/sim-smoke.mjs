@@ -23,6 +23,8 @@ import { applyDamage } from '../src/sim/units.js';
 import { composeSitrep } from '../src/sim/reports.js';
 import { shownSelf } from '../src/sim/comms.js';
 import { findPath } from '../src/sim/pathfind.js';
+import { HELD_LIMIT } from '../src/sim/orders.js';
+import { composeAreaReport } from '../src/sim/reports.js';
 import {
   createGame, advance, getMarkers, markUnit, updateMarker, removeMarker,
   setAutoPlot, isAutoPlot, plotContact, startClock, isPlanning,
@@ -348,7 +350,7 @@ section('予令（発動条件つきの命令）');
   check('予令が発令できる', order?.trigger === 'at_time');
 
   for (let i = 0; i < 300; i++) tick(w, 1);
-  check('受領しても動き出さない', order.state === 'standby' && h2.heldOrder === order);
+  check('受領しても動き出さない', order.state === 'standby' && h2.heldOrders.includes(order));
   check('条件前は動かない', Math.hypot(h2.x - start.x, h2.y - start.y) < 60);
 
   for (let i = 0; i < 900; i++) tick(w, 1);
@@ -2212,6 +2214,166 @@ section('評議会は戦役に載る');
   delete old.nation.council;
   check('評議会の無い古い保存も読める',
     BLOC_IDS.every((id) => !!deserializeCampaign(old)?.nation?.council?.blocs?.[id]));
+}
+
+/* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+
+section('予令は三つまで抱えられる');
+{
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const u = w.unitsById.get('H1');
+
+  const a = issueOrder(w, { unitId: 'H1', verb: 'sitrep', trigger: 'on_contact' });
+  for (let i = 0; i < 120; i++) tick(w, 1);
+  const b = issueOrder(w, { unitId: 'H1', verb: 'withdraw', x: 1200, y: 2600, trigger: 'on_pressure' });
+  for (let i = 0; i < 120; i++) tick(w, 1);
+
+  // 一つしか持てなかったので、二つ目を渡すと一つ目が黙って消えていた。
+  check('条件の違う予令は両方とも残る',
+    u.heldOrders.length === 2 && a.state === 'standby' && b.state === 'standby',
+    `${u.heldOrders.length} / ${a.state} / ${b.state}`);
+
+  // 同じ条件のものは差し替わる ─ どちらに従うかを部下に選ばせないため。
+  const c = issueOrder(w, { unitId: 'H1', verb: 'rally', x: 1300, y: 2700, trigger: 'on_pressure' });
+  for (let i = 0; i < 120; i++) tick(w, 1);
+  check('同じ条件の予令は差し替わる',
+    b.state === 'superseded' && c.state === 'standby' && u.heldOrders.length === 2,
+    `${b.state} / ${c.state} / ${u.heldOrders.length}`);
+
+  // 溢れれば古いものから落ちる。
+  const d = issueOrder(w, { unitId: 'H1', verb: 'hold', trigger: 'at_time', triggerAt: w.now + 4000 });
+  for (let i = 0; i < 120; i++) tick(w, 1);
+  const e = issueOrder(w, { unitId: 'H1', verb: 'observe', x: 2000, y: 1500, trigger: 'on_line' });
+  for (let i = 0; i < 160; i++) tick(w, 1);
+  check('抱えられるのは三つまで', u.heldOrders.length <= HELD_LIMIT, `${u.heldOrders.length}`);
+}
+
+section('予令が一つ発動しても、残りは懐に残る');
+{
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const u = w.unitsById.get('H1');
+  issueOrder(w, { unitId: 'H1', verb: 'hold', trigger: 'at_time', triggerAt: w.now + 200 });
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  issueOrder(w, { unitId: 'H1', verb: 'withdraw', x: 1200, y: 2600, trigger: 'on_pressure' });
+  for (let i = 0; i < 90; i++) tick(w, 1);
+  const before = u.heldOrders.length;
+  for (let i = 0; i < 400; i++) tick(w, 1);
+  check('時刻の予令は発動する', w.orders.some((o) => o.trigger === 'at_time' && o.firedAt != null));
+  check('残りの予令は反故にならない',
+    u.heldOrders.some((o) => o.trigger === 'on_pressure' && o.state === 'standby'),
+    `前 ${before} → ${u.heldOrders.length}`);
+}
+
+section('前令取消');
+{
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  const u = w.unitsById.get('H3');
+  const start = { x: u.x, y: u.y };
+
+  // まだ網に乗っていない命令は、送信そのものを取りやめられる。
+  const bad = issueOrder(w, { unitId: 'H3', verb: 'attack', x: 3200, y: 600 });
+  check('誤った命令が出せてしまう', bad?.state === 'transmitting');
+  const back = issueOrder(w, { unitId: 'H3', verb: 'countermand' });
+  check('取り消しは通る', !!back);
+  check('送信前なら命令ごと消える', bad.state === 'void', bad.state);
+  check('取り消し自体は網に乗らない',
+    !w.radio.queue.some((tx) => tx.meta?.orderId === back.id));
+  for (let i = 0; i < 300; i++) tick(w, 1);
+  check('部隊は動き出さない', Math.hypot(u.x - start.x, u.y - start.y) < 260,
+    `${Math.round(Math.hypot(u.x - start.x, u.y - start.y))}m`);
+
+  // 届いてしまったものは止めるしかない。
+  const w2 = createWorld();
+  for (let i = 0; i < 60; i++) tick(w2, 1);
+  const v = w2.unitsById.get('H3');
+  const gone = issueOrder(w2, { unitId: 'H3', verb: 'move', x: 3000, y: 900 });
+  for (let i = 0; i < 400 && gone.state !== 'executing'; i++) tick(w2, 1);
+  check('届いてしまえば実行に移る', gone.state === 'executing', gone.state);
+  const stop = issueOrder(w2, { unitId: 'H3', verb: 'countermand' });
+  check('届いたあとの取消は網に乗る', stop?.state === 'transmitting', stop?.state);
+  for (let i = 0; i < 600 && stop.state !== 'complete'; i++) tick(w2, 1);
+  check('取消が届けば足が止まる', v.state === 'holding' && !v.path.length, v.state);
+
+  // 取り消すものが無ければ、取り消しは出せない。
+  const w3 = createWorld();
+  for (let i = 0; i < 60; i++) tick(w3, 1);
+  check('取り消すものが無ければ出せない',
+    issueOrder(w3, { unitId: 'H4', verb: 'countermand' }) === null);
+}
+
+section('射撃中止は一つだけ止められる');
+{
+  const w = createWorld();
+  for (let i = 0; i < 60; i++) tick(w, 1);
+  endPlanning(w);
+  issueOrder(w, { unitId: 'H1', verb: 'fire_mission', x: 2400, y: 1400 });
+  issueOrder(w, { unitId: 'H1', verb: 'smoke', x: 1500, y: 1900 });
+  for (let i = 0; i < 900 && w.fireMissions.filter((f) => !f.done).length < 2; i++) tick(w, 1);
+  const live = w.fireMissions.filter((f) => !f.done && f.side === 'friend');
+  check('二つの射撃が同時に走る', live.length >= 2, `${live.length}`);
+
+  const he = live.find((f) => f.kind === 'he');
+  issueOrder(w, { unitId: 'H1', verb: 'cancel_fire', x: he.x, y: he.y });
+  for (let i = 0; i < 600 && !he.done; i++) tick(w, 1);
+  check('狙った一つは止まる', he.done && he.cancelled === true, `${he.done}/${he.cancelled}`);
+  // 掩護の煙まで一緒に落とされては、止めた側が損をする。
+  check('もう一つは残る',
+    w.fireMissions.some((f) => f.side === 'friend' && f.kind === 'smoke' && !f.cancelled));
+
+  // 何も無い所を叩いても止まらない。
+  check('止めるものが無ければ出せない',
+    issueOrder(w, { unitId: 'H1', verb: 'cancel_fire', x: 200, y: 200 }) === null);
+}
+
+section('地点の観測要求');
+{
+  const w = createWorld();
+  endPlanning(w);
+  for (let i = 0; i < 900; i++) tick(w, 1);
+  const u = w.unitsById.get('H1');
+  const o = issueOrder(w, { unitId: 'H1', verb: 'report_on', x: u.x + 400, y: u.y - 300 });
+  check('観測要求が出せる', !!o);
+  for (let i = 0; i < 900 && o.state !== 'complete'; i++) tick(w, 1);
+  check('答えが返る', o.state === 'complete', o.state);
+  const txt = composeAreaReport(u, w, u.x + 400, u.y - 300, toGrid(u.x + 400, u.y - 300));
+  check('答えは方眼を名指しする', txt.includes(toGrid(u.x + 400, u.y - 300)), txt);
+
+  // 見えていないことも情報である。
+  const far = composeAreaReport(u, w, 100, WORLD.height - 100, 'A1');
+  check('遠すぎれば「見えない」と答える', /見えない|視認できるもの/.test(far), far);
+}
+
+section('工兵は障害を処理できる');
+{
+  const w = createWorld({ mapId: 'zaren_town' });
+  const obs = w.terrain.obstacles?.[0];
+  check('この図幅には障害がある', !!obs, `${w.terrain.obstacles?.length ?? 0}`);
+  endPlanning(w);
+  for (let i = 0; i < 60; i++) tick(w, 1);
+
+  // 道具の無い分隊には処理できない。
+  const bare = w.units.find((u) => u.side === 'friend' && !u.tpl.flying && !(u.attach ?? []).length);
+  if (bare) {
+    check('工兵の無い分隊には出せない',
+      issueOrder(w, { unitId: bare.id, verb: 'breach', x: obs.x, y: obs.y }) === null);
+  }
+
+  const eng = w.units.find((u) => u.side === 'friend' && !u.tpl.flying);
+  eng.attach = ['eng'];
+  eng.mods = { ...(eng.mods ?? {}), obstacle: 1.7 };
+  eng.x = obs.x;
+  eng.y = obs.y;
+  const o = issueOrder(w, { unitId: eng.id, verb: 'breach', x: obs.x, y: obs.y });
+  check('工兵を付ければ出せる', !!o);
+  for (let i = 0; i < 3000 && !obs.cleared; i++) tick(w, 1);
+  check('通路が開く', obs.cleared === true);
+  // 開いた通路は中隊ぜんぶが使える ─ そうでなければ処理ではなく個人技である。
+  check('開いた通路は誰でも通れる', obstacleAt(w.terrain, obs.x, obs.y) === null);
 }
 
 /* ------------------------------------------------------------------ */

@@ -26,7 +26,10 @@ import {
   getRevealed,
   getKnownObstacles,
   getVisibility as getVisibilityLabel,
+  getSupport,
+  VERBS,
 } from '../state.js';
+import { currentTargetingVerb } from './orderpanel.js';
 
 // 演習の真実表示で使う書体（本編では一度も使われない）
 const SANS = '"Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif';
@@ -211,6 +214,7 @@ export function draw(view) {
 
   // ---- 2枚目: アセテート ----
   drawAcetateSheen(ctx);
+  drawGunFan(ctx, game, px);
   drawKnownObstacles(ctx, game, px);
   drawCommandPost(ctx, game, px);
   drawFireMissions(ctx, game, px);
@@ -880,6 +884,50 @@ function drawOrderRoute(ctx, view, px) {
     '#8a1f18',
     px(10)
   );
+  ctx.restore();
+}
+
+/**
+ * 砲の届く範囲。
+ *
+ * 「ソーンをどこに据えるかで掩護できる範囲が変わる」と書いておきながら、
+ * 盤の上には何も出ていなかった ─ 指揮官は要請して断られるまで、
+ * どこまで届くかを知る方法が無かった。1:50,000 の紙の上で
+ * 4200m を目分量で測れというのは、そういう遊びではない。
+ *
+ * 出すのは火力の要請を組んでいる間だけである。常に出していると、
+ * 円がアセテートの上に残って地形が読めなくなる。
+ *
+ * 砲の位置は指揮官が知っている ─ 自分でそこへ据えさせたのだから。
+ * 知らないのは「そこから何処まで届くか」ではなく「そこに何がいるか」である。
+ */
+function drawGunFan(ctx, game, px) {
+  const verb = currentTargetingVerb();
+  if (!verb || !VERBS[verb]?.indirect) return;
+  const sup = getSupport(game);
+  if (!sup.gunAlive || sup.gunX == null) return;
+
+  ctx.save();
+  ctx.lineWidth = px(1.2);
+  ctx.setLineDash([px(9), px(7)]);
+  ctx.strokeStyle = 'rgba(120, 60, 40, 0.55)';
+  ctx.beginPath();
+  ctx.arc(sup.gunX, sup.gunY, sup.gunRange, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // 砲の足元の死角。近すぎるところには落とせない。
+  ctx.setLineDash([px(4), px(4)]);
+  ctx.strokeStyle = 'rgba(150, 60, 40, 0.7)';
+  ctx.beginPath();
+  ctx.arc(sup.gunX, sup.gunY, sup.minRange, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 縁に射程を書いておく。円だけでは何メートルか読めない。
+  ctx.fillStyle = 'rgba(140, 70, 45, 0.8)';
+  ctx.font = `${px(11)}px ui-monospace, monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText(`射程 ${Math.round(sup.gunRange)}m`, sup.gunX, sup.gunY - sup.gunRange - px(6));
   ctx.restore();
 }
 
