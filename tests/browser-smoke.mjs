@@ -60,6 +60,21 @@ async function runClock(p, speed = 30) {
 }
 
 /**
+ * 出撃する。
+ *
+ * 上奏や政令を残したまま出ようとすると確認が挟まる（残していないなら挟まらない）。
+ * 検査は「残っているかどうか」を毎回作らないので、出ていれば通す。
+ */
+async function sortie(p) {
+  await p.click('#btn-sortie');
+  await p.waitForTimeout(250);
+  if (await p.isVisible('#confirm')) {
+    await p.click('#confirm-yes');
+    await p.waitForTimeout(150);
+  }
+}
+
+/**
  * 版面の検査。
  *
  * 「見にくくないように」を人の目で毎回確かめるのは続かないので、機械に見させる。
@@ -513,6 +528,33 @@ async function checkPlanning() {
   check('H時前の帯が出る', await p.isVisible('#planbar'));
   check('時計は止まっている',
     await p.evaluate(() => window.__brzer.state.isPlanning(window.__brzer.game)));
+
+  // 速さの釦でH時が宣言されてはならない。
+  // 薄く見えている釦を叩いただけで、命令が自由で歪まない唯一の時間が終わる ─
+  // それは取り返しがつかず、しかも取り返しがつかないと書いてもいない。
+  check('H時前の速さの釦は使えない',
+    await p.$$eval('.speed .speed__btn', (bs) => bs.every((b) => b.disabled)));
+  await p.click('.speed__btn[data-speed="1"]', { force: true });
+  await p.waitForTimeout(250);
+  check('速さの釦を押してもH時にならない',
+    await p.evaluate(() => window.__brzer.state.isPlanning(window.__brzer.game)));
+  check('押せない理由が画面に出る',
+    (await p.isVisible('#toast')) && (await p.textContent('#toast')).includes('H時'),
+    await p.textContent('#toast'));
+  await p.keyboard.press('Space');
+  await p.waitForTimeout(250);
+  check('空白でもH時にならない',
+    await p.evaluate(() => window.__brzer.state.isPlanning(window.__brzer.game)));
+
+  // 帯は畳める。読み終えた文章のために図面の下端を取り上げ続けない。
+  const planH0 = (await p.locator('#planbar').boundingBox()).height;
+  await p.click('#planbar-fold');
+  await p.waitForTimeout(250);
+  const planH1 = (await p.locator('#planbar').boundingBox()).height;
+  check('H時前の帯を畳める', planH1 < planH0 * 0.7, `${planH0} → ${planH1}`);
+  check('畳んでもH時の釦は残る', await p.isVisible('#btn-hhour'));
+  await p.click('#planbar-fold');
+  await p.waitForTimeout(200);
   const t0 = await p.evaluate(() => window.__brzer.game.world.now);
   await p.waitForTimeout(1200);
   check('待っても時刻が進まない',
@@ -604,7 +646,7 @@ async function checkCampaign() {
   await p.screenshot({ path: `${SHOTS}/14-campaign.png`, fullPage: true });
 
   // 一日戦う
-  await p.click('#btn-sortie');
+  await sortie(p);
   await p.waitForTimeout(1200);
   check('戦役の戦闘もH時前から始まる', await p.isVisible('#planbar'));
   check('付けた分派が盤に載る', await p.evaluate(() =>
@@ -639,7 +681,7 @@ async function checkCampaign() {
   // 二日目に、聞き手が二重になっていないこと。
   // 画面を読み込み直さずに次の戦闘へ入るので、ここを見落とすと
   // 二日目は駒が2つ置かれ、取消が2手戻り、拡大が2段飛ぶ。
-  await p.click('#btn-sortie');
+  await sortie(p);
   await p.waitForTimeout(1200);
   const box2 = await p.locator('#map').boundingBox();
   const m0 = await p.evaluate(() => window.__brzer.game.belief.markers.length);
@@ -687,8 +729,35 @@ async function checkCampaign() {
   check('続きから開く', (await p.textContent('#camp-day')).includes('ザーレン'),
     await p.textContent('#camp-day'));
 
-  // やめれば消える
+  // やめるには一手が挟まる。
+  // 三日ぶんの損害・経歴・国の状態が消える釦なので、指が滑って押せてはいけない。
   await p.click('#btn-abandon');
+  await p.waitForTimeout(300);
+  check('やめるには確認が挟まる', await p.isVisible('#confirm'));
+  check('確認に何が消えるか書いてある',
+    (await p.textContent('#confirm-text')).includes('戻らない'),
+    await p.textContent('#confirm-text'));
+  check('確認の指は「やめる」側に置かれる',
+    (await p.evaluate(() => document.activeElement?.id)) === 'confirm-no');
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(200);
+  check('Esc で確認が閉じる', !(await p.isVisible('#confirm')));
+  check('取りやめれば戦役は残っている',
+    await p.evaluate(() => !!window.localStorage.getItem('brzer.campaign')));
+  check('取りやめれば画面も動かない', await p.isVisible('#view-campaign'));
+
+  // 幕を叩いても引き下がれる
+  await p.click('#btn-abandon');
+  await p.waitForTimeout(250);
+  await p.mouse.click(12, 12);
+  await p.waitForTimeout(200);
+  check('幕を叩いても確認が閉じる', !(await p.isVisible('#confirm')));
+  check('幕で閉じても戦役は残っている',
+    await p.evaluate(() => !!window.localStorage.getItem('brzer.campaign')));
+
+  await p.click('#btn-abandon');
+  await p.waitForTimeout(250);
+  await p.click('#confirm-yes');
   await p.waitForTimeout(300);
   check('やめればブリーフィングへ戻る', await p.isVisible('#view-briefing'));
   check('やめれば記録も消える',
@@ -866,7 +935,7 @@ async function checkNation() {
 
   // 政令は出撃の直前に効く
   const pool0 = await p.evaluate(() => window.__brzer.campaign.pool.replacements);
-  await p.click('#btn-sortie');
+  await sortie(p);
   await p.waitForTimeout(1200);
   const st = await p.evaluate(() => ({
     pool: window.__brzer.campaign.pool.replacements,
@@ -892,6 +961,223 @@ async function checkNation() {
     (await p.textContent('#debrief-stats')).includes('貴官が受けていた報告'));
 
   check('国政でエラーが出ない', errs.length === 0, errs.slice(0, 3).join(' | '));
+  await ctx.close();
+}
+
+/**
+ * 指で届くか。
+ *
+ * 携帯では、外した指の行き先が「何も起きない」ではなく
+ * 「頁が閉じる」「弾を使う」「駒が置かれる」になっている場所がある。
+ * ここで見るのは、押す物の大きさと、外したときの行き先である。
+ */
+async function checkTouchReach() {
+  const ctx = await browser.newContext({
+    viewport: { width: 390, height: 780 },
+    deviceScaleFactor: 3, isMobile: true, hasTouch: true,
+  });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message));
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+
+  await p.goto(`${URL}?debug=1`, { waitUntil: 'networkidle' });
+
+  // --- 戦役の画面 ---------------------------------------------------
+  await p.waitForFunction(() => document.querySelectorAll('#campaign-pick button').length > 0,
+    null, { timeout: 10000 });
+  check('更新内容の札は開く頁と同じ版を名乗る',
+    (await p.textContent('#btn-notes')).includes('v4.0'), await p.textContent('#btn-notes'));
+
+  await p.click('#campaign-pick button[data-campaign]');
+  await p.waitForTimeout(450);
+  // 出撃の釦の隣に、まだ決めていないことが出る（答えない上奏は退けたことになる）
+  check('出撃の前に未決が並ぶ', await p.isVisible('#camp-unspent'));
+  check('未決に上奏が出る', (await p.textContent('#camp-unspent')).includes('上奏'));
+  check('未決に政令の残りが出る', (await p.textContent('#camp-unspent')).includes('政令'));
+  // 戦役を消す釦は、出撃の釦と同じ列に居ない
+  const rows = await p.evaluate(() => {
+    const s = document.getElementById('btn-sortie').getBoundingClientRect();
+    const a = document.getElementById('btn-abandon').getBoundingClientRect();
+    return { gap: Math.round(a.top - s.bottom), sameRow: Math.abs(a.top - s.top) < 4 };
+  });
+  check('やめる釦は出撃の釦から離してある', !rows.sameRow && rows.gap > 30, JSON.stringify(rows));
+
+  // 国政 ─ 国庫と指標が、巻いても貼り付いている
+  await p.click('#btn-govern');
+  await p.waitForTimeout(350);
+  check('国政に要点の帯が出る', await p.isVisible('#nat-sticky'));
+  check('要点に国庫が出る', (await p.textContent('#nat-sticky')).includes('国庫'));
+  check('要点に今夜の残り件数が出る', (await p.textContent('#nat-sticky')).includes('今夜'));
+  await p.evaluate(() => { document.getElementById('view-nation').scrollTop = 900; });
+  await p.waitForTimeout(250);
+  const sticky = await p.$eval('#nat-sticky', (e) => {
+    const r = e.getBoundingClientRect();
+    return { top: Math.round(r.top), h: Math.round(r.height) };
+  });
+  check('巻いても要点が画面に残る', sticky.top >= 0 && sticky.top < 60, JSON.stringify(sticky));
+  await p.click('#btn-nat-back');
+  await p.waitForTimeout(250);
+
+  // --- 戦闘 ---------------------------------------------------------
+  await sortie(p);
+  await p.waitForTimeout(1100);
+
+  // 取消は、道具箱を畳んだままでも押せる所にある
+  check('地図の脇に取消がある', await p.isVisible('#btn-undo-map'));
+  check('道具箱は畳まれている',
+    await p.$eval('#maptools', (e) => e.classList.contains('is-collapsed')));
+  check('使えない取消は沈んで見える',
+    await p.evaluate(() => {
+      const b = document.getElementById('btn-undo-map');
+      return b.disabled && Number(getComputedStyle(b).opacity) < 0.6;
+    }));
+  // 使えない釦を叩いたら、理由を言う（指には吹き出しが出ない）
+  const ub = await p.$eval('#btn-undo-map', (e) => {
+    const r = e.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  await p.touchscreen.tap(ub.x, ub.y);
+  await p.waitForTimeout(250);
+  check('使えない釦は理由を言う',
+    (await p.isVisible('#toast')) && (await p.textContent('#toast')).includes('取り消せる'),
+    await p.textContent('#toast'));
+
+  // 早見表 ─ ブリーフィングへ戻れない以上、戦闘中から開けねばならない
+  await p.click('#btn-help');
+  await p.waitForTimeout(250);
+  check('地図の脇から早見表が開く', await p.isVisible('#keyhelp'));
+  check('早見表に 4・0・M・A が載っている', await p.evaluate(() => {
+    const t = document.getElementById('keyhelp').textContent;
+    return ['8倍', '全体表示', '記号の種類', '自動記入'].every((s) => t.includes(s));
+  }));
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(200);
+  check('早見表は Esc で閉じる', !(await p.isVisible('#keyhelp')));
+  await p.keyboard.press('?');
+  await p.waitForTimeout(200);
+  check('? でも開く', await p.isVisible('#keyhelp'));
+  await p.click('#keyhelp-close');
+  await p.waitForTimeout(200);
+
+  await p.click('#btn-hhour');
+  await p.waitForTimeout(300);
+  // 書記が横から駒を並べると、取消が何手戻ったのかが数えられない。
+  // ここで見るのは指の届き方なので、盤は止めておく。
+  await p.evaluate(() => { window.__brzer.game.running = false; });
+
+  // 置いた駒を、道具箱を開かずに消せる
+  const box = await p.locator('#map').boundingBox();
+  await p.touchscreen.tap(box.x + box.width * 0.5, box.y + box.height * 0.45);
+  await p.waitForTimeout(300);
+  check('置いた直後にラベル欄が出る', await p.isVisible('#marker-editor'));
+
+  // ソフトキーボードが上がると画面の高さだけが縮む。
+  // それでラベル欄を閉じていたので、Android では名前を打ち込めなかった。
+  await p.setViewportSize({ width: 390, height: 520 });
+  await p.waitForTimeout(400);
+  check('高さだけ縮んでもラベル欄は残る', await p.isVisible('#marker-editor'));
+  const zk = await p.evaluate(() => window.__brzer.mapView.zoom);
+  await p.setViewportSize({ width: 390, height: 780 });
+  await p.waitForTimeout(400);
+  check('高さだけ戻っても図面の倍率は動かない',
+    Math.abs((await p.evaluate(() => window.__brzer.mapView.zoom)) - zk) < 0.01);
+
+  const m0 = await p.evaluate(() => window.__brzer.state.getMarkers(window.__brzer.game).length);
+  await p.tap('#btn-undo-map');
+  await p.waitForTimeout(300);
+  check('地図の脇の取消で一手戻る',
+    (await p.evaluate(() => window.__brzer.state.getMarkers(window.__brzer.game).length)) === m0 - 1,
+    `${m0}`);
+
+  // 拡大を禁じる指定を外しても、図面の指の操作は今までどおり効くこと。
+  // （文字の小さい画面を拡大できるようにした代償に、地図が暴れては元も子もない）
+  const cdp = await ctx.newCDPSession(p);
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  const z0 = await p.evaluate(() => window.__brzer.mapView.zoom);
+  await cdp.send('Input.dispatchTouchEvent',
+    { type: 'touchStart', touchPoints: [{ x: cx - 40, y: cy, id: 1 }, { x: cx + 40, y: cy, id: 2 }] });
+  for (const d of [60, 90, 130]) {
+    await cdp.send('Input.dispatchTouchEvent',
+      { type: 'touchMove', touchPoints: [{ x: cx - d, y: cy, id: 1 }, { x: cx + d, y: cy, id: 2 }] });
+    await p.waitForTimeout(40);
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await p.waitForTimeout(200);
+  check('二本指で図面が拡大できる',
+    (await p.evaluate(() => window.__brzer.mapView.zoom)) > z0 + 0.1,
+    `${z0} → ${await p.evaluate(() => window.__brzer.mapView.zoom)}`);
+
+  const px0 = await p.evaluate(() => window.__brzer.mapView.centerX);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: cx, y: cy, id: 1 }] });
+  for (const dx of [40, 90, 140]) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: cx - dx, y: cy, id: 1 }] });
+    await p.waitForTimeout(40);
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await p.waitForTimeout(200);
+  check('一本指で図面をずらせる',
+    Math.abs((await p.evaluate(() => window.__brzer.mapView.centerX)) - px0) > 40);
+  await p.click('#zoom-fit');
+
+  // 照明弾に名札がある（数字だけでは何の数か分からない）
+  check('照明弾に名札が付く', await p.evaluate(() => {
+    const c = getComputedStyle(document.getElementById('ammo-illum'), '::before').content;
+    return typeof c === 'string' && c.includes('照');
+  }));
+
+  // --- 部隊一覧と記録簿の押し所 ---------------------------------------
+  await p.evaluate(() => { window.__brzer.game.speed = 30; window.__brzer.game.running = true; });
+  await p.waitForSelector('#roster button[data-mark-unit]', { state: 'attached', timeout: 120000 });
+  await p.waitForSelector('#radiolog li [data-act="mark"]', { state: 'attached', timeout: 120000 });
+  await p.evaluate(() => { window.__brzer.game.running = false; });
+
+  await p.click('.tabbar__btn[data-tab="roster"]');
+  await p.waitForTimeout(350);
+  const targets = await p.evaluate(() => {
+    const g = document.querySelector('#roster button.roster__grid')?.getBoundingClientRect();
+    const m = document.querySelector('#roster button.roster__mark')?.getBoundingClientRect();
+    if (!g || !m) return null;
+    return { gh: Math.round(g.height), mh: Math.round(m.height), gap: Math.round(m.left - g.right) };
+  });
+  check('部隊一覧の札は指の大きさがある',
+    targets && targets.gh >= 40 && targets.mh >= 40, JSON.stringify(targets));
+  check('方眼と記号の札は離してある', targets && targets.gap >= 6, JSON.stringify(targets));
+
+  await p.click('.tabbar__btn[data-tab="log"]');
+  await p.waitForTimeout(350);
+  const actH = await p.$eval('#radiolog .msg__act', (e) => Math.round(e.getBoundingClientRect().height));
+  check('無線の釦は指の大きさがある', actH >= 40, `${actH}`);
+
+  // 行を叩いても記録簿は閉じない ─ 読んでいる最中に頁が消えるのが一番こたえる
+  await p.click('#radiolog li[data-grid] .msg__body');
+  await p.waitForTimeout(400);
+  check('行を叩いても記録簿は開いたまま',
+    await p.$eval('#side', (e) => e.classList.contains('is-open')));
+  check('叩いた行に印が付く', (await p.$$('#radiolog li.is-cited')).length === 1);
+
+  // --- 断られた命令が、地図の上で分かる --------------------------------
+  await p.click('.tabbar__btn[data-tab="map"]');
+  await p.waitForTimeout(250);
+  await p.evaluate(() => { window.__brzer.game.world.support.artillery = 0; });
+  await p.click('.tabbar__btn[data-tab="order"]');
+  await p.waitForTimeout(250);
+  await p.click('#order-units button[data-unit="TH"]');
+  await p.click('#order-groups button[data-group="fires"]').catch(() => { /* 既に火力の頁 */ });
+  await p.click('#order-verbs button[data-verb="fire_mission"]');
+  await p.waitForTimeout(250);
+  await p.touchscreen.tap(box.x + box.width * 0.5, box.y + box.height * 0.4);
+  await p.waitForTimeout(300);
+  check('地図の上に送信が出る', await p.isVisible('#map-hint-send'));
+  await p.click('#map-hint-send');
+  await p.waitForTimeout(300);
+  check('断られた理由が地図の上に出る',
+    (await p.isVisible('#toast')) && (await p.textContent('#toast')).includes('出せない'),
+    await p.textContent('#toast'));
+
+  await p.screenshot({ path: `${SHOTS}/16-touch.png` });
+  check('指の検査でエラーが出ない', errs.length === 0, errs.slice(0, 3).join(' | '));
   await ctx.close();
 }
 
@@ -1177,8 +1463,10 @@ try {
     await page.$eval('#order-triggers button[data-trig="at_time"]', (b) => b.disabled));
   await page.click('#order-groups button[data-group="maneuver"]');
 
-  // 砲兵には移動命令が出せない
+  // 砲兵には突撃させられない（陣地変換の移動は別の話である）
   await page.click('#order-units button[data-unit="TH"]');
+  // 分類は前に見ていた部隊のものが残る。火力の頁を開いてから見る。
+  await page.click('#order-groups button[data-group="fires"]');
   const verbs = await page.$$eval('#order-verbs button', (bs) => bs.map((b) => b.dataset.verb));
   check('兵科ごとに出せる命令が違う',
     !verbs.includes('attack') && verbs.includes('fire_mission') && verbs.includes('register'),
@@ -1266,6 +1554,25 @@ try {
     return d[0] > 60 && d[1] > 60;
   });
   check('真実の地図が描かれている', truthPainted);
+
+  // 講評は読む画面である。読んでいる間に端末を持ち替えるのは普通のことで、
+  // 一度きり描いて放置すると、その後はずっと歪んだ図を見せることになる。
+  const truth0 = await page.evaluate(() => {
+    const c = document.getElementById('truthmap');
+    return { w: c.width, ratio: c.width / c.height };
+  });
+  await page.setViewportSize({ width: 1100, height: 950 });
+  await page.waitForTimeout(700);
+  const truth1 = await page.evaluate(() => {
+    const c = document.getElementById('truthmap');
+    return { w: c.width, ratio: c.width / c.height };
+  });
+  check('画面幅が変われば真実の地図を引き直す', truth1.w !== truth0.w,
+    `${truth0.w} → ${truth1.w}`);
+  check('引き直しても縦横比が保たれる', Math.abs(truth1.ratio - truth0.ratio) < 0.02,
+    `${truth0.ratio.toFixed(3)} → ${truth1.ratio.toFixed(3)}`);
+  await page.setViewportSize({ width: 1600, height: 950 });
+  await page.waitForTimeout(500);
 
   await page.screenshot({ path: `${SHOTS}/03-debrief.png`, fullPage: true });
 
@@ -1414,6 +1721,9 @@ try {
 
   section('国政');
   await checkNation();
+
+  section('指で届くか');
+  await checkTouchReach();
 
   section('演習モード');
   await checkCreative();

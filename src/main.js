@@ -1730,6 +1730,8 @@ document.addEventListener('pointerdown', (e) => {
     ? 'H時前は時計が止まっている。渡し終えたら「H時」を宣言せよ。'
     : btn.title?.trim();
   if (!why) return;
+  // 命令の頁にも書くが、携帯ではその頁が地図の裏にいる。
+  // 目に入るのは地図の上の掲示のほうである。
   $('order-status').textContent = why;
   showToast('指揮所', why, false);
 }, true);
