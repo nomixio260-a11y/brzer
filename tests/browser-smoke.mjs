@@ -1160,7 +1160,7 @@ async function checkTouchReach() {
   // --- 断られた命令が、地図の上で分かる --------------------------------
   await p.click('.tabbar__btn[data-tab="map"]');
   await p.waitForTimeout(250);
-  await p.evaluate(() => { window.__brzer.game.world.support.artillery = 0; });
+  await p.evaluate(() => { window.__brzer.game.world.support.artillery.rounds = 0; });
   await p.click('.tabbar__btn[data-tab="order"]');
   await p.waitForTimeout(250);
   await p.click('#order-units button[data-unit="TH"]');
@@ -1172,8 +1172,10 @@ async function checkTouchReach() {
   check('地図の上に送信が出る', await p.isVisible('#map-hint-send'));
   await p.click('#map-hint-send');
   await p.waitForTimeout(300);
+  // 「出せない」とだけ書いてあった頃の文言を、検査が写し取っていた。
+  // 見たいのは理由が出ることであって、決まり文句が出ることではない。
   check('断られた理由が地図の上に出る',
-    (await p.isVisible('#toast')) && (await p.textContent('#toast')).includes('出せない'),
+    (await p.isVisible('#toast')) && (await p.textContent('#toast')).includes('砲弾が残っていない'),
     await p.textContent('#toast'));
 
   await p.screenshot({ path: `${SHOTS}/16-touch.png` });
@@ -1238,6 +1240,9 @@ async function checkRefusalReason() {
   check('命令の頁にも残っている', /砲弾が残っていない/.test(status), status.slice(0, 60));
 
   // 指揮官が次に何かすれば、理由は退く。
+  // 目標を指定させるために頁は閉じてあるので、開き直してから選ぶ。
+  await p.click('.tabbar__btn[data-tab="order"]');
+  await p.waitForTimeout(250);
   await p.click('#order-verbs button[data-verb="smoke"]');
   await p.waitForTimeout(300);
   check('次の命令を選べば理由は退く',
