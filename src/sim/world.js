@@ -157,7 +157,13 @@ export function createWorld(opts = {}) {
     commandPost: mission.commandPost,
 
     // 時刻順に並べ直す（シナリオ側の記述順に依存しないように）
-    events: timeline(planRng, { variable: !!opts.variable, mission }).sort((a, b) => a.at - b.at),
+    // 戦役から来た支度をそのまま渡す。
+    //
+    // ここで setup を落としていたので、戦線を展開表へ届ける手が
+    // 「模組の外に取り置く」しか無くなっていた ─ 取り置きは、
+    // 使い残しが次の単発戦闘に混ざれば盤が変わる類の仕掛けである。
+    events: timeline(planRng, { variable: !!opts.variable, mission, setup: opts.setup })
+      .sort((a, b) => a.at - b.at),
     variable: !!opts.variable,
     eventIndex: 0,
 
@@ -198,13 +204,16 @@ export function createWorld(opts = {}) {
  * 夜の報告が翌昼まで正しい保証は、どこにも無い。
  */
 function nightReconReport(world) {
-  const a = world.terrain.bridge;
-  const b = world.terrain.ford;
-  const mid = (a.x + b.x) / 2;
-
-  let main = 0;
-  let flank = 0;
+  // 渡河点は二つとは限らない。
+  //
+  // 中央と側面の二分割で数えていたので、三本目の橋に集まっている敵は
+  // どちらかに吸収されて消えていた ─ 斥候は見てきたのに、
+  // 報告する言葉が「主正面か側面か」しか無かった、ということである。
+  const crossings = world.terrain.crossings ?? [];
+  const tally = new Map(crossings.map((c) => [c.id ?? c.label, 0]));
   let armor = 0;
+  let total = 0;
+
   for (const ev of world.events) {
     if (ev.kind !== 'spawn' || !ev.units) continue;
     // 夜が明ける前に出てくるぶんだけが、斥候の目に入る。
@@ -212,16 +221,30 @@ function nightReconReport(world) {
     for (const u of ev.units) {
       if (u.side !== 'enemy') continue;
       const x = u.ai?.crossing?.x ?? u.x;
-      const toFlank = b.x > a.x ? x > mid : x < mid;
-      if (toFlank) flank++; else main++;
+      const y = u.ai?.crossing?.y ?? u.y;
+      let near = null;
+      let bestD = Infinity;
+      for (const c of crossings) {
+        const d = Math.hypot(c.x - x, c.y - y);
+        if (d < bestD) { bestD = d; near = c; }
+      }
+      if (near) {
+        const k = near.id ?? near.label;
+        tally.set(k, (tally.get(k) ?? 0) + 1);
+        total++;
+      }
       if (u.type === 'tank' || u.type === 'mech') armor++;
     }
   }
 
-  const heavier = flank > main
-    ? world.terrain.crossings[1]?.label ?? '側面'
-    : world.terrain.crossings[0]?.label ?? '主正面';
-  const ratio = Math.max(main, flank) / Math.max(1, main + flank);
+  let top = null;
+  let topN = -1;
+  for (const c of crossings) {
+    const n = tally.get(c.id ?? c.label) ?? 0;
+    if (n > topN) { topN = n; top = c; }
+  }
+  const heavier = top?.label ?? '主正面';
+  const ratio = topN / Math.max(1, total);
   const firmness = ratio > 0.68 ? '間違いない' : ratio > 0.55 ? 'そう見える' : '半々だ、断定はできない';
 
   world.radio.log.push({

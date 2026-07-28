@@ -35,7 +35,7 @@ jobs:
           node-version: '20'
 
       - name: シミュレーションが健全か確かめる
-        run: node tests/sim-smoke.mjs
+        run: npm test
 
       - name: 配布物を組み立てる
         run: |

@@ -330,8 +330,14 @@ function applyFront(events, front, mission) {
 
   const shift = Math.round(tilt * FRONT_LEAD);
   const thin = Math.min(1, Math.max(0.55, 1 - FRONT_THIN * tilt));
-  const first = mission.startTime + 60;
-  const last = mission.endTime - 300;
+  // ずらすのは「これから出てくるもの」だけである。開始時点で既にそこに居る敵
+  //（市街に籠る守兵、丘の上の観測所）まで動かすと、昨日の戦線が
+  // 今朝の敵の居場所を書き替えることになってしまう。
+  const shifted = (at) => clamp(
+    at + shift,
+    Math.min(at, mission.startTime + 60),
+    Math.max(at, mission.endTime - 300)
+  );
 
   let dropReserve = tilt >= FRONT_RESERVE_OUT ? 1 : 0;
   const out = [];
@@ -359,11 +365,11 @@ function applyFront(events, front, mission) {
         });
       }
       lastEnemyIdx = out.length;
-      out.push({ ...ev, at: clamp(ev.at + shift, first, last), units });
+      out.push({ ...ev, at: shifted(ev.at), units });
       continue;
     }
     if (ev.kind === 'jamming') {
-      out.push({ ...ev, at: clamp(ev.at + shift, first, last) });
+      out.push({ ...ev, at: shifted(ev.at) });
       continue;
     }
     out.push(ev);

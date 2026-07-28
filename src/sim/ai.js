@@ -286,6 +286,19 @@ export function enemyGoal(world, u) {
   return { x: base.x + Math.cos(a) * r, y: base.y + Math.sin(a) * r * 0.6 };
 }
 
+/** その部隊が実際に通れる、いちばん近い通過点 */
+function nearestPassableCrossing(world, u) {
+  const veh = isVehicle(u);
+  let best = null;
+  let bestD = Infinity;
+  for (const c of world.terrain.crossings ?? []) {
+    if (!isPassable(world.terrain, c.x, c.y, veh)) continue;
+    const d = dist(u.x, u.y, c.x, c.y);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  return best ?? { x: world.terrain.bridge.x, y: world.terrain.bridge.y };
+}
+
 function goalKey(g) {
   return `${Math.round(g.x / 50)}:${Math.round(g.y / 50)}`;
 }
@@ -297,9 +310,12 @@ function resolveGoal(world, u, ai) {
   if (ai.crossing && !onSouthBank) {
     // 車輌に徒歩の間道が割り当てられることがある。通れない道は道ではない ―
     // その部隊は主通過点へ回す。
+    // 三本目の橋がある図幅では、主通過点が一番遠いことがある ─
+    // 通れないと分かった車輌を必ず中央橋へ送り返していたので、
+    // すぐ隣に通れる橋があっても、盤の反対側まで歩かせていた。
     const cross = isPassable(world.terrain, ai.crossing.x, ai.crossing.y, isVehicle(u))
       ? ai.crossing
-      : { x: world.terrain.bridge.x, y: world.terrain.bridge.y };
+      : nearestPassableCrossing(world, u);
     const dCross = dist(u.x, u.y, cross.x, cross.y);
     if (dCross > 90) return cross;
     // 渡河点の上。対岸へ押し出す。

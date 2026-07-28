@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node scripts/serve.mjs --port 8000",
     "serve": "node scripts/serve.mjs",
-    "test": "node tests/sim-smoke.mjs",
+    "test": "node tests/sim-smoke.mjs && node tests/sim-campaign.mjs && node tests/sim-enemy.mjs",
     "test:browser": "node tests/browser-smoke.mjs",
     "tunnel": "bash scripts/tunnel.sh",
     "screenshots": "node scripts/screenshots.mjs"

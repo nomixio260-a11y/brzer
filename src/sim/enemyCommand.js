@@ -101,11 +101,6 @@ function crossingPoint(world, axis) {
   return { x: cr.x, y: cr.y };
 }
 
-/** 主攻の最終目標 */
-function mainObjective(world) {
-  return enemyGoal(world, null);
-}
-
 /**
  * その軸から入る部隊の最終目標。
  * 主軸ならそのまま、脇の軸なら主目標の同じ側から寄せる ―
@@ -455,6 +450,9 @@ function registerAnchors(world, ec, holders) {
       continue;
     }
     if (dist(u.x, u.y, a.x, a.y) > 220) continue;
+    // 指揮官が自分で動かした先は「守るべき地点」ではない ─
+    // 予備を寄せた位置まで台帳に載せると、守る場所が勝手に増えていく。
+    if (u.ai.committed || u.ai.counterattack) continue;
     d.anchors.push({
       x: a.x, y: a.y, grid: toGrid(a.x, a.y),
       holderId: u.id, lostSince: null, retakenAt: null,

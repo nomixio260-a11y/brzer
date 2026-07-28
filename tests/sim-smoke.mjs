@@ -444,9 +444,14 @@ section('敵の指揮官');
   const w = createWorld();
   for (let i = 0; i < 7500 && !w.outcome; i++) tick(w, 1);
   check('敵指揮官が存在する', !!w.enemyCommand);
-  check('両軸を評価している',
-    Number.isFinite(w.enemyCommand.axes.bridge.progress) &&
-    Number.isFinite(w.enemyCommand.axes.ford.progress));
+  // 軸を二つと決め打っていたので、渡河点が三本ある図幅では
+  // 三本目が誰の軸でもなくなっていた。図幅の通過点の数だけ軸がある。
+  const cross = w.terrain.crossings ?? [];
+  check('通過点の数だけ軸がある',
+    cross.length > 0 && cross.every((c) => !!w.enemyCommand.axes[c.id ?? c.label]),
+    `${cross.map((c) => c.id ?? c.label).join(',')} / ${Object.keys(w.enemyCommand.axes).join(',')}`);
+  check('どの軸も進み具合を持っている',
+    Object.values(w.enemyCommand.axes).every((a) => Number.isFinite(a.progress)));
   check('敵が予備を投入する', w.enemyCommand.reserveCommitted === true);
   check('決心が記録されている', w.enemyCommand.log.length > 0, `${w.enemyCommand.log.length}件`);
 }

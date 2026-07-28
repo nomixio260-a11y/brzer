@@ -390,7 +390,7 @@ export const MISSION_HILL = Object.freeze({
   briefing: {
     situation:
       '敵は昨夜のうちに関門の丘へ観測所を上げた。丘の上からは谷筋の道が端から端まで見えており、' +
-      '日中に車輌を通せば必ず砲撃を受ける。守兵は一個小隊規模で、掩体は掘り終えている。',
+      '日中に車輌を通せば必ず砲撃を受ける。守兵は二個分隊と対戦車班で、掩体は掘り終えている。',
     mission:
       `1225までに関門の丘 ${HILL_GRID} を奪回し、3分間確保せよ。`,
     execution:
@@ -399,7 +399,7 @@ export const MISSION_HILL = Object.freeze({
     notes: [
       '丘の上に遮蔽は無い。だが掩体はある ─ 着発では土を掘り返すだけで、曳火が要る。',
       '南の森は丘の裾まで続いている。そこまでは見つからずに寄れる。',
-      '煙幕は12発ある。斜面を切るために持たせてある。',
+      '煙幕は14発ある。斜面を切るために持たせてある。',
       '敵の迫は北口の集落の裏にある。撃てば砲声が聞こえる ─ 二個部隊で交会を取れ。',
       '「攻撃」は止まらない。止まって撃たせたいなら「前進」である。',
       '奪ったあとの三分が、いちばん撃たれる三分である。敵は取り返しに来る。',
@@ -414,8 +414,8 @@ export const MISSION_HILL = Object.freeze({
   ],
 
   support: {
-    artillery: { name: 'ソーン', rounds: 18 },
-    smoke: { name: 'ソーン', rounds: 12 },
+    artillery: { name: 'ソーン', rounds: 22 },
+    smoke: { name: 'ソーン', rounds: 14 },
   },
 
   rosterOrder: [
@@ -432,22 +432,22 @@ export const MISSION_HILL = Object.freeze({
   // 攻者なので、味方は丘の南 ─ 森の中に集結している
   orbat: () => [
     { id: 'H1', side: 'friend', callsign: 'ハンマー1', type: 'infantry',
-      x: 2300, y: 2900, posture: 'normal', state: 'holding', morale: 84,
+      x: 2320, y: 2680, posture: 'normal', state: 'holding', morale: 84,
       role: '主攻 ─ 南斜面' },
     { id: 'H2', side: 'friend', callsign: 'ハンマー2', type: 'infantry',
-      x: 2560, y: 2880, posture: 'normal', state: 'holding', morale: 84,
+      x: 2560, y: 2700, posture: 'normal', state: 'holding', morale: 84,
       role: '主攻 ─ 南斜面' },
     { id: 'H3', side: 'friend', callsign: 'ハンマー3', type: 'infantry',
-      x: 1950, y: 2820, posture: 'normal', state: 'holding', morale: 82,
+      x: 2020, y: 2700, posture: 'normal', state: 'holding', morale: 82,
       role: '助攻 ─ 西の鞍部' },
     { id: 'H4', side: 'friend', callsign: 'ハンマー4', type: 'infantry',
-      x: 2760, y: 3000, posture: 'normal', state: 'holding', morale: 84,
+      x: 2740, y: 2820, posture: 'normal', state: 'holding', morale: 84,
       role: '予備 ─ 突破口へ投入' },
     { id: 'SH', side: 'friend', callsign: 'シールド', type: 'mech',
-      x: 2420, y: 3050, posture: 'normal', state: 'holding', morale: 86,
+      x: 2440, y: 2860, posture: 'normal', state: 'holding', morale: 86,
       role: '突撃の先導・掩護' },
     { id: 'SW', side: 'friend', callsign: 'ソード', type: 'at_team',
-      x: 2200, y: 2980, posture: 'normal', state: 'holding', morale: 86,
+      x: 2220, y: 2800, posture: 'normal', state: 'holding', morale: 86,
       role: '谷筋の対戦車' },
     { id: 'EG', side: 'friend', callsign: 'イーグル', type: 'drone',
       x: 2000, y: 3300, posture: 'normal', state: 'holding', morale: 100,
@@ -469,9 +469,6 @@ export const MISSION_HILL = Object.freeze({
       { id: 'E-H2', side: 'enemy', callsign: '敵歩兵2', type: 'infantry', x: 2320, y: 2230,
         posture: 'dug_in', state: 'defending',
         ai: { task: 'hold_ground', anchor: { x: 2320, y: 2230 } } },
-      { id: 'E-H3', side: 'enemy', callsign: '敵歩兵3', type: 'infantry', x: 2620, y: 2200,
-        posture: 'dug_in', state: 'defending',
-        ai: { task: 'hold_ground', anchor: { x: 2620, y: 2200 } } },
       { id: 'E-AT', side: 'enemy', callsign: '敵対戦車班', type: 'at_team', x: 2480, y: 2040,
         posture: 'dug_in', state: 'defending',
         ai: { task: 'hold_ground', anchor: { x: 2480, y: 2040 } } },
