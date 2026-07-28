@@ -1230,6 +1230,9 @@ async function checkRefusalReason() {
   const toast = await p.$('.toast, #toast');
   const toastText = toast ? (await toast.textContent()) : '';
   check('断られたら地図の上に出る', /砲弾が残っていない/.test(toastText), toastText.slice(0, 60));
+  // 断られた命令は手元に残る ─ 指定した目標ごと消えては、やり直しが利かない。
+  // 帯に送信が出たままであることが、そのまま「まだ手にある」ことである。
+  check('断られた命令は手元に残る', await p.isVisible('#map-hint-send'));
   // 「出せない」だけでは、何を直せば出せるのかが分からない。
   check('理由が本当の理由である',
     !/その命令は出せない。$/.test(toastText.trim()), toastText.slice(0, 60));
@@ -1249,8 +1252,6 @@ async function checkRefusalReason() {
     !/砲弾が残っていない/.test(await p.textContent('#order-status')),
     (await p.textContent('#order-status')).slice(0, 50));
 
-  // 命令そのものは手元に残っている（消えてはいない）
-  check('断られた命令は手元に残る', await p.isVisible('#order-verbs'));
   check('理由の表示でエラーが出ない', errs.length === 0, errs.slice(0, 2).join(' | '));
   await ctx.close();
 }
